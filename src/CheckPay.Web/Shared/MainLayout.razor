@@ -1,0 +1,61 @@
+@inherits LayoutComponentBase
+
+<MudLayout>
+    <MudAppBar Elevation="1">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="@ToggleDrawer" />
+        <MudText Typo="Typo.h6">CheckPay 收款系统</MudText>
+        <MudSpacer />
+
+        <AuthorizeView>
+            <Authorized Context="authState">
+                @{
+                    var userName = authState.User.Identity?.Name ?? "用户";
+                    var initial = userName.Length > 0 ? userName[..1].ToUpper() : "U";
+                }
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudAvatar Color="Color.Primary" Size="Size.Small"
+                               Style="width:28px;height:28px;font-size:0.85rem;">
+                        @initial
+                    </MudAvatar>
+                    <MudText Typo="Typo.body2" Class="d-none d-sm-flex mr-1">@userName</MudText>
+                    <MudTooltip Text="修改密码">
+                        <MudIconButton Icon="@Icons.Material.Filled.Lock"
+                                       Color="Color.Inherit" Size="Size.Small"
+                                       Href="/change-password" />
+                    </MudTooltip>
+                    <MudTooltip Text="退出登录">
+                        <MudIconButton Icon="@Icons.Material.Filled.Logout"
+                                       Color="Color.Inherit" Size="Size.Small"
+                                       Href="/logout" />
+                    </MudTooltip>
+                </MudStack>
+            </Authorized>
+            <NotAuthorized>
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                           StartIcon="@Icons.Material.Filled.Login"
+                           Href="/login" Size="Size.Small">
+                    登录
+                </MudButton>
+            </NotAuthorized>
+        </AuthorizeView>
+    </MudAppBar>
+
+    <MudDrawer @bind-Open="_drawerOpen" Elevation="2">
+        <MudDrawerHeader>
+            <MudText Typo="Typo.h6">菜单</MudText>
+        </MudDrawerHeader>
+        <NavMenu />
+    </MudDrawer>
+
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private bool _drawerOpen = true;
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+}

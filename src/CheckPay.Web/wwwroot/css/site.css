@@ -1,0 +1,12 @@
+/* CheckPay site.css */
+
+/* 表格行可点击光标 */
+.cursor-pointer {
+    cursor: pointer;
+}
+
+/* 支票图片自适应 */
+.mud-image {
+    max-width: 100%;
+    height: auto;
+}

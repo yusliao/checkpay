@@ -1,0 +1,127 @@
+@page "/"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<PageTitle>Dashboard - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h3" GutterBottom="true">Dashboard</MudText>
+<MudText Class="mb-4">欢迎使用 CheckPay 收款系统</MudText>
+
+@* 统计卡片 - 可点击跳转 *@
+<MudGrid>
+    <MudItem xs="12" sm="6" md="3">
+        <MudPaper Elevation="2" Class="pa-4" Style="cursor:pointer" @onclick="@(() => Navigation.NavigateTo("/records?status=PendingReview"))">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudIcon Icon="@Icons.Material.Filled.PendingActions" Color="Color.Info" Size="Size.Large" />
+                <div class="text-right">
+                    <MudText Typo="Typo.h4" Color="Color.Info">@_pendingReviewCount</MudText>
+                    <MudText Typo="Typo.body2">待核查</MudText>
+                </div>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <MudPaper Elevation="2" Class="pa-4" Style="cursor:pointer" @onclick="@(() => Navigation.NavigateTo("/records?status=Questioned"))">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudIcon Icon="@Icons.Material.Filled.HelpOutline" Color="Color.Warning" Size="Size.Large" />
+                <div class="text-right">
+                    <MudText Typo="Typo.h4" Color="Color.Warning">@_questionedCount</MudText>
+                    <MudText Typo="Typo.body2">存疑</MudText>
+                </div>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <MudPaper Elevation="2" Class="pa-4" Style="cursor:pointer" @onclick="@(() => Navigation.NavigateTo("/exceptions"))">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Large" />
+                <div class="text-right">
+                    <MudText Typo="Typo.h4" Color="Color.Error">@_unmatchedCount</MudText>
+                    <MudText Typo="Typo.body2">异常</MudText>
+                </div>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <MudPaper Elevation="2" Class="pa-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Large" />
+                <div class="text-right">
+                    <MudText Typo="Typo.h4" Color="Color.Success">@_confirmedCount</MudText>
+                    <MudText Typo="Typo.body2">已确认</MudText>
+                </div>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@* 今日统计摘要 *@
+<MudPaper Elevation="1" Class="pa-3 mt-4">
+    <MudText Typo="Typo.body2">
+        今日新增 <strong>@_todayCount</strong> 条 &nbsp;|&nbsp;
+        已确认 <strong>@_confirmedCount</strong> 条 &nbsp;|&nbsp;
+        待扣款 <strong>@_pendingDebitCount</strong> 条 &nbsp;|&nbsp;
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Inline="true">每30秒自动刷新</MudText>
+    </MudText>
+</MudPaper>
+
+@* 快捷入口 *@
+<MudPaper Elevation="1" Class="pa-4 mt-4">
+    <MudText Typo="Typo.h6" GutterBottom="true">快捷入口</MudText>
+    <MudStack Row="true" Spacing="2">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.CloudUpload"
+                   OnClick="@(() => Navigation.NavigateTo("/checks/upload"))">
+            上传支票
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                   StartIcon="@Icons.Material.Filled.FileUpload"
+                   OnClick="@(() => Navigation.NavigateTo("/debits/import"))">
+            导入扣款
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success"
+                   StartIcon="@Icons.Material.Filled.Assessment"
+                   OnClick="@(() => Navigation.NavigateTo("/reports"))">
+            导出报表
+        </MudButton>
+    </MudStack>
+</MudPaper>
+
+@code {
+    private int _pendingDebitCount;
+    private int _pendingReviewCount;
+    private int _confirmedCount;
+    private int _questionedCount;
+    private int _unmatchedCount;
+    private int _todayCount;
+
+    private Timer? _refreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        // 每30秒轮询刷新
+        _refreshTimer = new Timer(async _ =>
+        {
+            await LoadData();
+            await InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    private async Task LoadData()
+    {
+        _pendingDebitCount   = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.PendingDebit);
+        _pendingReviewCount  = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.PendingReview);
+        _confirmedCount      = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.Confirmed);
+        _questionedCount     = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.Questioned);
+        _unmatchedCount      = await DbContext.DebitRecords.CountAsync(d => d.DebitStatus == DebitStatus.Unmatched);
+        _todayCount          = await DbContext.CheckRecords.CountAsync(c => c.CreatedAt.Date == DateTime.UtcNow.Date);
+    }
+
+    public void Dispose() => _refreshTimer?.Dispose();
+}

@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.AI.FormRecognizer" Version="4.1.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.27.0" />
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.5" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CheckPay.Domain\CheckPay.Domain.csproj" />
+    <ProjectReference Include="..\..\src\CheckPay.Application\CheckPay.Application.csproj" />
+    <ProjectReference Include="..\..\src\CheckPay.Infrastructure\CheckPay.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\CheckPay.Web\CheckPay.Web.csproj" />
+    <ProjectReference Include="..\..\src\CheckPay.Worker\CheckPay.Worker.csproj" />
+  </ItemGroup>
+
+</Project>

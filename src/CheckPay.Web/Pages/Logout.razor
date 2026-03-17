@@ -1,0 +1,11 @@
+@page "/logout"
+@inject NavigationManager Navigation
+
+@code {
+    protected override void OnInitialized()
+    {
+        // 登出必须在真实 HTTP 请求里清 Cookie，不能在 Blazor SignalR 连接里做
+        // 跳转到 Razor Page /Auth/SignOut 处理
+        Navigation.NavigateTo("/Auth/SignOut", forceLoad: true);
+    }
+}

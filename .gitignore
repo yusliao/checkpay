@@ -1,0 +1,174 @@
+## ===========================
+## .NET / C# 项目
+## ===========================
+
+## 编译产物
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+[Dd]ebugPublic/
+[Rr]elease[Pp]ublish/
+x64/
+x86/
+[Aa]rm/
+[Aa]rm64/
+bld/
+[Bb]in/
+[Oo]bj/
+out/
+msbuild.log
+msbuild.err
+msbuild.wrn
+
+## 二进制和符号文件（不必要提交）
+*.dll
+*.exe
+*.pdb
+*.cache
+*.ilk
+*.meta
+*.lib
+*.lo
+*.la
+*.so
+*.dylib
+
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!**/packages/repositories.config
+!**/packages/*.targets
+nuget.config
+
+## 用户专属配置（各自 IDE 的本地设置）
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+## ===========================
+## 环境变量和密钥（绝对不能上传！）
+## ===========================
+
+## 本地开发配置（含数据库密码、API 密钥等）
+appsettings.Development.json
+appsettings.Local.json
+appsettings.Staging.json
+appsettings.Production.json
+
+## 环境变量文件
+*.env
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+## 密钥文件
+secrets.json
+**/secrets.json
+*.pfx
+*.p12
+*.key
+*.pem
+
+## ASP.NET Core 用户密钥
+**/Properties/launchSettings.json
+
+## ===========================
+## 测试结果和覆盖率报告
+## ===========================
+[Tt]est[Rr]esult*/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.xml
+coverage*/
+_ReSharper*/
+*.DotCover
+
+## ===========================
+## 数据库文件
+## ===========================
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+## ===========================
+## IDE 和编辑器
+## ===========================
+
+## Visual Studio
+.vs/
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+
+## VS Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+
+## JetBrains Rider
+.idea/
+*.DotSettings.user
+
+## ===========================
+## 部署相关
+## ===========================
+
+## Railway 本地配置（含 token 的不提交）
+.railway/
+
+## Docker 构建缓存
+.dockerignore
+
+## 发布配置（自动生成的，不需要提交）
+**/Properties/PublishProfiles/
+publish/
+
+## ===========================
+## 操作系统文件
+## ===========================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+## ===========================
+## 日志文件
+## ===========================
+*.log
+logs/
+Logs/
+
+## ===========================
+## 临时和工具文件
+## ===========================
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+.#*
+
+## MSBuild 二进制日志（太大了）
+*.binlog

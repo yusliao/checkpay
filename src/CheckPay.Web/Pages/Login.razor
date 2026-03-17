@@ -1,0 +1,82 @@
+@page "/login"
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Infrastructure.Data
+@using Microsoft.EntityFrameworkCore
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject ILoginTokenStore LoginTokenStore
+@inject ApplicationDbContext DbContext
+
+<PageTitle>登录 - CheckPay</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+    <MudPaper Class="pa-8">
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">CheckPay 登录</MudText>
+
+        <MudTextField @bind-Value="_username" Label="用户名" Variant="Variant.Outlined" Class="mt-4" />
+        <MudTextField @bind-Value="_password" Label="密码" Variant="Variant.Outlined" InputType="InputType.Password" Class="mt-4"
+                      OnKeyUp="HandlePasswordKeyUp" />
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" Class="mt-4" OnClick="HandleLogin" Disabled="@_isLoggingIn">
+            @if (_isLoggingIn)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ml-2">登录中...</MudText>
+            }
+            else
+            {
+                <MudText>登录</MudText>
+            }
+        </MudButton>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private string _username = "";
+    private string _password = "";
+    private bool _isLoggingIn;
+
+    private async Task HandlePasswordKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await HandleLogin();
+    }
+
+    private async Task HandleLogin()
+    {
+        if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_password))
+        {
+            Snackbar.Add("请输入用户名和密码", Severity.Warning);
+            return;
+        }
+
+        _isLoggingIn = true;
+
+        var user = await DbContext.Users
+            .FirstOrDefaultAsync(u => u.EntraId == _username && u.IsActive);
+
+        if (user != null && BCrypt.Net.BCrypt.Verify(_password, user.PasswordHash))
+        {
+            // 将用户信息存入一次性 token（30秒有效）
+            // 然后跳转到 Razor Page /Auth/SignIn，由它在真实 HTTP 请求里写 Cookie
+            // 这是 Blazor Server 下 Cookie 认证的标准解法（SignalR 连接无法写 Response Header）
+            var loginInfo = new LoginInfo(
+                UserId: user.Id,
+                DisplayName: user.DisplayName,
+                Email: user.Email,
+                Role: user.Role.ToString(),
+                ReturnUrl: ReturnUrl ?? "/");
+
+            var token = LoginTokenStore.StoreLoginInfo(loginInfo);
+            Navigation.NavigateTo($"/Auth/SignIn?token={token}", forceLoad: true);
+        }
+        else
+        {
+            Snackbar.Add("用户名或密码错误", Severity.Error);
+            _isLoggingIn = false;
+        }
+    }
+}

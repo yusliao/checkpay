@@ -1,0 +1,214 @@
+@page "/records"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.WebUtilities
+@inject IApplicationDbContext DbContext
+@inject NavigationManager Navigation
+
+<PageTitle>收款记录 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">收款记录</MudText>
+
+@* 筛选栏 *@
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudGrid>
+        <MudItem xs="12" sm="6" md="3">
+            <MudSelect @bind-Value="_filterStatus" Label="状态" Clearable="true" T="CheckStatus?" Dense="true">
+                <MudSelectItem Value="@((CheckStatus?)CheckStatus.PendingDebit)">待扣款</MudSelectItem>
+                <MudSelectItem Value="@((CheckStatus?)CheckStatus.PendingReview)">待核查</MudSelectItem>
+                <MudSelectItem Value="@((CheckStatus?)CheckStatus.Confirmed)">已确认</MudSelectItem>
+                <MudSelectItem Value="@((CheckStatus?)CheckStatus.Questioned)">存疑</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudTextField @bind-Value="_filterCheckNumber" Label="支票号" Dense="true" Clearable="true" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="2">
+            <MudDatePicker @bind-Date="_filterDateFrom" Label="开始日期" Dense="true" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="2">
+            <MudDatePicker @bind-Date="_filterDateTo" Label="结束日期" Dense="true" />
+        </MudItem>
+        <MudItem xs="12" sm="12" md="2" Class="d-flex align-end">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyFilter" FullWidth="true">搜索</MudButton>
+            <MudButton Variant="Variant.Outlined" Class="ml-2" OnClick="ClearFilter" FullWidth="true">重置</MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+@* 记录表格 *@
+<MudTable Items="@_records" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading"
+          OnRowClick="OnRowClick" T="CheckRecord" RowClass="cursor-pointer">
+    <HeaderContent>
+        <MudTh>支票号</MudTh>
+        <MudTh>客户</MudTh>
+        <MudTh>金额</MudTh>
+        <MudTh>日期</MudTh>
+        <MudTh>状态</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
+        <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+        <MudTd DataLabel="金额">@context.CheckAmount.ToString("C")</MudTd>
+        <MudTd DataLabel="日期">@context.CheckDate.ToShortDateString()</MudTd>
+        <MudTd DataLabel="状态">
+            <MudChip T="string" Size="Size.Small" Color="GetStatusColor(context.Status)">
+                @GetStatusText(context.Status)
+            </MudChip>
+        </MudTd>
+    </RowTemplate>
+    <FooterContent>
+        <MudTd colspan="5">
+            <MudText Typo="Typo.caption">共 @_records.Count 条记录</MudText>
+        </MudTd>
+    </FooterContent>
+</MudTable>
+
+@* 右侧 Drawer 详情 *@
+<MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.End" Elevation="2" Variant="DrawerVariant.Temporary" Width="400px">
+    @if (_selectedRecord != null)
+    {
+        <MudDrawerHeader>
+            <MudText Typo="Typo.h6">支票详情</MudText>
+        </MudDrawerHeader>
+        <MudList T="string" Dense="true" Class="px-4">
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">支票号</MudText>
+                <MudText>@_selectedRecord.CheckNumber</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">客户</MudText>
+                <MudText>@_selectedRecord.Customer?.CustomerName</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">金额</MudText>
+                <MudText>@_selectedRecord.CheckAmount.ToString("C")</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">支票日期</MudText>
+                <MudText>@_selectedRecord.CheckDate.ToString("yyyy-MM-dd")</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">状态</MudText>
+                <MudChip T="string" Size="Size.Small" Color="GetStatusColor(_selectedRecord.Status)">
+                    @GetStatusText(_selectedRecord.Status)
+                </MudChip>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">备注</MudText>
+                <MudText>@(_selectedRecord.Notes ?? "—")</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">创建时间</MudText>
+                <MudText>@_selectedRecord.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudText>
+            </MudListItem>
+        </MudList>
+
+        @* 图片预览 *@
+        @if (!string.IsNullOrEmpty(_selectedRecord.ImageUrl))
+        {
+            <MudPaper Class="ma-4 pa-2">
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">支票图片</MudText>
+                <MudImage Src="@_selectedRecord.ImageUrl" Alt="支票图片" Class="rounded" Style="width:100%" />
+            </MudPaper>
+        }
+
+        @* 状态变更按钮（待核查时显示） *@
+        @if (_selectedRecord.Status == CheckStatus.PendingReview)
+        {
+            <MudStack Row="true" Class="ma-4" Spacing="2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                           OnClick="@(() => Navigation.NavigateTo($"/reviews/{_selectedRecord.Id}"))">
+                    去核查
+                </MudButton>
+            </MudStack>
+        }
+    }
+</MudDrawer>
+
+@code {
+    private List<CheckRecord> _records = new();
+    private bool _loading = true;
+    private bool _drawerOpen;
+    private CheckRecord? _selectedRecord;
+
+    // 筛选条件
+    private CheckStatus? _filterStatus;
+    private string _filterCheckNumber = "";
+    private DateTime? _filterDateFrom;
+    private DateTime? _filterDateTo;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 支持URL参数预设筛选（如Dashboard点击卡片跳转）
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        if (QueryHelpers.ParseQuery(uri.Query).TryGetValue("status", out var statusStr))
+        {
+            if (Enum.TryParse<CheckStatus>(statusStr, out var s))
+                _filterStatus = s;
+        }
+        await LoadRecords();
+    }
+
+    private async Task LoadRecords()
+    {
+        _loading = true;
+        var query = DbContext.CheckRecords.Include(c => c.Customer).AsQueryable();
+
+        if (_filterStatus.HasValue)
+            query = query.Where(c => c.Status == _filterStatus.Value);
+        if (!string.IsNullOrWhiteSpace(_filterCheckNumber))
+            query = query.Where(c => c.CheckNumber.Contains(_filterCheckNumber));
+        if (_filterDateFrom.HasValue)
+            query = query.Where(c => c.CheckDate >= _filterDateFrom.Value);
+        if (_filterDateTo.HasValue)
+            query = query.Where(c => c.CheckDate <= _filterDateTo.Value);
+
+        _records = await query.OrderByDescending(c => c.CreatedAt).ToListAsync();
+        _loading = false;
+    }
+
+    private async Task ApplyFilter() => await LoadRecords();
+
+    private async Task ClearFilter()
+    {
+        _filterStatus = null;
+        _filterCheckNumber = "";
+        _filterDateFrom = null;
+        _filterDateTo = null;
+        await LoadRecords();
+    }
+
+    private void OnRowClick(TableRowClickEventArgs<CheckRecord> args)
+    {
+        _selectedRecord = args.Item;
+        _drawerOpen = true;
+    }
+
+    private Color GetStatusColor(CheckStatus status) => status switch
+    {
+        CheckStatus.PendingDebit   => Color.Warning,
+        CheckStatus.PendingReview  => Color.Info,
+        CheckStatus.Confirmed      => Color.Success,
+        CheckStatus.Questioned     => Color.Error,
+        _                          => Color.Default
+    };
+
+    private string GetStatusText(CheckStatus status) => status switch
+    {
+        CheckStatus.PendingDebit   => "待扣款",
+        CheckStatus.PendingReview  => "待核查",
+        CheckStatus.Confirmed      => "已确认",
+        CheckStatus.Questioned     => "存疑",
+        _                          => "未知"
+    };
+}

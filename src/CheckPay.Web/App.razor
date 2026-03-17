@@ -1,0 +1,32 @@
+<CascadingAuthenticationState>
+    <MudThemeProvider />
+    <MudPopoverProvider />
+    <MudDialogProvider />
+    <MudSnackbarProvider />
+
+    <Router AppAssembly="@typeof(App).Assembly">
+        <Found Context="routeData">
+            <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+                <NotAuthorized>
+                    @* _Host.cshtml 已加 [Authorize]，到这里说明用户已登录但角色不足 *@
+                    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-16 text-center">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Warning" Style="font-size: 4rem;" />
+                        <MudText Typo="Typo.h5" Class="mt-4">权限不足</MudText>
+                        <MudText Color="Color.Secondary" Class="mt-2">你的账号没有访问此页面的权限，请联系管理员。</MudText>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-6" Href="/">返回首页</MudButton>
+                    </MudContainer>
+                </NotAuthorized>
+                <Authorizing>
+                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                </Authorizing>
+            </AuthorizeRouteView>
+            <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+        </Found>
+        <NotFound>
+            <PageTitle>Not found</PageTitle>
+            <LayoutView Layout="@typeof(MainLayout)">
+                <p role="alert">Sorry, there's nothing at this address.</p>
+            </LayoutView>
+        </NotFound>
+    </Router>
+</CascadingAuthenticationState>

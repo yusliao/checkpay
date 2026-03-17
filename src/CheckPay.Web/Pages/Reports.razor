@@ -1,0 +1,159 @@
+@page "/reports"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>导出报表 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">导出报表</MudText>
+
+<MudPaper Class="pa-6 mt-4" MaxWidth="600px">
+    <MudText Typo="Typo.h6" GutterBottom="true">收款汇总报表</MudText>
+
+    @* 日期范围 *@
+    <MudGrid Class="mb-3">
+        <MudItem xs="6">
+            <MudDatePicker @bind-Date="_dateFrom" Label="开始日期" Required="true"
+                           MaxDate="@DateTime.Today" />
+        </MudItem>
+        <MudItem xs="6">
+            <MudDatePicker @bind-Date="_dateTo" Label="结束日期" Required="true"
+                           MaxDate="@DateTime.Today" />
+        </MudItem>
+    </MudGrid>
+
+    @* 包含状态 *@
+    <MudText Typo="Typo.subtitle2" Class="mb-2">包含状态</MudText>
+    <MudStack Row="true" Wrap="Wrap.Wrap" Class="mb-4">
+        <MudCheckBox @bind-Value="_inclPendingDebit" Label="待扣款" Color="Color.Warning" />
+        <MudCheckBox @bind-Value="_inclPendingReview" Label="待核查" Color="Color.Info" />
+        <MudCheckBox @bind-Value="_inclQuestioned" Label="存疑" Color="Color.Error" />
+        <MudCheckBox @bind-Value="_inclConfirmed" Label="已确认" Color="Color.Success" />
+    </MudStack>
+
+    @* 文件名预览 *@
+    @if (_dateFrom.HasValue && _dateTo.HasValue)
+    {
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+            文件名：收款汇总_@(_dateFrom.Value.ToString("yyyyMMdd"))_@(_dateTo.Value.ToString("yyyyMMdd")).csv
+        </MudText>
+    }
+
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+               StartIcon="@Icons.Material.Filled.Download"
+               OnClick="ExportCsv"
+               Disabled="@(!_dateFrom.HasValue || !_dateTo.HasValue || _exporting)">
+        @(_exporting ? "生成中..." : "下载 CSV")
+    </MudButton>
+
+    @if (_rowCount.HasValue)
+    {
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
+            共导出 @_rowCount 条记录
+        </MudText>
+    }
+</MudPaper>
+
+@code {
+    private DateTime? _dateFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime? _dateTo = DateTime.Today;
+
+    private bool _inclPendingDebit = true;
+    private bool _inclPendingReview = true;
+    private bool _inclQuestioned = true;
+    private bool _inclConfirmed = true;
+    private bool _exporting;
+    private int? _rowCount;
+
+    private async Task ExportCsv()
+    {
+        if (!_dateFrom.HasValue || !_dateTo.HasValue) return;
+        _exporting = true;
+        _rowCount = null;
+
+        try
+        {
+            // 收集勾选的状态
+            var statuses = new List<CheckStatus>();
+            if (_inclPendingDebit)   statuses.Add(CheckStatus.PendingDebit);
+            if (_inclPendingReview)  statuses.Add(CheckStatus.PendingReview);
+            if (_inclQuestioned)     statuses.Add(CheckStatus.Questioned);
+            if (_inclConfirmed)      statuses.Add(CheckStatus.Confirmed);
+
+            if (!statuses.Any())
+            {
+                Snackbar.Add("请至少选择一个状态", Severity.Warning);
+                return;
+            }
+
+            var from = _dateFrom.Value.Date;
+            var to = _dateTo.Value.Date.AddDays(1); // 包含当天
+
+            var records = await DbContext.CheckRecords
+                .Include(c => c.Customer)
+                .Include(c => c.DebitRecord)
+                .Where(c => statuses.Contains(c.Status)
+                         && c.CheckDate >= from
+                         && c.CheckDate < to)
+                .OrderBy(c => c.CheckDate)
+                .ToListAsync();
+
+            _rowCount = records.Count;
+
+            // 生成 CSV
+            var csv = new System.Text.StringBuilder();
+            csv.AppendLine("支票号,客户编号,客户名称,支票金额,支票日期,扣款金额,扣款日期,银行流水号,状态,备注");
+            foreach (var r in records)
+            {
+                csv.AppendLine(string.Join(",",
+                    CsvEscape(r.CheckNumber),
+                    CsvEscape(r.Customer?.CustomerCode ?? ""),
+                    CsvEscape(r.Customer?.CustomerName ?? ""),
+                    r.CheckAmount.ToString("N2"),
+                    r.CheckDate.ToString("yyyy-MM-dd"),
+                    r.DebitRecord?.DebitAmount.ToString("N2") ?? "",
+                    r.DebitRecord?.DebitDate.ToString("yyyy-MM-dd") ?? "",
+                    CsvEscape(r.DebitRecord?.BankReference ?? ""),
+                    GetStatusText(r.Status),
+                    CsvEscape(r.Notes ?? "")
+                ));
+            }
+
+            // 触发浏览器下载
+            var fileName = $"收款汇总_{_dateFrom.Value:yyyyMMdd}_{_dateTo.Value:yyyyMMdd}.csv";
+            var bytes = System.Text.Encoding.UTF8.GetPreamble()
+                .Concat(System.Text.Encoding.UTF8.GetBytes(csv.ToString()))
+                .ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+
+            await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv;charset=utf-8", base64);
+            Snackbar.Add($"导出成功，共 {_rowCount} 条", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"导出失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private static string CsvEscape(string s)
+        => s.Contains(',') || s.Contains('"') || s.Contains('\n')
+            ? $"\"{s.Replace("\"", "\"\"")}\""
+            : s;
+
+    private static string GetStatusText(CheckStatus status) => status switch
+    {
+        CheckStatus.PendingDebit   => "待扣款",
+        CheckStatus.PendingReview  => "待核查",
+        CheckStatus.Confirmed      => "已确认",
+        CheckStatus.Questioned     => "存疑",
+        _                          => "未知"
+    };
+}

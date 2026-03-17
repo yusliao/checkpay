@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CheckPay.Application/CheckPay.Application.csproj" />
+    <Project Path="src/CheckPay.Domain/CheckPay.Domain.csproj" />
+    <Project Path="src/CheckPay.Infrastructure/CheckPay.Infrastructure.csproj" />
+    <Project Path="src/CheckPay.Web/CheckPay.Web.csproj" />
+    <Project Path="src/CheckPay.Worker/CheckPay.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CheckPay.Tests/CheckPay.Tests.csproj" />
+  </Folder>
+</Solution>

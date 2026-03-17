@@ -1,0 +1,193 @@
+@page "/reviews"
+@attribute [Authorize(Roles = "CNFinance,Admin")]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>待核查列表 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">待核查列表</MudText>
+
+<MudTable Items="@_records" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="CheckRecord">
+    <HeaderContent>
+        <MudTh>客户</MudTh>
+        <MudTh>支票号</MudTh>
+        <MudTh>支票金额</MudTh>
+        <MudTh>扣款金额</MudTh>
+        <MudTh>差异</MudTh>
+        <MudTh>支票日期</MudTh>
+        <MudTh>操作</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+        <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
+        <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
+        <MudTd DataLabel="扣款金额">
+            @if (context.DebitRecord != null)
+            {
+                <span style="@(HasAmountDiff(context) ? "color:#f44336;font-weight:bold" : "")">
+                    @context.DebitRecord.DebitAmount.ToString("C")
+                </span>
+            }
+            else
+            {
+                <MudText Color="Color.Secondary">—</MudText>
+            }
+        </MudTd>
+        <MudTd DataLabel="差异">
+            @if (context.DebitRecord != null && HasAmountDiff(context))
+            {
+                var diff = context.DebitRecord.DebitAmount - context.CheckAmount;
+                <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                    @(diff > 0 ? "+" : "")@diff.ToString("C")
+                </MudChip>
+            }
+            else
+            {
+                <MudText Color="Color.Success" Typo="Typo.caption">一致</MudText>
+            }
+        </MudTd>
+        <MudTd DataLabel="支票日期">@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
+        <MudTd DataLabel="操作">
+            <MudStack Row="true" Spacing="1">
+                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                           OnClick="@(() => Navigation.NavigateTo($"/reviews/{context.Id}"))">
+                    核查
+                </MudButton>
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true">
+                    <MudMenuItem OnClick="@(() => QuickConfirm(context))">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                            <MudText>确认</MudText>
+                        </MudStack>
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="@(() => OpenQuestionDialog(context))">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small" />
+                            <MudText>标记存疑</MudText>
+                        </MudStack>
+                    </MudMenuItem>
+                </MudMenu>
+            </MudStack>
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@* 快速确认——二次确认对话框 *@
+@if (_confirmTarget != null)
+{
+    <MudOverlay Visible="true" DarkBackground="true" ZIndex="9999" />
+    <MudPaper Style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;width:420px;max-width:95vw"
+              Class="pa-6" Elevation="24">
+        <MudText Typo="Typo.h6" Class="mb-3">确认核查</MudText>
+        <MudText Class="mb-4">
+            确认支票 <strong>@_confirmTarget.CheckNumber</strong>（@_confirmTarget.CheckAmount.ToString("C")）核查无误？
+        </MudText>
+        <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+            <MudButton Variant="Variant.Outlined" OnClick="@(() => _confirmTarget = null)">取消</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="DoConfirm">确认</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+
+@* 标记存疑——要求填写原因 *@
+@if (_questionTarget != null)
+{
+    <MudOverlay Visible="true" DarkBackground="true" ZIndex="9999" />
+    <MudPaper Style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;width:420px;max-width:95vw"
+              Class="pa-6" Elevation="24">
+        <MudText Typo="Typo.h6" Class="mb-3">标记存疑</MudText>
+        <MudText Class="mb-2">支票 <strong>@_questionTarget.CheckNumber</strong></MudText>
+        <MudTextField @bind-Value="_questionReason"
+                      Label="存疑原因（必填）"
+                      Lines="3"
+                      Required="true"
+                      Variant="Variant.Outlined"
+                      Class="mb-4" />
+        <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+            <MudButton Variant="Variant.Outlined" OnClick="@(() => { _questionTarget = null; _questionReason = ""; })">取消</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                       Disabled="@string.IsNullOrWhiteSpace(_questionReason)"
+                       OnClick="DoQuestion">提交</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+
+@code {
+    private List<CheckRecord> _records = new();
+    private bool _loading = true;
+    private CheckRecord? _confirmTarget;
+    private CheckRecord? _questionTarget;
+    private string _questionReason = "";
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        _loading = true;
+        _records = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .Include(c => c.DebitRecord)
+            .Where(c => c.Status == CheckStatus.PendingReview)
+            .OrderByDescending(c => c.CreatedAt)
+            .ToListAsync();
+        _loading = false;
+    }
+
+    // 金额差异超过 $0.01 就算不一致
+    private bool HasAmountDiff(CheckRecord c)
+        => c.DebitRecord != null && Math.Abs(c.DebitRecord.DebitAmount - c.CheckAmount) > 0.01m;
+
+    private void QuickConfirm(CheckRecord c) => _confirmTarget = c;
+
+    private async Task DoConfirm()
+    {
+        if (_confirmTarget == null) return;
+        _confirmTarget.Status = CheckStatus.Confirmed;
+        try
+        {
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add($"支票 {_confirmTarget.CheckNumber} 已确认", Severity.Success);
+            _confirmTarget = null;
+            await LoadData();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+            _confirmTarget = null;
+            await LoadData();
+        }
+    }
+
+    private void OpenQuestionDialog(CheckRecord c)
+    {
+        _questionTarget = c;
+        _questionReason = "";
+    }
+
+    private async Task DoQuestion()
+    {
+        if (_questionTarget == null || string.IsNullOrWhiteSpace(_questionReason)) return;
+        _questionTarget.Status = CheckStatus.Questioned;
+        _questionTarget.Notes = _questionReason;
+        try
+        {
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add($"支票 {_questionTarget.CheckNumber} 已标记存疑", Severity.Warning);
+            _questionTarget = null;
+            _questionReason = "";
+            await LoadData();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+            _questionTarget = null;
+            _questionReason = "";
+            await LoadData();
+        }
+    }
+}

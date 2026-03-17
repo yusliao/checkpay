@@ -1,0 +1,231 @@
+@page "/reviews/{id:guid}"
+@attribute [Authorize(Roles = "CNFinance,Admin")]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject IAuditLogService AuditLog
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>核查详情 - CheckPay</PageTitle>
+
+<MudBreadcrumbs Items="_breadcrumbs" Class="pa-0 mb-4" />
+
+@if (_loading)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (_checkRecord == null)
+{
+    <MudAlert Severity="Severity.Error">记录不存在</MudAlert>
+}
+else
+{
+    <MudGrid>
+        @* 左：支票图片 *@
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Style="height:100%">
+                <MudText Typo="Typo.h6" GutterBottom="true">支票图片</MudText>
+                @if (!string.IsNullOrEmpty(_checkRecord.ImageUrl))
+                {
+                    <MudImage Src="@_checkRecord.ImageUrl" Alt="支票图片" Class="rounded mb-3"
+                              Style="width:100%;object-fit:contain" />
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true">暂无支票图片</MudAlert>
+                }
+                @if (_checkRecord.DebitRecord != null && !string.IsNullOrEmpty(_checkRecord.DebitRecord.ScanImageUrl))
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1" Color="Color.Secondary">扣款扫描件</MudText>
+                    <MudImage Src="@_checkRecord.DebitRecord.ScanImageUrl" Alt="扣款扫描件" Class="rounded"
+                              Style="width:100%;object-fit:contain" />
+                }
+            </MudPaper>
+        </MudItem>
+
+        @* 右：信息对比 + 操作 *@
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4">
+                @* 支票信息 *@
+                <MudText Typo="Typo.h6" GutterBottom="true">支票信息</MudText>
+                <MudSimpleTable Dense="true" Class="mb-4">
+                    <tbody>
+                        <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">客户</MudText></td>
+                            <td>@_checkRecord.Customer?.CustomerName</td></tr>
+                        <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">支票号</MudText></td>
+                            <td><strong>@_checkRecord.CheckNumber</strong></td></tr>
+                        <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">金额</MudText></td>
+                            <td>@_checkRecord.CheckAmount.ToString("C")</td></tr>
+                        <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">日期</MudText></td>
+                            <td>@_checkRecord.CheckDate.ToString("yyyy-MM-dd")</td></tr>
+                    </tbody>
+                </MudSimpleTable>
+
+                @* 扣款信息 *@
+                <MudText Typo="Typo.h6" GutterBottom="true">扣款信息</MudText>
+                @if (_checkRecord.DebitRecord != null)
+                {
+                    var diff = _checkRecord.DebitRecord.DebitAmount - _checkRecord.CheckAmount;
+                    var hasDiff = Math.Abs(diff) > 0.01m;
+                    <MudSimpleTable Dense="true" Class="mb-3">
+                        <tbody>
+                            <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">扣款金额</MudText></td>
+                                <td>
+                                    <span style="@(hasDiff ? "color:#f44336;font-weight:bold" : "")">
+                                        @_checkRecord.DebitRecord.DebitAmount.ToString("C")
+                                    </span>
+                                </td></tr>
+                            <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">扣款日期</MudText></td>
+                                <td>@_checkRecord.DebitRecord.DebitDate.ToString("yyyy-MM-dd")</td></tr>
+                            <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">银行流水号</MudText></td>
+                                <td>@_checkRecord.DebitRecord.BankReference</td></tr>
+                        </tbody>
+                    </MudSimpleTable>
+                    @if (hasDiff)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                            金额差异：@(diff > 0 ? "+" : "")@diff.ToString("C")，请确认是否正常
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">金额一致</MudAlert>
+                    }
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Warning" Class="mb-3">未找到匹配的扣款记录</MudAlert>
+                }
+
+                @* 核查操作区 *@
+                <MudDivider Class="my-3" />
+
+                @if (!_showQuestionForm)
+                {
+                    <MudTextField @bind-Value="_reviewNotes" Label="核查备注（可选）"
+                                  Lines="2" Variant="Variant.Outlined" Class="mb-3" />
+                    <MudStack Row="true" Spacing="2">
+                        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ArrowBack"
+                                   OnClick="@(() => Navigation.NavigateTo("/reviews"))">返回列表</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                                   StartIcon="@Icons.Material.Filled.Warning"
+                                   OnClick="@(() => _showQuestionForm = true)">标记存疑</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Success"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle"
+                                   OnClick="@(() => _showConfirmDialog = true)">确认无误</MudButton>
+                    </MudStack>
+                }
+                else
+                {
+                    @* 存疑原因展开表单 *@
+                    <MudTextField @bind-Value="_questionReason" Label="存疑原因（必填）"
+                                  Lines="3" Required="true" Variant="Variant.Outlined"
+                                  HelperText="请说明存疑具体原因，方便后续跟进"
+                                  Class="mb-3" />
+                    <MudStack Row="true" Spacing="2">
+                        <MudButton Variant="Variant.Outlined"
+                                   OnClick="@(() => { _showQuestionForm = false; _questionReason = ""; })">取消</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                                   Disabled="@string.IsNullOrWhiteSpace(_questionReason)"
+                                   OnClick="QuestionRecord">提交存疑</MudButton>
+                    </MudStack>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@* 确认二次弹窗 *@
+@if (_showConfirmDialog && _checkRecord != null)
+{
+    <MudOverlay Visible="true" DarkBackground="true" ZIndex="9999" />
+    <MudPaper Style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;width:400px;max-width:95vw"
+              Class="pa-6" Elevation="24">
+        <MudText Typo="Typo.h6" Class="mb-2">确认核查无误？</MudText>
+        <MudText Class="mb-4">
+            支票 <strong>@_checkRecord.CheckNumber</strong>（@_checkRecord.CheckAmount.ToString("C")）
+            将标记为「已确认」，此操作不可撤销。
+        </MudText>
+        <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+            <MudButton Variant="Variant.Outlined" OnClick="@(() => _showConfirmDialog = false)">取消</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="ConfirmRecord">确认</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private bool _loading = true;
+    private CheckRecord? _checkRecord;
+    private string _reviewNotes = "";
+    private string _questionReason = "";
+    private bool _showQuestionForm;
+    private bool _showConfirmDialog;
+
+    private List<BreadcrumbItem> _breadcrumbs = new()
+    {
+        new BreadcrumbItem("首页", href: "/"),
+        new BreadcrumbItem("待核查列表", href: "/reviews"),
+        new BreadcrumbItem("核查详情", href: null, disabled: true)
+    };
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        _loading = true;
+        _checkRecord = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .Include(c => c.DebitRecord)
+            .FirstOrDefaultAsync(c => c.Id == Id);
+        _loading = false;
+    }
+
+    private async Task ConfirmRecord()
+    {
+        if (_checkRecord == null) return;
+        var oldStatus = _checkRecord.Status;
+        _checkRecord.Status = CheckStatus.Confirmed;
+        if (!string.IsNullOrWhiteSpace(_reviewNotes))
+            _checkRecord.Notes = _reviewNotes;
+        try
+        {
+            await DbContext.SaveChangesAsync();
+            await AuditLog.LogAsync(AuditAction.StatusChange, "CheckRecord", _checkRecord.Id,
+                new { Status = oldStatus }, new { Status = CheckStatus.Confirmed });
+            Snackbar.Add($"支票 {_checkRecord.CheckNumber} 已确认", Severity.Success);
+            Navigation.NavigateTo("/reviews");
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+            await LoadData();
+        }
+    }
+
+    private async Task QuestionRecord()
+    {
+        if (_checkRecord == null || string.IsNullOrWhiteSpace(_questionReason)) return;
+        var oldStatus = _checkRecord.Status;
+        _checkRecord.Status = CheckStatus.Questioned;
+        _checkRecord.Notes = _questionReason;
+        try
+        {
+            await DbContext.SaveChangesAsync();
+            await AuditLog.LogAsync(AuditAction.StatusChange, "CheckRecord", _checkRecord.Id,
+                new { Status = oldStatus }, new { Status = CheckStatus.Questioned, Notes = _questionReason });
+            Snackbar.Add($"支票 {_checkRecord.CheckNumber} 已标记存疑", Severity.Warning);
+            Navigation.NavigateTo("/reviews");
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+            await LoadData();
+        }
+    }
+    }
+}

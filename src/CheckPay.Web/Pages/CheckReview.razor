@@ -1,0 +1,448 @@
+@page "/checks/review/{Id:guid}"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using CheckPay.Worker.Services
+@using Microsoft.EntityFrameworkCore
+@using System.Linq
+@using System.Text.Json
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject OcrWorker OcrWorker
+
+<PageTitle>复核支票 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">复核支票信息</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (_ocrResult == null)
+{
+    <MudAlert Severity="Severity.Error">未找到 OCR 记录</MudAlert>
+}
+else if (_ocrResult.Status == OcrStatus.Pending || _ocrResult.Status == OcrStatus.Processing)
+{
+    <MudPaper Class="pa-4 mt-4">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.h6">OCR 正在处理中...</MudText>
+            <MudText Typo="Typo.body2">请稍候或点击下方按钮刷新状态。</MudText>
+            <MudStack Row="true" Spacing="1">
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">提交时间：@_ocrResult.CreatedAt.ToLocalTime():g</MudText>
+            </MudStack>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RefreshStatus">刷新状态</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+else if (_ocrResult.Status == OcrStatus.Failed)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-3">
+        OCR 识别失败：@(_ocrResult.ErrorMessage ?? "未知错误")
+    </MudAlert>
+    <MudStack Row="true" Spacing="2">
+        <MudButton Variant="Variant.Outlined" OnClick="RefreshStatus">刷新状态</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RetryOcr" Disabled="@_retryingOcr">
+            @(_retryingOcr ? "重新提交中..." : "重新提交 OCR 任务")
+        </MudButton>
+    </MudStack>
+}
+else if (_ocrResult.RawResult == null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-3">
+        未找到 OCR 结果，请重新触发识别。
+    </MudAlert>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RetryOcr" Disabled="@_retryingOcr">
+        @(_retryingOcr ? "重新提交中..." : "重新提交 OCR 任务")
+    </MudButton>
+}
+else
+{
+    <MudGrid>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6" GutterBottom="true">支票图片</MudText>
+                <MudImage Src="@_ocrResult.ImageUrl" Alt="支票图片" Class="rounded" />
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6" GutterBottom="true">识别信息</MudText>
+
+                @* 支票号 - 置信度颜色 *@
+                <div class="mb-2">
+                    <MudTextField @bind-Value="_checkNumber"
+                                  Label="支票号"
+                                  Required="true"
+                                  Variant="Variant.Outlined"
+                                  Style="@GetFieldStyle("checkNumber")"
+                                  HelperText="@GetFieldHint("checkNumber")"
+                                  HelperTextOnFocus="false"
+                                  Adornment="@GetAdornment("checkNumber")"
+                                  AdornmentColor="@GetAdornmentColor("checkNumber")"
+                                  AdornmentIcon="@GetAdornmentIcon("checkNumber")" />
+                </div>
+
+                @* 金额 - 置信度颜色 *@
+                <div class="mb-2">
+                    <MudNumericField @bind-Value="_amount"
+                                     Label="金额"
+                                     Required="true"
+                                     Format="N2"
+                                     Variant="Variant.Outlined"
+                                     Style="@GetFieldStyle("amount")"
+                                     HelperText="@GetFieldHint("amount")"
+                                     HelperTextOnFocus="false"
+                                     Adornment="@GetAdornment("amount")"
+                                     AdornmentColor="@GetAdornmentColor("amount")"
+                                     AdornmentIcon="@GetAdornmentIcon("amount")" />
+                </div>
+
+                @* 日期 - 置信度颜色 *@
+                <div class="mb-2">
+                    <MudDatePicker @bind-Date="_checkDate"
+                                   Label="日期"
+                                   Required="true"
+                                   Variant="Variant.Outlined"
+                                   Style="@GetFieldStyle("date")"
+                                   HelperText="@GetFieldHint("date")" />
+                </div>
+
+                <MudTextField @bind-Value="_customerCode"
+                               Label="客户编号"
+                               Required="true"
+                               Variant="Variant.Outlined"
+                               Class="mb-2"
+                               Placeholder="输入客户编号，支持新建" />
+
+                @if (!string.IsNullOrWhiteSpace(_customerCode))
+                {
+                    var match = GetCustomerMatch();
+                    if (match != null)
+                    {
+                        <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">
+                            匹配客户：@match.CustomerName
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                            新客户将自动创建：@_customerCode.Trim()
+                        </MudAlert>
+                    }
+                }
+
+                <MudTextField @bind-Value="_notes" Label="备注" Lines="3" Variant="Variant.Outlined" Class="mb-4" />
+
+                @* 置信度图例说明 *@
+                <MudPaper Class="pa-2 mb-4" Style="background:#f5f5f5">
+                    <MudText Typo="Typo.caption">置信度说明：</MudText>
+                    <MudStack Row="true" Spacing="2" Class="mt-1">
+                        <MudChip T="string" Size="Size.Small" Style="background:#e8f5e9;color:#2e7d32">高 ≥85%</MudChip>
+                        <MudChip T="string" Size="Size.Small" Style="background:#fff3e0;color:#e65100">中 60-85%</MudChip>
+                        <MudChip T="string" Size="Size.Small" Style="background:#ffebee;color:#c62828">低 &lt;60%</MudChip>
+                    </MudStack>
+                </MudPaper>
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" Class="mr-2" OnClick="Abandon">放弃</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveCheck">确认入库</MudButton>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private bool _loading = true;
+    private bool _retryingOcr;
+    private bool _prefilledFromOcr;
+    private OcrResult? _ocrResult;
+    private List<Customer> _customers = new();
+    private string _checkNumber = string.Empty;
+    private decimal _amount;
+    private DateTime? _checkDate;
+    private string _customerCode = string.Empty;
+    private string _notes = string.Empty;
+    private Dictionary<string, double> _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadOcrResultAsync();
+    }
+
+    private async Task LoadOcrResultAsync()
+    {
+        _loading = true;
+        _ocrResult = await DbContext.OcrResults
+            .AsNoTracking()
+            .FirstOrDefaultAsync(o => o.Id == Id);
+        _customers = await DbContext.Customers.Where(c => c.IsActive).ToListAsync();
+
+        if (_ocrResult?.Status == OcrStatus.Completed && _ocrResult.RawResult != null)
+        {
+            PopulateFromStoredResult();
+        }
+
+        _loading = false;
+    }
+
+    private void PopulateFromStoredResult(bool force = false)
+    {
+        if (_ocrResult?.RawResult == null) return;
+        if (_prefilledFromOcr && !force) return;
+
+        _confidenceScores = ExtractConfidenceScores();
+        var root = _ocrResult.RawResult.RootElement;
+
+        var recognizedNumber = ExtractString(root, "CheckNumber");
+        var recognizedAmount = ExtractDecimal(root, "Amount");
+        var recognizedDate = ExtractDate(root, "Date");
+
+        _checkNumber = ShouldPrefill("CheckNumber") ? recognizedNumber : string.Empty;
+        _amount = ShouldPrefill("Amount") ? recognizedAmount : 0m;
+        _checkDate = ShouldPrefill("Date") ? recognizedDate : null;
+
+        _prefilledFromOcr = true;
+    }
+
+    private Dictionary<string, double> ExtractConfidenceScores()
+    {
+        var dict = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        if (_ocrResult?.ConfidenceScores?.RootElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in _ocrResult.ConfidenceScores.RootElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == JsonValueKind.Number)
+                {
+                    dict[prop.Name] = prop.Value.GetDouble();
+                }
+                else if (prop.Value.ValueKind == JsonValueKind.String &&
+                         double.TryParse(prop.Value.GetString(), out var parsed))
+                {
+                    dict[prop.Name] = parsed;
+                }
+            }
+        }
+        return dict;
+    }
+
+    private bool ShouldPrefill(string field) => GetConfidence(field) >= 0.60;
+
+    private double GetConfidence(string field)
+        => _confidenceScores.TryGetValue(field, out var value) ? value : 0;
+
+    private string GetFieldStyle(string field)
+    {
+        if (_confidenceScores.Count == 0) return string.Empty;
+        var confidence = GetConfidence(field);
+        return confidence switch
+        {
+            >= 0.85 => "border-color:#4caf50!important",
+            >= 0.60 => "border-color:#ff9800!important",
+            _ => "border-color:#f44336!important"
+        };
+    }
+
+    private string GetFieldHint(string field)
+    {
+        if (_confidenceScores.Count == 0) return string.Empty;
+        return GetConfidence(field) switch
+        {
+            >= 0.85 => string.Empty,
+            >= 0.60 => "请复核此字段",
+            _ => "识别不确定，请手动填写"
+        };
+    }
+
+    private Adornment GetAdornment(string field)
+    {
+        var confidence = GetConfidence(field);
+        return (confidence is > 0 and < 0.85 && _confidenceScores.Count > 0)
+            ? Adornment.End : Adornment.None;
+    }
+
+    private Color GetAdornmentColor(string field)
+        => GetConfidence(field) >= 0.60 ? Color.Warning : Color.Error;
+
+    private string GetAdornmentIcon(string field)
+        => GetConfidence(field) >= 0.60
+            ? Icons.Material.Filled.Warning
+            : Icons.Material.Filled.Error;
+
+    private void Abandon() => Navigation.NavigateTo("/checks/upload");
+
+    private async Task RefreshStatus() => await LoadOcrResultAsync();
+
+    private async Task RetryOcr()
+    {
+        if (_ocrResult == null) return;
+
+        _retryingOcr = true;
+        try
+        {
+            var tracked = await DbContext.OcrResults.FirstOrDefaultAsync(o => o.Id == _ocrResult.Id);
+            if (tracked == null)
+            {
+                Snackbar.Add("未找到 OCR 记录", Severity.Error);
+                return;
+            }
+
+            tracked.Status = OcrStatus.Pending;
+            tracked.ErrorMessage = null;
+            tracked.RawResult?.Dispose();
+            tracked.RawResult = null;
+            tracked.ConfidenceScores?.Dispose();
+            tracked.ConfidenceScores = null;
+            _prefilledFromOcr = false;
+            ResetRecognizedFields();
+
+            await DbContext.SaveChangesAsync();
+            await OcrWorker.EnqueueAsync(tracked.Id);
+            Snackbar.Add("已重新提交 OCR 任务", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"重新提交失败: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _retryingOcr = false;
+            await LoadOcrResultAsync();
+        }
+    }
+
+    private void ResetRecognizedFields()
+    {
+        _checkNumber = string.Empty;
+        _amount = 0m;
+        _checkDate = null;
+        _customerCode = string.Empty;
+        _notes = string.Empty;
+        _confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task SaveCheck()
+    {
+        if (_ocrResult == null || _ocrResult.Status != OcrStatus.Completed)
+        {
+            Snackbar.Add("OCR 尚未完成，无法入库", Severity.Warning);
+            return;
+        }
+
+        var validationError = await ValidateFormAsync();
+        if (!string.IsNullOrEmpty(validationError))
+        {
+            Snackbar.Add(validationError, Severity.Error);
+            return;
+        }
+
+        var customer = await ResolveCustomerAsync();
+
+        var check = new CheckRecord
+        {
+            CheckNumber = _checkNumber,
+            CheckAmount = _amount,
+            CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc),
+            CustomerId = customer.Id,
+            ImageUrl = _ocrResult.ImageUrl,
+            OcrResultId = _ocrResult.Id,
+            Notes = _notes,
+            Status = CheckStatus.PendingDebit,
+            RowVersion = 0
+        };
+
+        DbContext.CheckRecords.Add(check);
+        try
+        {
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add("支票入库成功！", Severity.Success);
+            Navigation.NavigateTo("/records");
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+        }
+    }
+
+    private async Task<string?> ValidateFormAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_checkNumber))
+            return "支票号不能为空";
+        if (_amount <= 0)
+            return "金额必须大于 0";
+        if (!_checkDate.HasValue)
+            return "请选择支票日期";
+        if (string.IsNullOrWhiteSpace(_customerCode))
+            return "请输入客户编号";
+
+        var exists = await DbContext.CheckRecords.AnyAsync(c => c.CheckNumber == _checkNumber);
+        if (exists)
+            return $"支票号 {_checkNumber} 已存在";
+
+        return null;
+    }
+
+    private Customer? GetCustomerMatch()
+    {
+        if (string.IsNullOrWhiteSpace(_customerCode)) return null;
+        var code = _customerCode.Trim();
+        return _customers.FirstOrDefault(c => c.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<Customer> ResolveCustomerAsync()
+    {
+        var code = _customerCode.Trim();
+        var existing = await DbContext.Customers.FirstOrDefaultAsync(c => c.CustomerCode == code);
+        if (existing != null)
+            return existing;
+
+        var customer = new Customer
+        {
+            CustomerCode = code,
+            CustomerName = code,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        DbContext.Customers.Add(customer);
+        _customers.Add(customer);
+        return customer;
+    }
+
+    private static string ExtractString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var element) && element.ValueKind != JsonValueKind.Null
+            ? element.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private static decimal ExtractDecimal(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var element) || element.ValueKind == JsonValueKind.Null)
+            return 0m;
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.Number => element.GetDecimal(),
+            JsonValueKind.String when decimal.TryParse(element.GetString(), out var amount) => amount,
+            _ => 0m
+        };
+    }
+
+    private static DateTime? ExtractDate(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var element) || element.ValueKind == JsonValueKind.Null)
+            return null;
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.String when DateTime.TryParse(element.GetString(), out var parsed) => parsed,
+            _ => null
+        };
+    }
+}

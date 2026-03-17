@@ -1,0 +1,295 @@
+@page "/users"
+@attribute [Authorize(Roles = "Admin")]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+
+<PageTitle>用户管理 - CheckPay</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-4">
+    <MudText Typo="Typo.h4">用户管理</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.PersonAdd"
+               OnClick="StartAddNew"
+               Disabled="@(_addingNew || _editingId.HasValue)">
+        新增用户
+    </MudButton>
+</MudStack>
+
+<MudTable Items="@_users" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="User">
+    <HeaderContent>
+        <MudTh>用户名</MudTh>
+        <MudTh>显示名称</MudTh>
+        <MudTh>角色</MudTh>
+        <MudTh>状态</MudTh>
+        <MudTh>操作</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        @if (_editingId == context.Id)
+        {
+            <MudTd DataLabel="用户名">
+                <MudText Color="Color.Secondary">@context.EntraId</MudText>
+            </MudTd>
+            <MudTd DataLabel="显示名称">
+                <MudTextField @bind-Value="_editDisplayName" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Placeholder="@context.EntraId" Style="min-width:130px" />
+            </MudTd>
+            <MudTd DataLabel="角色">
+                <MudSelect @bind-Value="_editRole" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Style="min-width:120px">
+                    <MudSelectItem Value="UserRole.USFinance">美国财务</MudSelectItem>
+                    <MudSelectItem Value="UserRole.CNFinance">大陆财务</MudSelectItem>
+                    <MudSelectItem Value="UserRole.Admin">管理员</MudSelectItem>
+                </MudSelect>
+            </MudTd>
+            <MudTd DataLabel="状态">
+                <MudSelect @bind-Value="_editIsActive" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Style="min-width:90px">
+                    <MudSelectItem Value="true">活跃</MudSelectItem>
+                    <MudSelectItem Value="false">停用</MudSelectItem>
+                </MudSelect>
+            </MudTd>
+            <MudTd DataLabel="操作">
+                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                    <MudTextField @bind-Value="_editPassword" Label="新密码" Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" InputType="InputType.Password"
+                                  Placeholder="留空不修改" Style="min-width:130px" />
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                               OnClick="@(() => SaveEdit(context))">保存</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelEdit">取消</MudButton>
+                </MudStack>
+            </MudTd>
+        }
+        else
+        {
+            <MudTd DataLabel="用户名">
+                <MudText Typo="Typo.body2"><b>@context.EntraId</b></MudText>
+            </MudTd>
+            <MudTd DataLabel="显示名称">@context.DisplayName</MudTd>
+            <MudTd DataLabel="角色">
+                <MudChip T="string" Size="Size.Small" Color="@GetRoleColor(context.Role)">
+                    @GetRoleText(context.Role)
+                </MudChip>
+            </MudTd>
+            <MudTd DataLabel="状态">
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(context.IsActive ? Color.Success : Color.Default)">
+                    @(context.IsActive ? "活跃" : "停用")
+                </MudChip>
+            </MudTd>
+            <MudTd DataLabel="操作">
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                               Disabled="@(_editingId.HasValue || _addingNew)"
+                               OnClick="@(() => StartEdit(context))">编辑</MudButton>
+                    @if (context.IsActive)
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                                   Disabled="@(_editingId.HasValue || _addingNew)"
+                                   OnClick="@(() => ToggleActive(context))">停用</MudButton>
+                    }
+                    else
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                                   Disabled="@(_editingId.HasValue || _addingNew)"
+                                   OnClick="@(() => ToggleActive(context))">启用</MudButton>
+                    }
+                </MudStack>
+            </MudTd>
+        }
+    </RowTemplate>
+
+    <FooterContent>
+        @if (_addingNew)
+        {
+            <MudTd colspan="5">
+                <MudGrid Class="pa-2" Spacing="2">
+                    <MudItem xs="12" sm="3">
+                        <MudTextField @bind-Value="_newUsername" Label="用户名（登录账号）" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" Placeholder="如 zhangsan" />
+                    </MudItem>
+                    <MudItem xs="12" sm="3">
+                        <MudTextField @bind-Value="_newPassword" Label="密码" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" InputType="InputType.Password" />
+                    </MudItem>
+                    <MudItem xs="12" sm="2">
+                        <MudSelect @bind-Value="_newRole" Label="角色" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelectItem Value="UserRole.USFinance">美国财务</MudSelectItem>
+                            <MudSelectItem Value="UserRole.CNFinance">大陆财务</MudSelectItem>
+                            <MudSelectItem Value="UserRole.Admin">管理员</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="2">
+                        <MudTextField @bind-Value="_newDisplayName" Label="显示名称（可选）" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" Placeholder="留空同用户名" />
+                    </MudItem>
+                    <MudItem xs="12" sm="2">
+                        <MudStack Row="true" Spacing="1" Class="mt-1">
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                                       OnClick="SaveNew"
+                                       Disabled="@(string.IsNullOrWhiteSpace(_newUsername) || string.IsNullOrWhiteSpace(_newPassword))">
+                                保存
+                            </MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelNew">取消</MudButton>
+                        </MudStack>
+                    </MudItem>
+                </MudGrid>
+            </MudTd>
+        }
+    </FooterContent>
+</MudTable>
+
+@code {
+    private List<User> _users = new();
+    private bool _loading = true;
+
+    // 编辑状态
+    private Guid? _editingId;
+    private string _editDisplayName = "";
+    private string _editPassword = "";
+    private UserRole _editRole;
+    private bool _editIsActive;
+
+    // 新增状态
+    private bool _addingNew;
+    private string _newUsername = "";
+    private string _newPassword = "";
+    private string _newDisplayName = "";
+    private UserRole _newRole = UserRole.CNFinance;
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        _loading = true;
+        _users = await DbContext.Users.OrderBy(u => u.EntraId).ToListAsync();
+        _loading = false;
+    }
+
+    private void StartEdit(User u)
+    {
+        _editingId = u.Id;
+        _editDisplayName = u.DisplayName;
+        _editPassword = "";
+        _editRole = u.Role;
+        _editIsActive = u.IsActive;
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _editDisplayName = "";
+        _editPassword = "";
+    }
+
+    private async Task SaveEdit(User u)
+    {
+        u.DisplayName = string.IsNullOrWhiteSpace(_editDisplayName) ? u.EntraId : _editDisplayName.Trim();
+        u.Role = _editRole;
+        u.IsActive = _editIsActive;
+        u.UpdatedAt = DateTime.UtcNow;
+
+        // 密码非空才修改
+        if (!string.IsNullOrWhiteSpace(_editPassword))
+        {
+            if (_editPassword.Length < 6)
+            {
+                Snackbar.Add("密码至少 6 位", Severity.Warning);
+                return;
+            }
+            u.PasswordHash = BCrypt.Net.BCrypt.HashPassword(_editPassword);
+        }
+
+        await DbContext.SaveChangesAsync();
+        Snackbar.Add($"用户 {u.EntraId} 已保存", Severity.Success);
+        CancelEdit();
+        await LoadData();
+    }
+
+    private async Task ToggleActive(User u)
+    {
+        u.IsActive = !u.IsActive;
+        u.UpdatedAt = DateTime.UtcNow;
+        await DbContext.SaveChangesAsync();
+        Snackbar.Add(
+            u.IsActive ? $"{u.DisplayName} 已启用" : $"{u.DisplayName} 已停用",
+            u.IsActive ? Severity.Success : Severity.Warning);
+        await LoadData();
+    }
+
+    private void StartAddNew()
+    {
+        _addingNew = true;
+        _newUsername = "";
+        _newPassword = "";
+        _newDisplayName = "";
+        _newRole = UserRole.CNFinance;
+    }
+
+    private void CancelNew()
+    {
+        _addingNew = false;
+        _newUsername = "";
+        _newPassword = "";
+        _newDisplayName = "";
+    }
+
+    private async Task SaveNew()
+    {
+        var username = _newUsername.Trim().ToLower();
+        var password = _newPassword;
+
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password)) return;
+
+        if (password.Length < 6)
+        {
+            Snackbar.Add("密码至少 6 位", Severity.Warning);
+            return;
+        }
+
+        var exists = await DbContext.Users.AnyAsync(u => u.EntraId == username);
+        if (exists)
+        {
+            Snackbar.Add($"用户名 {username} 已存在", Severity.Error);
+            return;
+        }
+
+        var displayName = string.IsNullOrWhiteSpace(_newDisplayName) ? username : _newDisplayName.Trim();
+
+        var user = new User
+        {
+            EntraId = username,
+            DisplayName = displayName,
+            Email = $"{username}@checkpay.local", // 内部字段，界面不暴露
+            Role = _newRole,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            IsActive = true
+        };
+
+        DbContext.Users.Add(user);
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add($"用户 {username} 已新增", Severity.Success);
+        CancelNew();
+        await LoadData();
+    }
+
+    private static Color GetRoleColor(UserRole role) => role switch
+    {
+        UserRole.Admin => Color.Error,
+        UserRole.USFinance => Color.Primary,
+        UserRole.CNFinance => Color.Info,
+        _ => Color.Default
+    };
+
+    private static string GetRoleText(UserRole role) => role switch
+    {
+        UserRole.Admin => "管理员",
+        UserRole.USFinance => "美国财务",
+        UserRole.CNFinance => "大陆财务",
+        _ => "未知"
+    };
+}

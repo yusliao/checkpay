@@ -1,0 +1,222 @@
+@page "/customers"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+
+<PageTitle>客户管理 - CheckPay</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-4">
+    <MudText Typo="Typo.h4">客户管理</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="StartAddNew"
+               Disabled="@(_addingNew || _editingId.HasValue)">
+        新增客户
+    </MudButton>
+</MudStack>
+
+<MudTable Items="@_customers" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="Customer">
+    <HeaderContent>
+        <MudTh>客户编号</MudTh>
+        <MudTh>客户名称</MudTh>
+        <MudTh>状态</MudTh>
+        <MudTh>操作</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        @if (_editingId == context.Id)
+        {
+            @* 内联编辑行 *@
+            <MudTd DataLabel="客户编号">
+                <MudText Color="Color.Secondary">@context.CustomerCode</MudText>
+            </MudTd>
+            <MudTd DataLabel="客户名称">
+                <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="min-width:200px" />
+            </MudTd>
+            <MudTd DataLabel="状态">
+                <MudSelect @bind-Value="_editIsActive" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Style="min-width:100px">
+                    <MudSelectItem Value="true">活跃</MudSelectItem>
+                    <MudSelectItem Value="false">停用</MudSelectItem>
+                </MudSelect>
+            </MudTd>
+            <MudTd DataLabel="操作">
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                               OnClick="@(() => SaveEdit(context))">保存</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelEdit">取消</MudButton>
+                </MudStack>
+            </MudTd>
+        }
+        else
+        {
+            @* 只读行 *@
+            <MudTd DataLabel="客户编号">@context.CustomerCode</MudTd>
+            <MudTd DataLabel="客户名称">@context.CustomerName</MudTd>
+            <MudTd DataLabel="状态">
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(context.IsActive ? Color.Success : Color.Default)">
+                    @(context.IsActive ? "✅ 活跃" : "停用")
+                </MudChip>
+            </MudTd>
+            <MudTd DataLabel="操作">
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                               Disabled="@(_editingId.HasValue || _addingNew)"
+                               OnClick="@(() => StartEdit(context))">编辑</MudButton>
+                    @if (context.IsActive)
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                                   Disabled="@(_editingId.HasValue || _addingNew)"
+                                   OnClick="@(() => ToggleActive(context))">停用</MudButton>
+                    }
+                    else
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                                   Disabled="@(_editingId.HasValue || _addingNew)"
+                                   OnClick="@(() => ToggleActive(context))">启用</MudButton>
+                    }
+                </MudStack>
+            </MudTd>
+        }
+    </RowTemplate>
+
+    @* 新增行——在 FooterContent slot 内条件渲染 *@
+    <FooterContent>
+        @if (_addingNew)
+        {
+            <MudTd colspan="4">
+                <MudGrid Class="pa-2" AlignItems="AlignItems.Center">
+                    <MudItem xs="3">
+                        <MudTextField @bind-Value="_newCode" Label="客户编号" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" Placeholder="如 CUST-003" />
+                    </MudItem>
+                    <MudItem xs="5">
+                        <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                    </MudItem>
+                    <MudItem xs="4">
+                        <MudStack Row="true" Spacing="1">
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                                       OnClick="SaveNew"
+                                       Disabled="@(string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName))">
+                                保存
+                            </MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelNew">取消</MudButton>
+                        </MudStack>
+                    </MudItem>
+                </MudGrid>
+            </MudTd>
+        }
+    </FooterContent>
+</MudTable>
+
+@code {
+    private List<Customer> _customers = new();
+    private bool _loading = true;
+
+    // 内联编辑状态
+    private Guid? _editingId;
+    private string _editName = "";
+    private bool _editIsActive;
+
+    // 新增行状态
+    private bool _addingNew;
+    private string _newCode = "";
+    private string _newName = "";
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        _loading = true;
+        // 显示全部（含停用），管理员需要看到
+        _customers = await DbContext.Customers
+            .OrderBy(c => c.CustomerCode)
+            .ToListAsync();
+        _loading = false;
+    }
+
+    // 开始编辑某行
+    private void StartEdit(Customer c)
+    {
+        _editingId = c.Id;
+        _editName = c.CustomerName;
+        _editIsActive = c.IsActive;
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _editName = "";
+    }
+
+    private async Task SaveEdit(Customer c)
+    {
+        if (string.IsNullOrWhiteSpace(_editName)) return;
+
+        c.CustomerName = _editName.Trim();
+        c.IsActive = _editIsActive;
+        c.UpdatedAt = DateTime.UtcNow;
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add($"客户 {c.CustomerCode} 已保存", Severity.Success);
+        CancelEdit();
+        await LoadData();
+    }
+
+    // 停用/启用切换
+    private async Task ToggleActive(Customer c)
+    {
+        c.IsActive = !c.IsActive;
+        c.UpdatedAt = DateTime.UtcNow;
+        await DbContext.SaveChangesAsync();
+        Snackbar.Add(c.IsActive ? $"{c.CustomerName} 已启用" : $"{c.CustomerName} 已停用",
+            c.IsActive ? Severity.Success : Severity.Warning);
+        await LoadData();
+    }
+
+    // 新增行
+    private void StartAddNew()
+    {
+        _addingNew = true;
+        _newCode = "";
+        _newName = "";
+    }
+
+    private void CancelNew()
+    {
+        _addingNew = false;
+        _newCode = "";
+        _newName = "";
+    }
+
+    private async Task SaveNew()
+    {
+        if (string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName)) return;
+
+        // 编号唯一性检查
+        var exists = await DbContext.Customers.AnyAsync(c => c.CustomerCode == _newCode.Trim());
+        if (exists)
+        {
+            Snackbar.Add($"客户编号 {_newCode} 已存在", Severity.Error);
+            return;
+        }
+
+        var customer = new Customer
+        {
+            CustomerCode = _newCode.Trim().ToUpper(),
+            CustomerName = _newName.Trim(),
+            IsActive = true
+        };
+        DbContext.Customers.Add(customer);
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add($"客户 {customer.CustomerCode} 已新增", Severity.Success);
+        CancelNew();
+        await LoadData();
+    }
+}

@@ -1,0 +1,362 @@
+@page "/debits/import"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject IBlobStorageService BlobStorage
+@inject ISnackbar Snackbar
+
+<PageTitle>导入扣款 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">导入扣款记录</MudText>
+
+@* 步骤一：批量上传区 *@
+@if (!_uploadQueue.Any())
+{
+    <MudPaper Class="pa-6 text-center" Style="border:2px dashed #ccc">
+        <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Large" Color="Color.Primary" />
+        <MudText Class="mt-2">选择或拖入扫描件（支持多张）</MudText>
+        <InputFile id="scanBatch" OnChange="OnFilesSelected" accept="image/*" multiple hidden />
+        <MudButton HtmlTag="label" Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" for="scanBatch">
+            选择文件
+        </MudButton>
+    </MudPaper>
+}
+else
+{
+    @* 步骤二：待录入队列缩略图 *@
+    <MudPaper Class="pa-4 mb-4">
+        <MudText Typo="Typo.subtitle1" GutterBottom="true">
+            待录入队列（@_uploadQueue.Count 张）— 已完成 @_uploadQueue.Count(q => q.Done) 张
+        </MudText>
+        <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="2">
+            @foreach (var item in _uploadQueue)
+            {
+                <MudPaper @onclick="@(() => SelectItem(item))"
+                          Elevation="item == _current ? 4 : 1"
+                          Class="pa-2 text-center"
+                          Style="@($"width:100px;cursor:pointer;border:2px solid {(item == _current ? "#1976d2" : item.Done ? "#4caf50" : "#e0e0e0")}")">
+                    <MudIcon Icon="@Icons.Material.Filled.Image" Size="Size.Medium"
+                             Color="@(item.Done ? Color.Success : Color.Default)" />
+                    <MudText Typo="Typo.caption" Style="word-break:break-all">@item.FileName</MudText>
+                    <MudText Typo="Typo.caption" Color="@(item.Done ? Color.Success : Color.Warning)">
+                        @(item.Done ? "✅ 已录入" : "⏳ 待录入")
+                    </MudText>
+                </MudPaper>
+            }
+            @* 继续添加更多文件 *@
+            <MudPaper Class="pa-2 text-center d-flex align-center justify-center"
+                      Style="width:100px;cursor:pointer;border:2px dashed #ccc">
+                <InputFile id="scanMore" OnChange="OnFilesSelected" accept="image/*" multiple hidden />
+                <MudButton HtmlTag="label" for="scanMore" Style="min-width:0;padding:0">
+                    <MudIcon Icon="@Icons.Material.Filled.Add" />
+                </MudButton>
+            </MudPaper>
+        </MudStack>
+    </MudPaper>
+
+    @* 步骤三：左图右表单 *@
+    @if (_current != null)
+    {
+        <MudGrid>
+            <MudItem xs="12" md="6">
+                <MudPaper Class="pa-4">
+                    <MudText Typo="Typo.h6" GutterBottom="true">扫描件预览</MudText>
+                    @if (!string.IsNullOrEmpty(_current.ImageUrl))
+                    {
+                        <MudImage Src="@_current.ImageUrl" Alt="扫描件" Class="rounded" Style="max-width:100%" />
+                    }
+                    else if (_current.Uploading)
+                    {
+                        <MudProgressCircular Indeterminate="true" />
+                        <MudText Class="mt-2">上传中...</MudText>
+                    }
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudPaper Class="pa-4">
+                    <MudText Typo="Typo.h6" GutterBottom="true">录入信息</MudText>
+
+                    <MudSelect @bind-Value="_customerId" Label="客户" Required="true" Class="mb-2">
+                        @foreach (var c in _customers)
+                        {
+                            <MudSelectItem Value="@c.Id">@c.CustomerName</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    @* 支票号——实时匹配状态 *@
+                    <MudTextField @bind-Value="_checkNumber"
+                                  Label="支票号"
+                                  Required="true"
+                                  Variant="Variant.Outlined"
+                                  Class="mb-1"
+                                  Adornment="Adornment.End"
+                                  AdornmentIcon="@_matchIcon"
+                                  AdornmentColor="@_matchColor"
+                                  OnBlur="CheckMatchAsync" />
+                    @if (_matchedCheck != null)
+                    {
+                        <MudAlert Severity="Severity.Success" Dense="true" Class="mb-2">
+                            已匹配：@_matchedCheck.Customer?.CustomerName — ＄@_matchedCheck.CheckAmount.ToString("N2")
+                        </MudAlert>
+                    }
+                    else if (_checkNumber.Length > 0 && _checkedOnce)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                            未找到匹配支票，录入后将进入异常列表
+                        </MudAlert>
+                    }
+
+                    <MudNumericField @bind-Value="_amount" Label="扣款金额" Required="true" Format="N2" Class="mb-2" />
+                    <MudDatePicker @bind-Date="_debitDate" Label="扣款日期" Required="true" Class="mb-2" />
+                    <MudTextField @bind-Value="_bankReference" Label="银行流水号" Required="true" Class="mb-2" />
+                    <MudTextField @bind-Value="_notes" Label="备注" Lines="2" Class="mb-4" />
+
+                    <MudButton Variant="Variant.Outlined" Class="mr-2" OnClick="SkipCurrent"
+                               Disabled="@(_current?.Uploading == true)">跳过</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="SaveCurrent"
+                               Disabled="@(_saving || _current?.Uploading == true)">
+                        @(_saving ? "保存中..." : "确认录入 ✓")
+                    </MudButton>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (_uploadQueue.All(q => q.Done))
+    {
+        <MudAlert Severity="Severity.Success" Class="mt-4">
+            所有扫描件录入完成！共处理 @_uploadQueue.Count 张，
+            匹配 @_uploadQueue.Count(q => q.Matched) 张，
+            进入异常列表 @_uploadQueue.Count(q => !q.Matched) 张。
+        </MudAlert>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-2"
+                   OnClick="Reset">继续导入</MudButton>
+    }
+}
+
+@code {
+    // 队列项
+    private class QueueItem
+    {
+        public string FileName { get; set; } = "";
+        public string ImageUrl { get; set; } = "";
+        public bool Uploading { get; set; }
+        public bool Done { get; set; }
+        public bool Matched { get; set; }
+        public IBrowserFile? File { get; set; }
+    }
+
+    private List<QueueItem> _uploadQueue = new();
+    private QueueItem? _current;
+
+    private List<Customer> _customers = new();
+    private Guid _customerId;
+    private string _checkNumber = "";
+    private decimal _amount;
+    private DateTime? _debitDate;
+    private string _bankReference = "";
+    private string _notes = "";
+    private bool _saving;
+    private bool _checkedOnce;
+
+    // 实时匹配状态
+    private CheckRecord? _matchedCheck;
+    private string _matchIcon = Icons.Material.Filled.HelpOutline;
+    private Color _matchColor = Color.Default;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _customers = await DbContext.Customers.Where(c => c.IsActive).ToListAsync();
+    }
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles(20))
+        {
+            var item = new QueueItem { FileName = file.Name, File = file, Uploading = true };
+            _uploadQueue.Add(item);
+            if (_current == null) _current = item;
+            StateHasChanged();
+
+            try
+            {
+                using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+                item.ImageUrl = await BlobStorage.UploadAsync(stream, file.Name);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"上传 {file.Name} 失败: {ex.Message}", Severity.Error);
+            }
+            finally
+            {
+                item.Uploading = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void SelectItem(QueueItem item)
+    {
+        if (item.Done) return;
+        _current = item;
+        ClearForm();
+    }
+
+    private async Task CheckMatchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_checkNumber)) return;
+        _checkedOnce = true;
+        _matchedCheck = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .FirstOrDefaultAsync(c => c.CheckNumber == _checkNumber && c.Status == CheckStatus.PendingDebit);
+
+        if (_matchedCheck != null)
+        {
+            _matchIcon = Icons.Material.Filled.CheckCircle;
+            _matchColor = Color.Success;
+
+            if (_customerId == Guid.Empty)
+                _customerId = _matchedCheck.CustomerId;
+            if (_amount <= 0)
+                _amount = _matchedCheck.CheckAmount;
+        }
+        else
+        {
+            _matchIcon = Icons.Material.Filled.Cancel;
+            _matchColor = Color.Error;
+        }
+    }
+
+    private async Task SaveCurrent()
+    {
+        if (_saving) return;
+        _saving = true;
+
+        try
+        {
+            var validationError = ValidateCurrentEntry();
+            if (!string.IsNullOrEmpty(validationError))
+            {
+                Snackbar.Add(validationError, Severity.Warning);
+                return;
+            }
+
+            await CheckMatchAsync();
+            var matchError = ValidateMatchedCheck();
+            if (!string.IsNullOrEmpty(matchError))
+            {
+                Snackbar.Add(matchError, Severity.Error);
+                return;
+            }
+
+            var debit = new DebitRecord
+            {
+                CustomerId = _customerId,
+                CheckNumber = _checkNumber,
+                DebitAmount = _amount,
+                DebitDate = _debitDate!.Value,
+                BankReference = _bankReference,
+                ScanImageUrl = _current!.ImageUrl,
+                Notes = _notes,
+                DebitStatus = _matchedCheck != null ? DebitStatus.Matched : DebitStatus.Unmatched,
+                CheckRecordId = _matchedCheck?.Id
+            };
+
+            if (_matchedCheck != null)
+                _matchedCheck.Status = CheckStatus.PendingReview;
+
+            DbContext.DebitRecords.Add(debit);
+            await DbContext.SaveChangesAsync();
+
+            _current.Done = true;
+            _current.Matched = _matchedCheck != null;
+
+            Snackbar.Add(_matchedCheck != null ? "匹配成功！" : "未匹配，已加入异常列表",
+                _matchedCheck != null ? Severity.Success : Severity.Warning);
+
+            _current = _uploadQueue.FirstOrDefault(q => !q.Done);
+            ClearForm();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+            await CheckMatchAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"保存失败: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private string? ValidateCurrentEntry()
+    {
+        if (_current == null)
+            return "请先选择扫描件";
+        if (_current.Uploading || string.IsNullOrEmpty(_current.ImageUrl))
+            return "当前文件仍在上传，请稍候";
+        if (string.IsNullOrWhiteSpace(_checkNumber))
+            return "请输入支票号";
+        if (_customerId == Guid.Empty)
+            return "请选择客户";
+        if (_amount <= 0)
+            return "请输入扣款金额";
+        if (!_debitDate.HasValue)
+            return "请选择扣款日期";
+        if (string.IsNullOrWhiteSpace(_bankReference))
+            return "请输入银行流水号";
+        return null;
+    }
+
+    private string? ValidateMatchedCheck()
+    {
+        if (_matchedCheck == null)
+            return null;
+
+        if (_matchedCheck.CustomerId != _customerId)
+            return "匹配支票的客户与录入客户不一致";
+
+        if (Math.Abs(_matchedCheck.CheckAmount - _amount) > 0.01m)
+            return "扣款金额与支票金额不一致，请复核";
+
+        return null;
+    }
+
+    private void SkipCurrent()
+    {
+        if (_current?.Uploading == true)
+        {
+            Snackbar.Add("当前文件仍在上传，暂时无法跳过", Severity.Info);
+            return;
+        }
+
+        _current = _uploadQueue.FirstOrDefault(q => !q.Done && q != _current);
+        ClearForm();
+    }
+
+    private void ClearForm()
+    {
+        _checkNumber = "";
+        _amount = 0;
+        _debitDate = null;
+        _bankReference = "";
+        _notes = "";
+        _customerId = Guid.Empty;
+        _matchedCheck = null;
+        _matchIcon = Icons.Material.Filled.HelpOutline;
+        _matchColor = Color.Default;
+        _checkedOnce = false;
+    }
+
+    private void Reset()
+    {
+        _uploadQueue.Clear();
+        _current = null;
+        ClearForm();
+    }
+}

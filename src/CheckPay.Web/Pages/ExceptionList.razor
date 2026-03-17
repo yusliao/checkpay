@@ -1,0 +1,234 @@
+@page "/exceptions"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+
+<PageTitle>异常列表 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">异常列表</MudText>
+
+<MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" Class="mt-4">
+
+    @* Tab 1：未匹配扣款 *@
+    <MudTabPanel Text="@($"未匹配扣款（{_unmatchedDebits.Count}）")">
+        <MudAlert Severity="Severity.Info" Dense="true" Class="ma-3">
+            支票号识别有误或遗漏会导致匹配失败，请核对后手动关联
+        </MudAlert>
+        <MudTable Items="@_unmatchedDebits" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
+            <HeaderContent>
+                <MudTh>支票号</MudTh>
+                <MudTh>客户</MudTh>
+                <MudTh>扣款金额</MudTh>
+                <MudTh>扣款日期</MudTh>
+                <MudTh>银行流水号</MudTh>
+                <MudTh>操作</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
+                <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+                <MudTd DataLabel="扣款金额">@context.DebitAmount.ToString("C")</MudTd>
+                <MudTd DataLabel="扣款日期">@context.DebitDate.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd DataLabel="银行流水号">@context.BankReference</MudTd>
+                <MudTd DataLabel="操作">
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                               OnClick="@(() => OpenLinkModal(context))">
+                        手动关联
+                    </MudButton>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudTabPanel>
+
+    @* Tab 2：存疑支票 *@
+    <MudTabPanel Text="@($"存疑支票（{_questionedChecks.Count}）")">
+        <MudTable Items="@_questionedChecks" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
+            <HeaderContent>
+                <MudTh>客户</MudTh>
+                <MudTh>支票号</MudTh>
+                <MudTh>支票金额</MudTh>
+                <MudTh>支票日期</MudTh>
+                <MudTh>备注</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+                <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
+                <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
+                <MudTd DataLabel="支票日期">@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd DataLabel="备注">@context.Notes</MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudTabPanel>
+
+</MudTabs>
+
+@* 手动关联 Modal *@
+@if (_linkTarget != null)
+{
+    <MudOverlay Visible="true" DarkBackground="true" ZIndex="9999" />
+    <MudPaper Style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;width:600px;max-width:95vw;max-height:80vh;overflow-y:auto"
+              Class="pa-6" Elevation="24">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+            <MudText Typo="Typo.h6">手动关联支票记录</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseModal" />
+        </MudStack>
+
+        @* 当前扣款信息 *@
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">
+            当前扣款：支票号 <strong>@_linkTarget.CheckNumber</strong> /
+            ＄@_linkTarget.DebitAmount.ToString("N2") /
+            @_linkTarget.DebitDate.ToString("yyyy-MM-dd")
+        </MudAlert>
+
+        @* 搜索框 *@
+        <MudTextField @bind-Value="_searchKeyword"
+                      Label="搜索支票记录（支票号或客户名）"
+                      Adornment="Adornment.End"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      OnInput="OnSearchInput"
+                      Class="mb-3" />
+
+        @* 搜索结果列表 *@
+        @if (_searchResults.Any())
+        {
+            <MudTable Items="@_searchResults" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh>支票号</MudTh>
+                    <MudTh>客户</MudTh>
+                    <MudTh>金额</MudTh>
+                    <MudTh>日期</MudTh>
+                    <MudTh>选择</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.CheckNumber</MudTd>
+                    <MudTd>@context.Customer?.CustomerName</MudTd>
+                    <MudTd>@context.CheckAmount.ToString("C")</MudTd>
+                    <MudTd>@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd>
+                        <MudRadio T="Guid" Value="@context.Id" Checked="@(_selectedCheckId == context.Id)"
+                                  CheckedChanged="@((bool v) => { if (v) _selectedCheckId = context.Id; })"
+                                  Color="Color.Primary" />
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else if (!string.IsNullOrEmpty(_searchKeyword))
+        {
+            <MudText Color="Color.Secondary" Class="text-center pa-4">未找到匹配的支票记录</MudText>
+        }
+
+        <MudStack Row="true" Justify="Justify.FlexEnd" Class="mt-4" Spacing="2">
+            <MudButton Variant="Variant.Outlined" OnClick="CloseModal">取消</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                       Disabled="@(_selectedCheckId == Guid.Empty)"
+                       OnClick="ConfirmLink">确认关联</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+
+@code {
+    private List<DebitRecord> _unmatchedDebits = new();
+    private List<CheckRecord> _questionedChecks = new();
+    private bool _loading = true;
+
+    // Modal状态
+    private DebitRecord? _linkTarget;
+    private string _searchKeyword = "";
+    private List<CheckRecord> _searchResults = new();
+    private Guid _selectedCheckId;
+    // 搜索防抖
+    private System.Threading.Timer? _debounceTimer;
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        _loading = true;
+        _unmatchedDebits = await DbContext.DebitRecords
+            .Include(d => d.Customer)
+            .Where(d => d.DebitStatus == DebitStatus.Unmatched)
+            .OrderByDescending(d => d.CreatedAt)
+            .ToListAsync();
+
+        _questionedChecks = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .Where(c => c.Status == CheckStatus.Questioned)
+            .OrderByDescending(c => c.CreatedAt)
+            .ToListAsync();
+        _loading = false;
+    }
+
+    private void OpenLinkModal(DebitRecord debit)
+    {
+        _linkTarget = debit;
+        _searchKeyword = debit.CheckNumber; // 预填支票号
+        _selectedCheckId = Guid.Empty;
+        _searchResults = new();
+        // 预触发一次搜索
+        _ = SearchChecksAsync();
+    }
+
+    private void CloseModal()
+    {
+        _linkTarget = null;
+        _searchKeyword = "";
+        _searchResults = new();
+        _selectedCheckId = Guid.Empty;
+        _debounceTimer?.Dispose();
+    }
+
+    // 输入防抖300ms
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        _searchKeyword = e.Value?.ToString() ?? "";
+        _debounceTimer?.Dispose();
+        _debounceTimer = new System.Threading.Timer(
+            async _ => { await SearchChecksAsync(); await InvokeAsync(StateHasChanged); },
+            null, 300, System.Threading.Timeout.Infinite);
+    }
+
+    private async Task SearchChecksAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_searchKeyword))
+        {
+            _searchResults = new();
+            return;
+        }
+        var kw = _searchKeyword.Trim();
+        _searchResults = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .Where(c => c.CheckNumber.Contains(kw) || c.Customer.CustomerName.Contains(kw))
+            .Take(10)
+            .ToListAsync();
+    }
+
+    private async Task ConfirmLink()
+    {
+        if (_linkTarget == null || _selectedCheckId == Guid.Empty) return;
+
+        var check = await DbContext.CheckRecords.FindAsync(_selectedCheckId);
+        if (check == null) return;
+
+        _linkTarget.CheckRecordId = check.Id;
+        _linkTarget.DebitStatus = DebitStatus.Matched;
+        check.Status = CheckStatus.PendingReview;
+
+        try
+        {
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add("关联成功！支票已进入待核查", Severity.Success);
+            CloseModal();
+            await LoadData();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+            CloseModal();
+            await LoadData();
+        }
+    }
+}

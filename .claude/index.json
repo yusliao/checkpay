@@ -1,0 +1,188 @@
+{
+  "timestamp": "2026-03-13T02:45:10.000Z",
+  "projectName": "checkpay",
+  "projectDescription": "跨国收款数据采集系统 - 通过 OCR 技术自动识别支票信息，支持扣款记录导入和自动匹配",
+  "scanSummary": {
+    "totalFilesEstimated": 10,
+    "filesScanned": 10,
+    "coveragePercent": 100,
+    "truncated": false,
+    "ignoredPatterns": [
+      "node_modules/**",
+      ".git/**",
+      ".github/**",
+      "dist/**",
+      "build/**",
+      ".next/**",
+      "__pycache__/**",
+      "*.lock",
+      "*.log",
+      "*.bin",
+      "*.pdf",
+      "*.png",
+      "*.jpg",
+      "*.jpeg",
+      "*.gif",
+      "*.mp4",
+      "*.zip",
+      "*.tar",
+      "*.gz"
+    ],
+    "ignoredFiles": [
+      "docs/files.zip"
+    ]
+  },
+  "modules": [
+    {
+      "path": "docs",
+      "name": "docs",
+      "description": "技术栈架构决策、数据库设计、页面交互设计文档（Word + Markdown 双格式）",
+      "language": "documentation",
+      "entryPoints": [],
+      "interfaces": [],
+      "tests": [],
+      "configs": [],
+      "dataModels": [
+        "docs/收款系统_数据库设计_V1.0.docx",
+        "docs/收款系统_数据库设计_V1.0.md"
+      ],
+      "keyFiles": [
+        "docs/收款系统_技术栈架构决策_V1.0.docx",
+        "docs/收款系统_技术栈架构决策_V1.0.md",
+        "docs/收款系统_数据库设计_V1.0.docx",
+        "docs/收款系统_数据库设计_V1.0.md",
+        "docs/收款系统_页面交互设计_V1.0.docx",
+        "docs/收款系统_页面交互设计_V1.0.md",
+        "docs/CLAUDE.md"
+      ],
+      "coverage": {
+        "hasEntry": false,
+        "hasInterface": false,
+        "hasTests": false,
+        "hasDataModel": true,
+        "hasUIDesign": true,
+        "hasTechStack": true,
+        "designComplete": true
+      }
+    }
+  ],
+  "designDocuments": {
+    "techStack": {
+      "file": "docs/收款系统_技术栈架构决策_V1.0.md",
+      "version": "V1.0",
+      "status": "已确认",
+      "keyDecisions": [
+        "Blazor Server（前后端不分离）",
+        "Railway 部署（节省 83% 成本）",
+        "Azure Document Intelligence OCR",
+        ".NET 10 + PostgreSQL 16",
+        "MudBlazor UI 组件库"
+      ]
+    },
+    "database": {
+      "file": "docs/收款系统_数据库设计_V1.0.md",
+      "version": "V1.0",
+      "status": "已确认",
+      "tables": [
+        "check_records",
+        "debit_records",
+        "ocr_results",
+        "customers",
+        "users",
+        "audit_logs"
+      ],
+      "designPrinciples": [
+        "UTC 时区",
+        "UUID v4 主键",
+        "软删除",
+        "乐观并发（row_version）",
+        "JSONB 扩展字段"
+      ]
+    },
+    "uiDesign": {
+      "file": "docs/收款系统_页面交互设计_V1.0.md",
+      "version": "V1.0",
+      "status": "已确认",
+      "pages": [
+        "Dashboard 首页",
+        "支票采集页（流程一）",
+        "收款记录列表",
+        "扣款导入页（流程二）",
+        "扣款异常列表",
+        "报表导出",
+        "客户主数据管理"
+      ],
+      "components": [
+        "StatusBadge",
+        "CheckImageViewer",
+        "OcrFieldInput",
+        "ConfirmDialog",
+        "DisputeDialog",
+        "LinkDebitModal",
+        "RecordDrawer",
+        "FileDropZone",
+        "ScanCardQueue",
+        "AuditTimeline",
+        "DashboardStatCard"
+      ]
+    }
+  },
+  "gaps": [
+    "项目尚未初始化代码库",
+    "需要创建 .NET 10 Solution 结构（6个项目）",
+    "需要实现 EF Core DbContext 和实体模型",
+    "需要实现 Blazor Server UI 页面和组件",
+    "需要集成 Azure Document Intelligence OCR",
+    "需要集成 Microsoft Entra ID 认证",
+    "需要配置 Railway 部署",
+    "需要实现后台 Worker Service",
+    "需要编写单元测试和集成测试"
+  ],
+  "nextSteps": [
+    "P0 脚手架：创建 Solution 结构（CheckPay.Web/Application/Domain/Infrastructure/Worker/Tests）",
+    "P0 脚手架：配置 EF Core + PostgreSQL，创建初始迁移",
+    "P0 脚手架：接入 Microsoft Entra ID 认证",
+    "P0 脚手架：配置 Railway 部署和环境变量",
+    "P1 流程一：实现支票上传和 OCR 识别功能",
+    "P1 流程一：实现复核表单和状态管理",
+    "P2 流程二：实现扣款导入和自动匹配",
+    "P3 核查侧：实现 Dashboard 和待核查列表",
+    "P4 管理功能：实现报表导出和客户管理"
+  ],
+  "coverageReport": {
+    "designPhase": {
+      "completion": 100,
+      "items": {
+        "techStackDecision": "✅ 完成",
+        "databaseDesign": "✅ 完成",
+        "uiInteractionDesign": "✅ 完成",
+        "architectureDecision": "✅ 完成",
+        "deploymentPlan": "✅ 完成"
+      }
+    },
+    "implementationPhase": {
+      "completion": 0,
+      "items": {
+        "projectScaffolding": "⏳ 待开发",
+        "databaseMigration": "⏳ 待开发",
+        "authentication": "⏳ 待开发",
+        "checkUploadFlow": "⏳ 待开发",
+        "debitImportFlow": "⏳ 待开发",
+        "reviewFlow": "⏳ 待开发",
+        "reportExport": "⏳ 待开发",
+        "testing": "⏳ 待开发"
+      }
+    }
+  },
+  "estimatedCost": {
+    "monthly": 17,
+    "currency": "USD",
+    "breakdown": {
+      "railwayApp": 5,
+      "railwayDatabase": 5,
+      "azureBlob": 2,
+      "azureDocIntel": 5,
+      "entraId": 0
+    }
+  }
+}

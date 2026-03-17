@@ -1,0 +1,82 @@
+@page "/checks/upload"
+@attribute [Authorize]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using CheckPay.Worker.Services
+@inject IBlobStorageService BlobStorage
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject OcrWorker OcrWorker
+
+<PageTitle>上传支票 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">上传支票</MudText>
+
+<MudPaper Class="pa-4 mt-4">
+    <InputFile id="fileInput" OnChange="OnFileSelected" accept="image/*" hidden />
+    <MudButton HtmlTag="label" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload" for="fileInput">
+        选择支票图片
+    </MudButton>
+
+    @if (_selectedFile != null)
+    {
+        <MudText Class="mt-2">已选择: @_selectedFile.Name</MudText>
+        <MudButton Class="mt-2" Variant="Variant.Filled" Color="Color.Success" OnClick="UploadFile" Disabled="@_uploading">
+            @if (_uploading)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ml-2">上传中...</MudText>
+            }
+            else
+            {
+                <MudText>开始上传</MudText>
+            }
+        </MudButton>
+    }
+</MudPaper>
+
+@code {
+    private IBrowserFile? _selectedFile;
+    private bool _uploading;
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _selectedFile = e.File;
+    }
+
+    private async Task UploadFile()
+    {
+        if (_selectedFile == null) return;
+
+        _uploading = true;
+        try
+        {
+            using var stream = _selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            var imageUrl = await BlobStorage.UploadAsync(stream, _selectedFile.Name);
+
+            var ocrResult = new OcrResult
+            {
+                ImageUrl = imageUrl,
+                Status = OcrStatus.Pending
+            };
+
+            DbContext.OcrResults.Add(ocrResult);
+            await DbContext.SaveChangesAsync();
+            await OcrWorker.EnqueueAsync(ocrResult.Id);
+
+            Snackbar.Add("上传成功，OCR 处理中，请稍候复核", Severity.Success);
+            _selectedFile = null;
+            Navigation.NavigateTo($"/checks/review/{ocrResult.Id}");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"上传失败: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+}

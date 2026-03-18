@@ -17,6 +17,7 @@ public class HunyuanOcrService : IOcrService
 {
     private readonly HunyuanClient _client;
     private readonly ILogger<HunyuanOcrService> _logger;
+    private readonly IBlobStorageService _blobStorageService;
 
     // 用 Prompt 让模型只返回 JSON，省得解析废话
     private const string CheckOcrPrompt = """
@@ -39,7 +40,10 @@ public class HunyuanOcrService : IOcrService
         - If a field cannot be found, set it to null
         """;
 
-    public HunyuanOcrService(IConfiguration configuration, ILogger<HunyuanOcrService> logger)
+    public HunyuanOcrService(
+        IConfiguration configuration,
+        ILogger<HunyuanOcrService> logger,
+        IBlobStorageService blobStorageService)
     {
         var secretId = configuration["Hunyuan:SecretId"]
             ?? throw new InvalidOperationException("腾讯混元 SecretId 未配置");
@@ -50,11 +54,22 @@ public class HunyuanOcrService : IOcrService
         var credential = new Credential { SecretId = secretId, SecretKey = secretKey };
         _client = new HunyuanClient(credential, region);
         _logger = logger;
+        _blobStorageService = blobStorageService;
     }
 
     public async Task<OcrResultDto> ProcessCheckImageAsync(string imageUrl, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("混元 OCR 开始处理: {ImageUrl}", imageUrl);
+
+        // 从MinIO下载图片并转Base64（混元API无法访问本地MinIO）
+        string base64Image;
+        using (var imageStream = await _blobStorageService.DownloadAsync(imageUrl, cancellationToken))
+        using (var memoryStream = new MemoryStream())
+        {
+            await imageStream.CopyToAsync(memoryStream, cancellationToken);
+            var imageBytes = memoryStream.ToArray();
+            base64Image = Convert.ToBase64String(imageBytes);
+        }
 
         var req = new ChatCompletionsRequest
         {
@@ -69,7 +84,7 @@ public class HunyuanOcrService : IOcrService
                         new Content
                         {
                             Type = "image_url",
-                            ImageUrl = new ImageUrl { Url = imageUrl }
+                            ImageUrl = new ImageUrl { Url = $"data:image/jpeg;base64,{base64Image}" }
                         },
                         new Content
                         {

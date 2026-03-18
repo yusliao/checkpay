@@ -118,7 +118,7 @@
         {
             <MudPaper Class="ma-4 pa-2">
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">支票图片</MudText>
-                <MudImage Src="@_selectedRecord.ImageUrl" Alt="支票图片" Class="rounded" Style="width:100%" />
+                <MudImage Src="@GetProxyImageUrl(_selectedRecord.ImageUrl)" Alt="支票图片" Class="rounded" Style="width:100%" />
             </MudPaper>
         }
 
@@ -211,4 +211,10 @@
         CheckStatus.Questioned     => "存疑",
         _                          => "未知"
     };
+
+    private string GetProxyImageUrl(string? imageUrl)
+    {
+        if (string.IsNullOrEmpty(imageUrl)) return string.Empty;
+        return $"/api/ImageProxy?url={Uri.EscapeDataString(imageUrl)}";
+    }
 }

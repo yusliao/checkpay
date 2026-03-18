@@ -65,7 +65,7 @@ else
         <MudItem xs="12" md="6">
             <MudPaper Class="pa-4">
                 <MudText Typo="Typo.h6" GutterBottom="true">支票图片</MudText>
-                <MudImage Src="@_ocrResult.ImageUrl" Alt="支票图片" Class="rounded" />
+                <MudImage Src="@GetProxyImageUrl()" Alt="支票图片" Class="rounded" />
             </MudPaper>
         </MudItem>
         <MudItem xs="12" md="6">
@@ -444,5 +444,11 @@ else
             JsonValueKind.String when DateTime.TryParse(element.GetString(), out var parsed) => parsed,
             _ => null
         };
+    }
+
+    private string GetProxyImageUrl()
+    {
+        if (_ocrResult?.ImageUrl == null) return string.Empty;
+        return $"/api/ImageProxy?url={Uri.EscapeDataString(_ocrResult.ImageUrl)}";
     }
 }

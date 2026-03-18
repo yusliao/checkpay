@@ -30,13 +30,28 @@ public static class DependencyInjection
         else
             services.AddScoped<IOcrService, MockOcrService>();
 
-        // Blob存储服务：有 Azure Blob 配置就用 AzureBlobStorageService，默认走 Mock（开发/测试）
-        var blobConnection = configuration["Azure:BlobStorage:ConnectionString"];
-        var blobContainer = configuration["Azure:BlobStorage:ContainerName"];
-        if (!string.IsNullOrWhiteSpace(blobConnection) && !string.IsNullOrWhiteSpace(blobContainer))
-            services.AddScoped<IBlobStorageService, AzureBlobStorageService>();
+        // Blob存储服务：优先 MinIO > Azure > Mock
+        var minioEndpoint = configuration["Minio:Endpoint"];
+        var minioAccessKey = configuration["Minio:AccessKey"];
+        var minioSecretKey = configuration["Minio:SecretKey"];
+        var minioBucketName = configuration["Minio:BucketName"];
+
+        if (!string.IsNullOrWhiteSpace(minioEndpoint) &&
+            !string.IsNullOrWhiteSpace(minioAccessKey) &&
+            !string.IsNullOrWhiteSpace(minioSecretKey) &&
+            !string.IsNullOrWhiteSpace(minioBucketName))
+        {
+            services.AddScoped<IBlobStorageService, MinioStorageService>();
+        }
         else
-            services.AddScoped<IBlobStorageService, MockBlobStorageService>();
+        {
+            var blobConnection = configuration["Azure:BlobStorage:ConnectionString"];
+            var blobContainer = configuration["Azure:BlobStorage:ContainerName"];
+            if (!string.IsNullOrWhiteSpace(blobConnection) && !string.IsNullOrWhiteSpace(blobContainer))
+                services.AddScoped<IBlobStorageService, AzureBlobStorageService>();
+            else
+                services.AddScoped<IBlobStorageService, MockBlobStorageService>();
+        }
         services.AddScoped<IAuditLogService, AuditLogService>();
 
         // 登录桥接服务：解决 Blazor Server 不能直接写 Cookie 的问题

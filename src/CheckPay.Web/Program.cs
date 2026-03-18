@@ -31,11 +31,35 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<OcrWor
 
 var app = builder.Build();
 
-// 自动执行数据库迁移和种子数据
+// 自动执行数据库迁移和种子数据（带重试机制）
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    await dbContext.Database.MigrateAsync();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+    // 等待数据库可用（最多重试10次，每次等待3秒）
+    var retryCount = 0;
+    var maxRetries = 10;
+    while (retryCount < maxRetries)
+    {
+        try
+        {
+            await dbContext.Database.MigrateAsync();
+            logger.LogInformation("数据库迁移成功");
+            break;
+        }
+        catch (Exception ex)
+        {
+            retryCount++;
+            if (retryCount >= maxRetries)
+            {
+                logger.LogError(ex, "数据库连接失败，已达到最大重试次数");
+                throw;
+            }
+            logger.LogWarning($"数据库连接失败，{3}秒后重试 ({retryCount}/{maxRetries})...");
+            await Task.Delay(3000);
+        }
+    }
 
     // 初始化默认用户（如果不存在）
     if (!await dbContext.Users.AnyAsync())

@@ -3,7 +3,9 @@
   <ItemGroup>
     <ProjectReference Include="..\CheckPay.Application\CheckPay.Application.csproj" />
     <ProjectReference Include="..\CheckPay.Infrastructure\CheckPay.Infrastructure.csproj" />
-    <ProjectReference Include="..\CheckPay.Worker\CheckPay.Worker.csproj" />
+    <ProjectReference Include="..\CheckPay.Worker\CheckPay.Worker.csproj">
+      <ExcludeAssets>contentFiles</ExcludeAssets>
+    </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>

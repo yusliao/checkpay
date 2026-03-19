@@ -25,6 +25,7 @@
         @* 用户管理：仅管理员 *@
         <AuthorizeView Roles="Admin">
             <MudNavLink Href="/users" Icon="@Icons.Material.Filled.People">用户管理</MudNavLink>
+            <MudNavLink Href="/admin/ocr-training" Icon="@Icons.Material.Filled.ModelTraining">OCR 训练标注</MudNavLink>
         </AuthorizeView>
         <MudNavLink Href="/change-password" Icon="@Icons.Material.Filled.Lock">修改密码</MudNavLink>
     </MudNavGroup>

@@ -286,8 +286,93 @@ namespace CheckPay.Infrastructure.Migrations
                     b.ToTable("debit_records", (string)null);
                 });
 
-            modelBuilder.Entity("CheckPay.Domain.Entities.OcrResult", b =>
+            modelBuilder.Entity("CheckPay.Domain.Entities.OcrTrainingSample", b =>
                 {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DocumentType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("document_type");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("image_url");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text")
+                        .HasColumnName("notes");
+
+                    b.Property<decimal?>("CorrectAmount")
+                        .HasColumnType("decimal(18,2)")
+                        .HasColumnName("correct_amount");
+
+                    b.Property<string>("CorrectBankReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("correct_bank_reference");
+
+                    b.Property<string>("CorrectCheckNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("correct_check_number");
+
+                    b.Property<DateTime?>("CorrectDate")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("correct_date");
+
+                    b.Property<decimal?>("OcrAmount")
+                        .HasColumnType("decimal(18,2)")
+                        .HasColumnName("ocr_amount");
+
+                    b.Property<string>("OcrBankReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("ocr_bank_reference");
+
+                    b.Property<string>("OcrCheckNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("ocr_check_number");
+
+                    b.Property<DateTime?>("OcrDate")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ocr_date");
+
+                    b.Property<string>("OcrRawResponse")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("ocr_raw_response");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_ocr_training_samples_created_at");
+
+                    b.HasIndex("DocumentType")
+                        .HasDatabaseName("ix_ocr_training_samples_document_type");
+
+                    b.ToTable("ocr_training_samples", (string)null);
+                });
+
+            modelBuilder.Entity("CheckPay.Domain.Entities.OcrResult", b =>                {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")

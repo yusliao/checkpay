@@ -63,4 +63,20 @@ public class AzureOcrService : IOcrService
             ? (double)field.Confidence.Value
             : 0.0;
     }
+
+    /// <summary>
+    /// AzureOcrService 当前仅用于支票识别（prebuilt-check 模型）。
+    /// 扣款凭证 OCR 由 HunyuanOcrService 处理，此处返回空结果交由财务手动填写。
+    /// </summary>
+    public Task<DebitOcrResultDto> ProcessDebitImageAsync(string imageUrl, CancellationToken cancellationToken = default)
+    {
+        var empty = new DebitOcrResultDto(
+            CheckNumber: null,
+            Amount: null,
+            Date: null,
+            BankReference: null,
+            ConfidenceScores: new Dictionary<string, double>()
+        );
+        return Task.FromResult(empty);
+    }
 }

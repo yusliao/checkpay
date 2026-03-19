@@ -169,9 +169,9 @@
         if (!string.IsNullOrWhiteSpace(_filterCheckNumber))
             query = query.Where(c => c.CheckNumber.Contains(_filterCheckNumber));
         if (_filterDateFrom.HasValue)
-            query = query.Where(c => c.CheckDate >= _filterDateFrom.Value);
+            query = query.Where(c => c.CheckDate >= DateTime.SpecifyKind(_filterDateFrom.Value, DateTimeKind.Utc));
         if (_filterDateTo.HasValue)
-            query = query.Where(c => c.CheckDate <= _filterDateTo.Value);
+            query = query.Where(c => c.CheckDate <= DateTime.SpecifyKind(_filterDateTo.Value.AddDays(1).AddTicks(-1), DateTimeKind.Utc));
 
         _records = await query.OrderByDescending(c => c.CreatedAt).ToListAsync();
         _loading = false;

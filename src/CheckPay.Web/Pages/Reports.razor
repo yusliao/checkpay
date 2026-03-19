@@ -90,8 +90,8 @@
                 return;
             }
 
-            var from = _dateFrom.Value.Date;
-            var to = _dateTo.Value.Date.AddDays(1); // 包含当天
+            var from = DateTime.SpecifyKind(_dateFrom.Value.Date, DateTimeKind.Utc);
+            var to   = DateTime.SpecifyKind(_dateTo.Value.Date.AddDays(1), DateTimeKind.Utc); // 包含当天
 
             var records = await DbContext.CheckRecords
                 .Include(c => c.Customer)

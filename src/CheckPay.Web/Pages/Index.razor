@@ -74,16 +74,27 @@
 <MudPaper Elevation="1" Class="pa-4 mt-4">
     <MudText Typo="Typo.h6" GutterBottom="true">快捷入口</MudText>
     <MudStack Row="true" Spacing="2">
-        <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.CloudUpload"
-                   OnClick="@(() => Navigation.NavigateTo("/checks/upload"))">
-            上传支票
-        </MudButton>
-        <MudButton Variant="Variant.Filled" Color="Color.Secondary"
-                   StartIcon="@Icons.Material.Filled.FileUpload"
-                   OnClick="@(() => Navigation.NavigateTo("/debits/import"))">
-            导入扣款
-        </MudButton>
+        <AuthorizeView Roles="USFinance,Admin">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.CloudUpload"
+                       OnClick="@(() => Navigation.NavigateTo("/checks/upload"))">
+                上传支票
+            </MudButton>
+        </AuthorizeView>
+        <AuthorizeView Roles="USFinance,Admin">
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                       StartIcon="@Icons.Material.Filled.FileUpload"
+                       OnClick="@(() => Navigation.NavigateTo("/debits/import"))">
+                导入扣款
+            </MudButton>
+        </AuthorizeView>
+        <AuthorizeView Roles="CNFinance,Admin">
+            <MudButton Variant="Variant.Filled" Color="Color.Info"
+                       StartIcon="@Icons.Material.Filled.CheckCircle"
+                       OnClick="@(() => Navigation.NavigateTo("/reviews"))">
+                待核查列表
+            </MudButton>
+        </AuthorizeView>
         <MudButton Variant="Variant.Filled" Color="Color.Success"
                    StartIcon="@Icons.Material.Filled.Assessment"
                    OnClick="@(() => Navigation.NavigateTo("/reports"))">

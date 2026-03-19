@@ -6,6 +6,7 @@
 @using Microsoft.EntityFrameworkCore
 @inject IApplicationDbContext DbContext
 @inject IBlobStorageService BlobStorage
+@inject IOcrService OcrService
 @inject ISnackbar Snackbar
 
 <PageTitle>导入扣款 - CheckPay</PageTitle>
@@ -17,7 +18,7 @@
 {
     <MudPaper Class="pa-6 text-center" Style="border:2px dashed #ccc">
         <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Large" Color="Color.Primary" />
-        <MudText Class="mt-2">选择或拖入扫描件（支持多张）</MudText>
+        <MudText Class="mt-2">选择或拖入扫描件（支持多张），上传后自动 OCR 识别</MudText>
         <InputFile id="scanBatch" OnChange="OnFilesSelected" accept="image/*" multiple hidden />
         <MudButton HtmlTag="label" Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" for="scanBatch">
             选择文件
@@ -34,17 +35,30 @@ else
         <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="2">
             @foreach (var item in _uploadQueue)
             {
-                <MudPaper @onclick="@(() => SelectItem(item))"
-                          Elevation="item == _current ? 4 : 1"
-                          Class="pa-2 text-center"
-                          Style="@($"width:100px;cursor:pointer;border:2px solid {(item == _current ? "#1976d2" : item.Done ? "#4caf50" : "#e0e0e0")}")">
-                    <MudIcon Icon="@Icons.Material.Filled.Image" Size="Size.Medium"
-                             Color="@(item.Done ? Color.Success : Color.Default)" />
-                    <MudText Typo="Typo.caption" Style="word-break:break-all">@item.FileName</MudText>
-                    <MudText Typo="Typo.caption" Color="@(item.Done ? Color.Success : Color.Warning)">
-                        @(item.Done ? "✅ 已录入" : "⏳ 待录入")
-                    </MudText>
-                </MudPaper>
+                <div style="position:relative;width:100px">
+                    <MudPaper @onclick="@(async () => await SelectItem(item))"
+                              Elevation="item == _current ? 4 : 1"
+                              Class="pa-2 text-center"
+                              Style="@($"width:100px;cursor:pointer;border:2px solid {(item == _current ? "#1976d2" : item.Done ? "#4caf50" : "#e0e0e0")}")">
+                        <MudIcon Icon="@Icons.Material.Filled.Image" Size="Size.Medium"
+                                 Color="@(item.Done ? Color.Success : Color.Default)" />
+                        <MudText Typo="Typo.caption" Style="word-break:break-all">@item.FileName</MudText>
+                        <MudText Typo="Typo.caption" Color="@(item.Done ? Color.Success : Color.Warning)">
+                            @(item.Done ? "✅ 已录入" : "⏳ 待录入")
+                        </MudText>
+                    </MudPaper>
+                    @if (!item.Uploading)
+                    {
+                        <span @onclick:stopPropagation="true"
+                              style="position:absolute;top:-8px;right:-8px">
+                            <MudIconButton Icon="@Icons.Material.Filled.Cancel"
+                                           Size="Size.Small"
+                                           Color="Color.Error"
+                                           Style="background:white;padding:2px;width:20px;height:20px;min-width:0"
+                                           OnClick="() => RemoveItem(item)" />
+                        </span>
+                    }
+                </div>
             }
             @* 继续添加更多文件 *@
             <MudPaper Class="pa-2 text-center d-flex align-center justify-center"
@@ -61,12 +75,41 @@ else
     @if (_current != null)
     {
         <MudGrid>
+            @* 左：扫描件预览 + OCR 状态 *@
             <MudItem xs="12" md="6">
                 <MudPaper Class="pa-4">
                     <MudText Typo="Typo.h6" GutterBottom="true">扫描件预览</MudText>
                     @if (!string.IsNullOrEmpty(_current.ImageUrl))
                     {
-                        <MudImage Src="@_current.ImageUrl" Alt="扫描件" Class="rounded" Style="max-width:100%" />
+                        <MudImage Src="@GetProxyImageUrl(_current.ImageUrl)" Alt="扫描件" Class="rounded" Style="max-width:100%" />
+                        @* OCR 识别状态提示 *@
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mt-2" Spacing="1">
+                            @if (_current.OcrStatus == DebitOcrStatus.Recognizing)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Info" />
+                                <MudText Typo="Typo.caption" Color="Color.Info">正在 OCR 识别，稍候...</MudText>
+                            }
+                            else if (_current.OcrStatus == DebitOcrStatus.Success)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.AutoFixHigh" Size="Size.Small" Color="Color.Success" />
+                                <MudText Typo="Typo.caption" Color="Color.Success">OCR 识别完成，已预填表单</MudText>
+                                <MudTooltip Text="对识别结果不满意？点击再次识别">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
+                                                   Color="Color.Info" OnClick="ReOcrAsync"
+                                                   Disabled="@_reOcring" />
+                                </MudTooltip>
+                            }
+                            else if (_current.OcrStatus == DebitOcrStatus.Failed)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Size="Size.Small" Color="Color.Warning" />
+                                <MudText Typo="Typo.caption" Color="Color.Warning">OCR 识别失败，请手动填写</MudText>
+                                <MudTooltip Text="重新尝试 OCR 识别">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
+                                                   Color="Color.Warning" OnClick="ReOcrAsync"
+                                                   Disabled="@_reOcring" />
+                                </MudTooltip>
+                            }
+                        </MudStack>
                     }
                     else if (_current.Uploading)
                     {
@@ -75,16 +118,41 @@ else
                     }
                 </MudPaper>
             </MudItem>
+
+            @* 右：录入表单 *@
             <MudItem xs="12" md="6">
                 <MudPaper Class="pa-4">
                     <MudText Typo="Typo.h6" GutterBottom="true">录入信息</MudText>
 
-                    <MudSelect @bind-Value="_customerId" Label="客户" Required="true" Class="mb-2">
+                    <MudSelect T="Guid" Value="_customerId" ValueChanged="OnCustomerChanged"
+                               Label="客户" Required="true" Class="mb-2">
                         @foreach (var c in _customers)
                         {
                             <MudSelectItem Value="@c.Id">@c.CustomerName</MudSelectItem>
                         }
                     </MudSelect>
+
+                    @* 级联：选客户后展示该客户的待扣款支票，方便 OCR 失败时手动关联 *@
+                    @if (_pendingChecks.Any())
+                    {
+                        <MudSelect T="Guid?" Value="_selectedCheckId" ValueChanged="OnCheckSelected"
+                                   Label="从该客户待扣款支票中选择（可选）"
+                                   Clearable="true" Class="mb-2"
+                                   HelperText="@($"该客户共 {_pendingChecks.Count} 张待扣款支票")">
+                            @foreach (var ck in _pendingChecks)
+                            {
+                                <MudSelectItem T="Guid?" Value="@((Guid?)ck.Id)">
+                                    #@ck.CheckNumber — ＄@ck.CheckAmount.ToString("N2") — @ck.CheckDate.ToString("yyyy-MM-dd")
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else if (_customerId != Guid.Empty && !_loadingPendingChecks)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">
+                            该客户暂无待扣款支票
+                        </MudAlert>
+                    }
 
                     @* 支票号——实时匹配状态 *@
                     <MudTextField @bind-Value="_checkNumber"
@@ -96,11 +164,43 @@ else
                                   AdornmentIcon="@_matchIcon"
                                   AdornmentColor="@_matchColor"
                                   OnBlur="CheckMatchAsync" />
+
                     @if (_matchedCheck != null)
                     {
                         <MudAlert Severity="Severity.Success" Dense="true" Class="mb-2">
                             已匹配：@_matchedCheck.Customer?.CustomerName — ＄@_matchedCheck.CheckAmount.ToString("N2")
                         </MudAlert>
+                        @* 对应支票详情，方便财务核对 *@
+                        <MudPaper Class="pa-3 mb-3" Style="background:#f1f8e9;border-left:4px solid #4caf50">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" Spacing="1">
+                                <MudIcon Icon="@Icons.Material.Filled.Receipt" Size="Size.Small" Color="Color.Success" />
+                                <MudText Typo="Typo.caption" Color="Color.Success"><strong>对应支票信息</strong></MudText>
+                            </MudStack>
+                            <MudSimpleTable Dense="true">
+                                <tbody>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">客户</MudText></td>
+                                        <td><MudText Typo="Typo.body2">@_matchedCheck.Customer?.CustomerName</MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">支票号</MudText></td>
+                                        <td><MudText Typo="Typo.body2"><strong>@_matchedCheck.CheckNumber</strong></MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">支票金额</MudText></td>
+                                        <td><MudText Typo="Typo.body2" Color="Color.Primary">＄@_matchedCheck.CheckAmount.ToString("N2")</MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">支票日期</MudText></td>
+                                        <td><MudText Typo="Typo.body2">@_matchedCheck.CheckDate.ToString("yyyy-MM-dd")</MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">状态</MudText></td>
+                                        <td><MudChip T="string" Size="Size.Small" Color="Color.Warning">待扣款</MudChip></td>
+                                    </tr>
+                                </tbody>
+                            </MudSimpleTable>
+                        </MudPaper>
                     }
                     else if (_checkNumber.Length > 0 && _checkedOnce)
                     {
@@ -137,6 +237,8 @@ else
 }
 
 @code {
+    private enum DebitOcrStatus { Idle, Recognizing, Success, Failed }
+
     // 队列项
     private class QueueItem
     {
@@ -145,7 +247,8 @@ else
         public bool Uploading { get; set; }
         public bool Done { get; set; }
         public bool Matched { get; set; }
-        public IBrowserFile? File { get; set; }
+        public DebitOcrStatus OcrStatus { get; set; } = DebitOcrStatus.Idle;
+        public DebitOcrResultDto? OcrResult { get; set; }
     }
 
     private List<QueueItem> _uploadQueue = new();
@@ -153,6 +256,9 @@ else
 
     private List<Customer> _customers = new();
     private Guid _customerId;
+    private List<CheckRecord> _pendingChecks = new();
+    private Guid? _selectedCheckId;
+    private bool _loadingPendingChecks;
     private string _checkNumber = "";
     private decimal _amount;
     private DateTime? _debitDate;
@@ -160,6 +266,7 @@ else
     private string _notes = "";
     private bool _saving;
     private bool _checkedOnce;
+    private bool _reOcring;
 
     // 实时匹配状态
     private CheckRecord? _matchedCheck;
@@ -173,35 +280,181 @@ else
 
     private async Task OnFilesSelected(InputFileChangeEventArgs e)
     {
+        // 必须先把所有文件读入内存，再触发任何 StateHasChanged。
+        // 原因：第一次 StateHasChanged 会因 _uploadQueue.Any() 变 true 而切换整个 DOM
+        // （上传区 → 队列视图），InputFile 组件被替换，JS 文件引用失效，后续读流必崩。
+        var snapshots = new List<(string Name, byte[] Data)>();
         foreach (var file in e.GetMultipleFiles(20))
         {
-            var item = new QueueItem { FileName = file.Name, File = file, Uploading = true };
+            try
+            {
+                using var raw = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+                using var ms = new MemoryStream();
+                await raw.CopyToAsync(ms);
+                snapshots.Add((file.Name, ms.ToArray()));
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"读取 {file.Name} 失败: {ex.Message}", Severity.Error);
+            }
+        }
+
+        // 文件数据已在内存中，现在可以安全地更新 UI 并上传
+        foreach (var (name, data) in snapshots)
+        {
+            var item = new QueueItem { FileName = name, Uploading = true };
             _uploadQueue.Add(item);
             if (_current == null) _current = item;
             StateHasChanged();
 
             try
             {
-                using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
-                item.ImageUrl = await BlobStorage.UploadAsync(stream, file.Name);
+                using var ms = new MemoryStream(data);
+                item.ImageUrl = await BlobStorage.UploadAsync(ms, name);
             }
             catch (Exception ex)
             {
-                Snackbar.Add($"上传 {file.Name} 失败: {ex.Message}", Severity.Error);
+                Snackbar.Add($"上传 {name} 失败: {ex.Message}", Severity.Error);
             }
             finally
             {
                 item.Uploading = false;
                 StateHasChanged();
             }
+
+            // 上传成功后异步触发 OCR（不阻塞后续文件上传）
+            if (!string.IsNullOrEmpty(item.ImageUrl))
+                _ = TriggerOcrAsync(item);
         }
     }
 
-    private void SelectItem(QueueItem item)
+    /// <summary>再次识别：清空表单中的 OCR 预填内容，重新触发 OCR 识别</summary>
+    private async Task ReOcrAsync()
+    {
+        if (_current == null || string.IsNullOrEmpty(_current.ImageUrl) || _reOcring) return;
+
+        _reOcring = true;
+        // 清空当前表单，让 OCR 重新预填
+        ClearForm();
+        // 重置 OCR 状态，准备重新识别
+        _current.OcrStatus = DebitOcrStatus.Idle;
+        _current.OcrResult = null;
+        StateHasChanged();
+
+        try
+        {
+            await TriggerOcrAsync(_current);
+        }
+        finally
+        {
+            _reOcring = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>后台异步 OCR 识别，完成后自动预填当前选中表单</summary>
+    private async Task TriggerOcrAsync(QueueItem item)
+    {
+        item.OcrStatus = DebitOcrStatus.Recognizing;
+        StateHasChanged();
+        try
+        {
+            item.OcrResult = await OcrService.ProcessDebitImageAsync(item.ImageUrl);
+            item.OcrStatus = DebitOcrStatus.Success;
+            // 当前选中且表单还是空的，自动预填
+            if (_current == item && IsFormEmpty())
+                await ApplyOcrResultAsync(item.OcrResult);
+        }
+        catch
+        {
+            // OCR 失败不影响手动录入，留空让财务手填
+            item.OcrStatus = DebitOcrStatus.Failed;
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>将 OCR 结果预填到表单（仅填空字段，不覆盖已手动输入的内容）</summary>
+    private async Task ApplyOcrResultAsync(DebitOcrResultDto result)
+    {
+        var needMatch = false;
+        if (!string.IsNullOrEmpty(result.CheckNumber) && string.IsNullOrEmpty(_checkNumber))
+        {
+            _checkNumber = result.CheckNumber;
+            needMatch = true;
+        }
+        if (result.Amount.HasValue && result.Amount > 0 && _amount <= 0)
+            _amount = result.Amount.Value;
+        if (result.Date.HasValue && !_debitDate.HasValue)
+            _debitDate = result.Date.Value;
+        if (!string.IsNullOrEmpty(result.BankReference) && string.IsNullOrEmpty(_bankReference))
+            _bankReference = result.BankReference;
+
+        // OCR 识别出支票号时自动触发匹配
+        if (needMatch)
+            await CheckMatchAsync();
+    }
+
+    private bool IsFormEmpty() =>
+        string.IsNullOrEmpty(_checkNumber) && _amount <= 0 && string.IsNullOrEmpty(_bankReference);
+
+    private async Task SelectItem(QueueItem item)
     {
         if (item.Done) return;
         _current = item;
         ClearForm();
+        // 切换时如果 OCR 已完成，立即预填
+        if (item.OcrStatus == DebitOcrStatus.Success && item.OcrResult != null)
+            await ApplyOcrResultAsync(item.OcrResult);
+    }
+
+    /// <summary>客户切换时加载该客户的待扣款支票列表</summary>
+    private async Task OnCustomerChanged(Guid customerId)
+    {
+        _customerId = customerId;
+        _selectedCheckId = null;
+        _pendingChecks = new();
+
+        if (customerId == Guid.Empty) return;
+
+        _loadingPendingChecks = true;
+        _pendingChecks = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .Where(c => c.CustomerId == customerId && c.Status == CheckStatus.PendingDebit)
+            .OrderByDescending(c => c.CheckDate)
+            .ToListAsync();
+        _loadingPendingChecks = false;
+    }
+
+    /// <summary>从级联列表选中支票后，自动填充支票号 / 金额，并设置匹配状态</summary>
+    private async Task OnCheckSelected(Guid? checkId)
+    {
+        _selectedCheckId = checkId;
+
+        if (!checkId.HasValue)
+        {
+            // 清除选中状态，重置支票号相关字段
+            _matchedCheck = null;
+            _checkNumber = "";
+            _matchIcon = Icons.Material.Filled.HelpOutline;
+            _matchColor = Color.Default;
+            _checkedOnce = false;
+            return;
+        }
+
+        _matchedCheck = _pendingChecks.FirstOrDefault(c => c.Id == checkId);
+        if (_matchedCheck == null) return;
+
+        _checkNumber = _matchedCheck.CheckNumber;
+        _matchIcon = Icons.Material.Filled.CheckCircle;
+        _matchColor = Color.Success;
+        _checkedOnce = true;
+
+        // 只填空字段，不覆盖 OCR 已识别的金额
+        if (_amount <= 0)
+            _amount = _matchedCheck.CheckAmount;
     }
 
     private async Task CheckMatchAsync()
@@ -256,7 +509,7 @@ else
                 CustomerId = _customerId,
                 CheckNumber = _checkNumber,
                 DebitAmount = _amount,
-                DebitDate = _debitDate!.Value,
+                DebitDate = DateTime.SpecifyKind(_debitDate!.Value, DateTimeKind.Utc),
                 BankReference = _bankReference,
                 ScanImageUrl = _current!.ImageUrl,
                 Notes = _notes,
@@ -278,6 +531,10 @@ else
 
             _current = _uploadQueue.FirstOrDefault(q => !q.Done);
             ClearForm();
+
+            // 自动预填下一张（如果 OCR 已完成）
+            if (_current?.OcrStatus == DebitOcrStatus.Success && _current.OcrResult != null)
+                await ApplyOcrResultAsync(_current.OcrResult);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -327,6 +584,22 @@ else
         return null;
     }
 
+    private void RemoveItem(QueueItem item)
+    {
+        _uploadQueue.Remove(item);
+
+        if (_current == item)
+        {
+            _current = _uploadQueue.FirstOrDefault(q => !q.Done);
+            ClearForm();
+            if (_current?.OcrStatus == DebitOcrStatus.Success && _current.OcrResult != null)
+                _ = ApplyOcrResultAsync(_current.OcrResult);
+        }
+
+        if (!_uploadQueue.Any())
+            Reset();
+    }
+
     private void SkipCurrent()
     {
         if (_current?.Uploading == true)
@@ -347,6 +620,8 @@ else
         _bankReference = "";
         _notes = "";
         _customerId = Guid.Empty;
+        _selectedCheckId = null;
+        _pendingChecks = new();
         _matchedCheck = null;
         _matchIcon = Icons.Material.Filled.HelpOutline;
         _matchColor = Color.Default;
@@ -358,5 +633,11 @@ else
         _uploadQueue.Clear();
         _current = null;
         ClearForm();
+    }
+
+    private static string GetProxyImageUrl(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return string.Empty;
+        return $"/api/ImageProxy?url={Uri.EscapeDataString(url)}";
     }
 }

@@ -1,14 +1,31 @@
-﻿<MudNavMenu>
+<MudNavMenu>
     <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
-    <MudNavLink Href="/checks/upload" Icon="@Icons.Material.Filled.CloudUpload">上传支票</MudNavLink>
+
+    @* 上传支票 / 导入扣款：美国财务 + 管理员 *@
+    <AuthorizeView Roles="USFinance,Admin">
+        <MudNavLink Href="/checks/upload" Icon="@Icons.Material.Filled.CloudUpload">上传支票</MudNavLink>
+    </AuthorizeView>
+
     <MudNavLink Href="/records" Icon="@Icons.Material.Filled.List">收款记录</MudNavLink>
-    <MudNavLink Href="/debits/import" Icon="@Icons.Material.Filled.AccountBalance">导入扣款</MudNavLink>
-    <MudNavLink Href="/reviews" Icon="@Icons.Material.Filled.CheckCircle">待核查列表</MudNavLink>
+
+    <AuthorizeView Roles="USFinance,Admin">
+        <MudNavLink Href="/debits/import" Icon="@Icons.Material.Filled.AccountBalance">导入扣款</MudNavLink>
+    </AuthorizeView>
+
+    @* 待核查列表：大陆财务 + 管理员 *@
+    <AuthorizeView Roles="CNFinance,Admin">
+        <MudNavLink Href="/reviews" Icon="@Icons.Material.Filled.CheckCircle">待核查列表</MudNavLink>
+    </AuthorizeView>
+
     <MudNavLink Href="/exceptions" Icon="@Icons.Material.Filled.Warning">异常列表</MudNavLink>
     <MudNavLink Href="/reports" Icon="@Icons.Material.Filled.Assessment">导出报表</MudNavLink>
+
     <MudNavGroup Title="系统管理" Icon="@Icons.Material.Filled.Settings">
         <MudNavLink Href="/customers" Icon="@Icons.Material.Filled.Business">客户管理</MudNavLink>
-        <MudNavLink Href="/users" Icon="@Icons.Material.Filled.People">用户管理</MudNavLink>
+        @* 用户管理：仅管理员 *@
+        <AuthorizeView Roles="Admin">
+            <MudNavLink Href="/users" Icon="@Icons.Material.Filled.People">用户管理</MudNavLink>
+        </AuthorizeView>
         <MudNavLink Href="/change-password" Icon="@Icons.Material.Filled.Lock">修改密码</MudNavLink>
     </MudNavGroup>
 </MudNavMenu>

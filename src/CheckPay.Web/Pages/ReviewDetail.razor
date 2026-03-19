@@ -30,7 +30,7 @@ else
                 <MudText Typo="Typo.h6" GutterBottom="true">支票图片</MudText>
                 @if (!string.IsNullOrEmpty(_checkRecord.ImageUrl))
                 {
-                    <MudImage Src="@_checkRecord.ImageUrl" Alt="支票图片" Class="rounded mb-3"
+                    <MudImage Src="@GetProxyImageUrl(_checkRecord.ImageUrl)" Alt="支票图片" Class="rounded mb-3"
                               Style="width:100%;object-fit:contain" />
                 }
                 else
@@ -40,7 +40,7 @@ else
                 @if (_checkRecord.DebitRecord != null && !string.IsNullOrEmpty(_checkRecord.DebitRecord.ScanImageUrl))
                 {
                     <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1" Color="Color.Secondary">扣款扫描件</MudText>
-                    <MudImage Src="@_checkRecord.DebitRecord.ScanImageUrl" Alt="扣款扫描件" Class="rounded"
+                    <MudImage Src="@GetProxyImageUrl(_checkRecord.DebitRecord.ScanImageUrl)" Alt="扣款扫描件" Class="rounded"
                               Style="width:100%;object-fit:contain" />
                 }
             </MudPaper>
@@ -227,5 +227,10 @@ else
             await LoadData();
         }
     }
+
+    private static string GetProxyImageUrl(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return string.Empty;
+        return $"/api/ImageProxy?url={Uri.EscapeDataString(url)}";
     }
 }

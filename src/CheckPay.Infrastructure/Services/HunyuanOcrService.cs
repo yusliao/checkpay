@@ -19,7 +19,6 @@ public class HunyuanOcrService : IOcrService
     private readonly ILogger<HunyuanOcrService> _logger;
     private readonly IBlobStorageService _blobStorageService;
 
-    // 用 Prompt 让模型只返回 JSON，省得解析废话
     private const string CheckOcrPrompt = """
         You are a US bank check information extractor.
         Extract the following fields from this check image and return ONLY a valid JSON object, no explanations, no markdown:
@@ -61,7 +60,7 @@ public class HunyuanOcrService : IOcrService
     {
         _logger.LogInformation("混元 OCR 开始处理: {ImageUrl}", imageUrl);
 
-        // 从MinIO下载图片并转Base64（混元API无法访问本地MinIO）
+        // 从 MinIO 下载图片转 base64（混元 API 无法访问内网 MinIO）
         string base64Image;
         try
         {
@@ -79,6 +78,10 @@ public class HunyuanOcrService : IOcrService
             throw new InvalidOperationException($"MinIO下载失败，url:{imageUrl}，原因:{ex.Message}", ex);
         }
 
+        var ext = Path.GetExtension(imageUrl).TrimStart('.').ToLowerInvariant();
+        var mime = ext switch { "png" => "image/png", "gif" => "image/gif", "webp" => "image/webp", _ => "image/jpeg" };
+        var dataUri = $"data:{mime};base64,{base64Image}";
+
         var req = new ChatCompletionsRequest
         {
             Model = "hunyuan-vision",
@@ -92,7 +95,7 @@ public class HunyuanOcrService : IOcrService
                         new Content
                         {
                             Type = "image_url",
-                            ImageUrl = new ImageUrl { Url = $"data:image/jpeg;base64,{base64Image}" }
+                            ImageUrl = new ImageUrl { Url = dataUri }
                         },
                         new Content
                         {
@@ -107,7 +110,7 @@ public class HunyuanOcrService : IOcrService
         var resp = await _client.ChatCompletions(req);
 
         var rawContent = resp.Choices[0].Message.Content
-            ?? throw new InvalidOperationException("混元返回空响应，这憨批 API 出什么鬼问题了");
+            ?? throw new InvalidOperationException("混元返回空响应");
 
         _logger.LogDebug("混元 OCR 原始响应: {Content}", rawContent);
 
@@ -116,7 +119,6 @@ public class HunyuanOcrService : IOcrService
 
     private static OcrResultDto ParseOcrResponse(string rawContent)
     {
-        // 清理模型可能包的 markdown 代码块
         var json = Regex.Replace(rawContent.Trim(), @"^```(?:json)?\s*|\s*```$", "", RegexOptions.Multiline).Trim();
 
         using var doc = JsonDocument.Parse(json);
@@ -158,10 +160,6 @@ public class HunyuanOcrService : IOcrService
         return new OcrResultDto(checkNumber, amount, date, confidenceScores);
     }
 
-    /// <summary>
-    /// 将模型返回的 high/medium/low 映射到系统置信度分数
-    /// high ≥0.85（绿） / medium 0.60-0.85（橙） / low &lt;0.60（红）
-    /// </summary>
     private static double MapConfidenceLevel(JsonElement conf, string key)
     {
         if (!conf.TryGetProperty(key, out var val) || val.ValueKind == JsonValueKind.Null)

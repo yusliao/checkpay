@@ -1,3 +1,4 @@
+using CheckPay.Application.Common.Interfaces;
 using CheckPay.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -30,7 +31,9 @@ public class HunyuanOcrIntegrationTest
             return;
         }
 
-        var service = new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance);
+        // 集成测试需要真实 blob 服务，这里用 HttpClient 模拟下载
+        var blobService = new HttpBlobStorageService();
+        var service = new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, blobService);
 
         // Act
         var result = await service.ProcessCheckImageAsync(SampleCheckUrl);
@@ -51,4 +54,23 @@ public class HunyuanOcrIntegrationTest
         Console.WriteLine($"置信度 - 金额: {result.ConfidenceScores["Amount"]:P0}");
         Console.WriteLine($"置信度 - 日期: {result.ConfidenceScores["Date"]:P0}");
     }
+
+    /// <summary>集成测试专用：通过 HTTP 下载图片，绕过 MinIO</summary>
+    private sealed class HttpBlobStorageService : IBlobStorageService
+    {
+        private static readonly HttpClient _http = new();
+
+        public async Task<Stream> DownloadAsync(string blobUrl, CancellationToken cancellationToken = default)
+        {
+            var bytes = await _http.GetByteArrayAsync(blobUrl, cancellationToken);
+            return new MemoryStream(bytes);
+        }
+
+        public Task<string> UploadAsync(Stream stream, string fileName, CancellationToken cancellationToken = default)
+            => Task.FromResult(string.Empty);
+
+        public Task DeleteAsync(string blobUrl, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
 }
+

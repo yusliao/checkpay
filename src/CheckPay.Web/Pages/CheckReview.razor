@@ -198,13 +198,14 @@ else
         _confidenceScores = ExtractConfidenceScores();
         var root = _ocrResult.RawResult.RootElement;
 
+        // 始终预填识别到的值，置信度只影响视觉颜色/提示，不阻止填值
         var recognizedNumber = ExtractString(root, "CheckNumber");
         var recognizedAmount = ExtractDecimal(root, "Amount");
-        var recognizedDate = ExtractDate(root, "Date");
+        var recognizedDate   = ExtractDate(root, "Date");
 
-        _checkNumber = ShouldPrefill("CheckNumber") ? recognizedNumber : string.Empty;
-        _amount = ShouldPrefill("Amount") ? recognizedAmount : 0m;
-        _checkDate = ShouldPrefill("Date") ? recognizedDate : null;
+        if (!string.IsNullOrEmpty(recognizedNumber)) _checkNumber = recognizedNumber;
+        if (recognizedAmount > 0) _amount = recognizedAmount;
+        if (recognizedDate.HasValue) _checkDate = recognizedDate;
 
         _prefilledFromOcr = true;
     }
@@ -229,8 +230,6 @@ else
         }
         return dict;
     }
-
-    private bool ShouldPrefill(string field) => GetConfidence(field) >= 0.60;
 
     private double GetConfidence(string field)
         => _confidenceScores.TryGetValue(field, out var value) ? value : 0;

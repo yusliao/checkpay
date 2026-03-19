@@ -11,4 +11,5 @@ public class OcrResult : BaseEntity
     public JsonDocument? RawResult { get; set; }
     public JsonDocument? ConfidenceScores { get; set; }
     public string? ErrorMessage { get; set; }
+    public int RetryCount { get; set; } = 0;
 }

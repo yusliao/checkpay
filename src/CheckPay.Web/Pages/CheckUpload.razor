@@ -408,16 +408,16 @@ else
         _confidenceScores = item.ConfidenceScores;
         var root = item.RawResult.RootElement;
 
+        // 始终预填识别到的值，置信度只影响视觉颜色/提示，不阻止填值
         var number = ExtractString(root, "CheckNumber");
         var amount = ExtractDecimal(root, "Amount");
         var date = ExtractDate(root, "Date");
 
-        // 置信度 >= 0.60 才预填
-        if (GetConfidence("CheckNumber") >= 0.60 && string.IsNullOrEmpty(_checkNumber))
+        if (!string.IsNullOrEmpty(number) && string.IsNullOrEmpty(_checkNumber))
             _checkNumber = number;
-        if (GetConfidence("Amount") >= 0.60 && _amount <= 0)
+        if (amount > 0 && _amount <= 0)
             _amount = amount;
-        if (GetConfidence("Date") >= 0.60 && !_checkDate.HasValue)
+        if (date.HasValue && !_checkDate.HasValue)
             _checkDate = date;
     }
 

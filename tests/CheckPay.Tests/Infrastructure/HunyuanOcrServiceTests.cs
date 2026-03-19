@@ -1,3 +1,4 @@
+using CheckPay.Application.Common.Interfaces;
 using CheckPay.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -6,6 +7,16 @@ namespace CheckPay.Tests.Infrastructure;
 
 public class HunyuanOcrServiceTests
 {
+    // 构造函数测试只验证配置校验，blob 服务用不到，给个空实现即可
+    private static IBlobStorageService NullBlob() => new NullBlobStorageService();
+
+    private sealed class NullBlobStorageService : IBlobStorageService
+    {
+        public Task<string> UploadAsync(Stream data, string fileName, CancellationToken ct = default) => Task.FromResult(string.Empty);
+        public Task<Stream> DownloadAsync(string url, CancellationToken ct = default) => Task.FromResult<Stream>(Stream.Null);
+        public Task DeleteAsync(string url, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     [Fact]
     public void Constructor_ShouldThrowException_WhenSecretIdMissing()
     {
@@ -17,7 +28,7 @@ public class HunyuanOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
     }
 
     [Fact]
@@ -31,7 +42,7 @@ public class HunyuanOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
     }
 
     [Fact]
@@ -47,7 +58,7 @@ public class HunyuanOcrServiceTests
 
         // 不抛异常就算通过，不需要真实凭证创建客户端
         var ex = Record.Exception(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
 
         Assert.Null(ex);
     }
@@ -65,8 +76,10 @@ public class HunyuanOcrServiceTests
             .Build();
 
         var ex = Record.Exception(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
 
         Assert.Null(ex);
     }
 }
+
+

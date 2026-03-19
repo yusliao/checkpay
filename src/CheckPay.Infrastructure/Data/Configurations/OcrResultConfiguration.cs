@@ -29,6 +29,7 @@ public class OcrResultConfiguration : IEntityTypeConfiguration<OcrResult>
                 v => v == null ? null : JsonDocument.Parse(v));
 
         builder.Property(e => e.ErrorMessage).HasColumnName("error_message");
+        builder.Property(e => e.RetryCount).HasColumnName("retry_count").HasDefaultValue(0).IsRequired();
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
 

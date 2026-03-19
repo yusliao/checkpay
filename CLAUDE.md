@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-03-19 01:00:00** - OCR 预填 bug 修复：CheckUpload.razor 和 CheckReview.razor 移除置信度门控（≥0.60才填），改为始终预填识别值，置信度仅影响边框颜色；CleanJson 重写（支持从乱文本中提取第一个JSON对象）；DebitOcrPrompt 加强约束；GetDoubleConfidence 兼容范围字符串（如"0.40-0.55"）；OCR日志级别 Debug→Information（添加解析结果结构化日志）
 - **2026-03-19 00:00:00** - OCR 识别率提升：重写 CheckOcrPrompt（Chain-of-Thought + MICR 行定位）、置信度改为 0.0-1.0 浮点数输出（兼容旧字符串）、模型名配置化（Ocr:Model）、OcrWorker 添加智能重试机制（最多 3 次，指数退避）、新增 AddOcrRetryCount 迁移
 - **2026-03-18 23:54:00** - 混元OCR集成完成：修复本地MinIO图片访问问题（Base64方案）、添加图片代理端点、修复所有页面图片显示
 - **2026-03-18 19:37:00** - Docker部署成功：解决Windows DNS解析问题，应用+PostgreSQL+MinIO完整运行，数据库迁移和种子数据初始化成功

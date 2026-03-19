@@ -63,12 +63,20 @@ public class HunyuanOcrService : IOcrService
 
         // 从MinIO下载图片并转Base64（混元API无法访问本地MinIO）
         string base64Image;
-        using (var imageStream = await _blobStorageService.DownloadAsync(imageUrl, cancellationToken))
-        using (var memoryStream = new MemoryStream())
+        try
         {
+            using var imageStream = await _blobStorageService.DownloadAsync(imageUrl, cancellationToken);
+            using var memoryStream = new MemoryStream();
             await imageStream.CopyToAsync(memoryStream, cancellationToken);
             var imageBytes = memoryStream.ToArray();
+            if (imageBytes.Length == 0)
+                throw new InvalidOperationException($"MinIO返回空文件，url:{imageUrl}");
             base64Image = Convert.ToBase64String(imageBytes);
+            _logger.LogInformation("图片下载成功，大小: {Size} bytes，base64长度: {B64Len}", imageBytes.Length, base64Image.Length);
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            throw new InvalidOperationException($"MinIO下载失败，url:{imageUrl}，原因:{ex.Message}", ex);
         }
 
         var req = new ChatCompletionsRequest

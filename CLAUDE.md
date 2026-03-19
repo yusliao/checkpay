@@ -276,6 +276,61 @@ git push origin main
 
 ## 实施记录
 
+### 2026-03-18 开发会话（晚上）
+
+**完成内容：P10 腾讯混元OCR集成和图片显示修复**
+
+#### 1. 混元OCR本地MinIO图片访问问题修复
+**问题**：MinIO图片URL是本地路径（`http://localhost:9000/...`），混元API在腾讯云无法访问
+
+**解决方案**：
+- 修改HunyuanOcrService.cs，从MinIO下载图片到内存
+- 转换为Base64编码
+- 使用Data URI格式传给混元API：`data:image/jpeg;base64,{base64}`
+
+**修改文件**：
+- `src/CheckPay.Infrastructure/Services/HunyuanOcrService.cs`
+
+#### 2. 图片代理端点实现
+**问题**：浏览器无法直接访问Docker容器内MinIO地址（`http://minio:9000/...`）
+
+**解决方案**：
+- 创建ImageProxyController.cs API端点
+- 后端从MinIO下载图片并返回给浏览器
+- 在Program.cs添加AddControllers()和MapControllers()
+
+**新增文件**：
+- `src/CheckPay.Web/Controllers/ImageProxyController.cs`
+
+**修改文件**：
+- `src/CheckPay.Web/Program.cs`
+
+#### 3. 全页面图片显示修复
+**修改页面**：
+- `src/CheckPay.Web/Pages/CheckReview.razor`（复核页面）
+- `src/CheckPay.Web/Pages/CheckRecords.razor`（收款记录详情）
+
+**实现方法**：
+```csharp
+private string GetProxyImageUrl(string? imageUrl)
+{
+    if (string.IsNullOrEmpty(imageUrl)) return string.Empty;
+    return $"/api/ImageProxy?url={Uri.EscapeDataString(imageUrl)}";
+}
+```
+
+**当前系统状态**：
+- ✅ 混元OCR成功识别支票（Base64方案）
+- ✅ 所有页面支票图片正常显示（代理端点）
+- ✅ Docker Compose完整运行（PostgreSQL + MinIO + Web应用）
+
+**下一步工作**：
+1. 生产环境部署测试
+2. 性能优化和监控
+3. 用户培训和文档完善
+
+---
+
 ### 2026-03-16 开发会话（下午）
 
 **完成内容：P8 认证系统增强**

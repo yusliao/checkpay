@@ -64,12 +64,6 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
-    extra_hosts:
-      - "postgres:172.21.0.2"
-      - "minio:172.21.0.3"
 
 volumes:
   postgres_data:

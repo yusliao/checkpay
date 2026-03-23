@@ -210,6 +210,12 @@ else
                     }
 
                     <MudNumericField @bind-Value="_amount" Label="扣款金额" Required="true" Format="N2" Class="mb-2" />
+                    @if (_matchedCheck != null && _amount > 0 && Math.Abs(_matchedCheck.CheckAmount - _amount) > 0.01m)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                            扣款金额（＄@_amount.ToString("N2")）与支票金额（＄@_matchedCheck.CheckAmount.ToString("N2")）不一致，差额 ＄@(Math.Abs(_matchedCheck.CheckAmount - _amount).ToString("N2"))，请确认后录入
+                        </MudAlert>
+                    }
                     <MudDatePicker @bind-Date="_debitDate" Label="扣款日期" Required="true" Class="mb-2" />
                     <MudTextField @bind-Value="_bankReference" Label="银行流水号" Required="true" Class="mb-2" />
                     <MudTextField @bind-Value="_notes" Label="备注" Lines="2" Class="mb-4" />
@@ -577,9 +583,6 @@ else
 
         if (_matchedCheck.CustomerId != _customerId)
             return "匹配支票的客户与录入客户不一致";
-
-        if (Math.Abs(_matchedCheck.CheckAmount - _amount) > 0.01m)
-            return "扣款金额与支票金额不一致，请复核";
 
         return null;
     }

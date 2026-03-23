@@ -45,14 +45,25 @@
     <HeaderContent>
         <MudTh>支票号</MudTh>
         <MudTh>客户</MudTh>
-        <MudTh>金额</MudTh>
+        <MudTh>支票金额</MudTh>
+        <MudTh>扣款金额</MudTh>
         <MudTh>日期</MudTh>
         <MudTh>状态</MudTh>
     </HeaderContent>
     <RowTemplate>
         <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
         <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
-        <MudTd DataLabel="金额">@context.CheckAmount.ToString("C")</MudTd>
+        <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
+        <MudTd DataLabel="扣款金额">
+            @if (context.DebitRecord != null)
+            {
+                @context.DebitRecord.DebitAmount.ToString("C")
+            }
+            else
+            {
+                <MudText Color="Color.Secondary">—</MudText>
+            }
+        </MudTd>
         <MudTd DataLabel="日期">@context.CheckDate.ToShortDateString()</MudTd>
         <MudTd DataLabel="状态">
             <MudChip T="string" Size="Size.Small" Color="GetStatusColor(context.Status)">
@@ -61,7 +72,7 @@
         </MudTd>
     </RowTemplate>
     <FooterContent>
-        <MudTd colspan="5">
+        <MudTd colspan="6">
             <MudText Typo="Typo.caption">共 @_records.Count 条记录</MudText>
         </MudTd>
     </FooterContent>
@@ -86,10 +97,18 @@
             </MudListItem>
             <MudDivider />
             <MudListItem T="string">
-                <MudText Typo="Typo.caption" Color="Color.Secondary">金额</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">支票金额</MudText>
                 <MudText>@_selectedRecord.CheckAmount.ToString("C")</MudText>
             </MudListItem>
             <MudDivider />
+            @if (_selectedRecord.DebitRecord != null)
+            {
+                <MudListItem T="string">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">扣款金额</MudText>
+                    <MudText>@_selectedRecord.DebitRecord.DebitAmount.ToString("C")</MudText>
+                </MudListItem>
+                <MudDivider />
+            }
             <MudListItem T="string">
                 <MudText Typo="Typo.caption" Color="Color.Secondary">支票日期</MudText>
                 <MudText>@_selectedRecord.CheckDate.ToString("yyyy-MM-dd")</MudText>
@@ -162,7 +181,7 @@
     private async Task LoadRecords()
     {
         _loading = true;
-        var query = DbContext.CheckRecords.Include(c => c.Customer).AsQueryable();
+        var query = DbContext.CheckRecords.Include(c => c.Customer).Include(c => c.DebitRecord).AsQueryable();
 
         if (_filterStatus.HasValue)
             query = query.Where(c => c.Status == _filterStatus.Value);

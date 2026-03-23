@@ -50,6 +50,7 @@
                 <MudTh>客户</MudTh>
                 <MudTh>支票号</MudTh>
                 <MudTh>支票金额</MudTh>
+                <MudTh>扣款金额</MudTh>
                 <MudTh>支票日期</MudTh>
                 <MudTh>备注</MudTh>
             </HeaderContent>
@@ -57,6 +58,16 @@
                 <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
                 <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
                 <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
+                <MudTd DataLabel="扣款金额">
+                    @if (context.DebitRecord != null)
+                    {
+                        @context.DebitRecord.DebitAmount.ToString("C")
+                    }
+                    else
+                    {
+                        <MudText Color="Color.Secondary">—</MudText>
+                    }
+                </MudTd>
                 <MudTd DataLabel="支票日期">@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
                 <MudTd DataLabel="备注">@context.Notes</MudTd>
             </RowTemplate>
@@ -156,6 +167,7 @@
 
         _questionedChecks = await DbContext.CheckRecords
             .Include(c => c.Customer)
+            .Include(c => c.DebitRecord)
             .Where(c => c.Status == CheckStatus.Questioned)
             .OrderByDescending(c => c.CreatedAt)
             .ToListAsync();

@@ -220,6 +220,53 @@ else
                     <MudTextField @bind-Value="_bankReference" Label="银行流水号" Required="true" Class="mb-2" />
                     <MudTextField @bind-Value="_notes" Label="备注" Lines="2" Class="mb-4" />
 
+                    @* OCR 训练标注：仅在 OCR 识别完成后显示 *@
+                    @if (_current?.OcrStatus == DebitOcrStatus.Success && _current.OcrResult != null)
+                    {
+                        <MudDivider Class="my-3" />
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-1" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.School" Size="Size.Small" Color="Color.Info" />
+                            <MudText Typo="Typo.subtitle2" Color="Color.Info">OCR 训练标注</MudText>
+                        </MudStack>
+                        <MudCheckBox @bind-Value="_saveOcrSample" Color="Color.Info" Dense="true" Class="mb-2">
+                            <MudText Typo="Typo.body2">同时保存 OCR 训练样本（帮助提升识别率）</MudText>
+                        </MudCheckBox>
+                        @if (_saveOcrSample)
+                        {
+                            <MudSimpleTable Dense="true" Class="mb-3" Style="font-size:12px">
+                                <thead>
+                                    <tr>
+                                        <th style="width:70px">字段</th>
+                                        <th>OCR 识别值</th>
+                                        <th>当前录入值</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption">支票号</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">@(_current.OcrResult.CheckNumber ?? "—")</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="@OcrDiffColor(_current.OcrResult.CheckNumber, _checkNumber)">@(string.IsNullOrEmpty(_checkNumber) ? "—" : _checkNumber)</MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption">金额</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">@(_current.OcrResult.Amount.HasValue ? $"${_current.OcrResult.Amount:N2}" : "—")</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="@OcrDiffColor(_current.OcrResult.Amount?.ToString("N2"), _amount > 0 ? _amount.ToString("N2") : null)">@(_amount > 0 ? $"${_amount:N2}" : "—")</MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption">日期</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">@(_current.OcrResult.Date?.ToString("yyyy-MM-dd") ?? "—")</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="@OcrDiffColor(_current.OcrResult.Date?.ToString("yyyy-MM-dd"), _debitDate?.ToString("yyyy-MM-dd"))">@(_debitDate?.ToString("yyyy-MM-dd") ?? "—")</MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption">流水号</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">@(_current.OcrResult.BankReference ?? "—")</MudText></td>
+                                        <td><MudText Typo="Typo.caption" Color="@OcrDiffColor(_current.OcrResult.BankReference, _bankReference)">@(string.IsNullOrEmpty(_bankReference) ? "—" : _bankReference)</MudText></td>
+                                    </tr>
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    }
+
                     <MudButton Variant="Variant.Outlined" Class="mr-2" OnClick="SkipCurrent"
                                Disabled="@(_current?.Uploading == true)">跳过</MudButton>
                     <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="SaveCurrent"
@@ -273,6 +320,7 @@ else
     private bool _saving;
     private bool _checkedOnce;
     private bool _reOcring;
+    private bool _saveOcrSample = true;
 
     // 实时匹配状态
     private CheckRecord? _matchedCheck;
@@ -532,6 +580,10 @@ else
             _current.Done = true;
             _current.Matched = _matchedCheck != null;
 
+            // 顺手保存 OCR 训练样本
+            if (_saveOcrSample && _current.OcrResult != null && !string.IsNullOrEmpty(_current.ImageUrl))
+                await SaveOcrSampleAsync(_current.ImageUrl, _current.OcrResult);
+
             Snackbar.Add(_matchedCheck != null ? "匹配成功！" : "未匹配，已加入异常列表",
                 _matchedCheck != null ? Severity.Success : Severity.Warning);
 
@@ -629,6 +681,7 @@ else
         _matchIcon = Icons.Material.Filled.HelpOutline;
         _matchColor = Color.Default;
         _checkedOnce = false;
+        _saveOcrSample = true;
     }
 
     private void Reset()
@@ -642,5 +695,42 @@ else
     {
         if (string.IsNullOrEmpty(url)) return string.Empty;
         return $"/api/ImageProxy?url={Uri.EscapeDataString(url)}";
+    }
+
+    /// <summary>将当前录入值与 OCR 识别值对比后保存训练样本</summary>
+    private async Task SaveOcrSampleAsync(string imageUrl, DebitOcrResultDto ocrResult)
+    {
+        try
+        {
+            var sample = new OcrTrainingSample
+            {
+                ImageUrl         = imageUrl,
+                DocumentType     = "debit",
+                OcrRawResponse   = string.Empty,
+                OcrCheckNumber   = ocrResult.CheckNumber,
+                OcrAmount        = ocrResult.Amount,
+                OcrDate          = ocrResult.Date.HasValue ? DateTime.SpecifyKind(ocrResult.Date.Value, DateTimeKind.Utc) : null,
+                OcrBankReference = ocrResult.BankReference,
+                CorrectCheckNumber   = string.IsNullOrWhiteSpace(_checkNumber) ? null : _checkNumber.Trim(),
+                CorrectAmount        = _amount > 0 ? _amount : null,
+                CorrectDate          = _debitDate.HasValue ? DateTime.SpecifyKind(_debitDate.Value, DateTimeKind.Utc) : null,
+                CorrectBankReference = string.IsNullOrWhiteSpace(_bankReference) ? null : _bankReference.Trim()
+            };
+            DbContext.OcrTrainingSamples.Add(sample);
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add("OCR 训练样本已保存", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            // 样本保存失败不影响主流程，仅提示
+            Snackbar.Add($"OCR 样本保存失败: {ex.Message}", Severity.Warning);
+        }
+    }
+
+    private static Color OcrDiffColor(string? ocr, string? correct)
+    {
+        if (string.IsNullOrEmpty(correct)) return Color.Default;
+        return string.Equals(ocr?.Trim(), correct?.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? Color.Success : Color.Warning;
     }
 }

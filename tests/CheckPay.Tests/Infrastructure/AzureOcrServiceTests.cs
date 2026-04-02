@@ -1,5 +1,6 @@
 using CheckPay.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CheckPay.Tests.Infrastructure;
 
@@ -15,7 +16,8 @@ public class AzureOcrServiceTests
             })
             .Build();
 
-        Assert.Throws<InvalidOperationException>(() => new AzureOcrService(configuration));
+        Assert.Throws<InvalidOperationException>(() =>
+            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!));
     }
 
     [Fact]
@@ -28,6 +30,7 @@ public class AzureOcrServiceTests
             })
             .Build();
 
-        Assert.Throws<InvalidOperationException>(() => new AzureOcrService(configuration));
+        Assert.Throws<InvalidOperationException>(() =>
+            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!));
     }
 }

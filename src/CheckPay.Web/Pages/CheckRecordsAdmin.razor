@@ -1,0 +1,332 @@
+@page "/admin/check-records"
+@attribute [Authorize(Roles = "Admin")]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>支票记录管理 - CheckPay</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-4">
+    <MudText Typo="Typo.h4">支票记录管理（运维）</MudText>
+    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+               StartIcon="@Icons.Material.Filled.Refresh"
+               OnClick="LoadData"
+               Disabled="@_loading">
+        刷新
+    </MudButton>
+</MudStack>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" Spacing="2">
+        <MudTextField @bind-Value="_filterCheckNumber" Label="支票号" Placeholder="输入支票号搜索"
+                      Variant="Variant.Outlined" Dense="true" Style="width:200px" Clearable="true" />
+        <MudSelect @bind-Value="_filterStatus" Label="状态" T="CheckStatus?" Dense="true" Clearable="true"
+                   Variant="Variant.Outlined" Style="min-width:150px">
+            <MudSelectItem Value="@((CheckStatus?)CheckStatus.PendingDebit)">待扣款</MudSelectItem>
+            <MudSelectItem Value="@((CheckStatus?)CheckStatus.PendingReview)">待核查</MudSelectItem>
+            <MudSelectItem Value="@((CheckStatus?)CheckStatus.Confirmed)">已确认</MudSelectItem>
+            <MudSelectItem Value="@((CheckStatus?)CheckStatus.Questioned)">存疑</MudSelectItem>
+        </MudSelect>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyFilter">搜索</MudButton>
+        <MudButton Variant="Variant.Outlined" OnClick="ClearFilter">重置</MudButton>
+    </MudStack>
+</MudPaper>
+
+<MudTable Items="@_filteredRecords" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="CheckRecord">
+    <HeaderContent>
+        <MudTh>支票号</MudTh>
+        <MudTh>客户</MudTh>
+        <MudTh>支票金额</MudTh>
+        <MudTh>日期</MudTh>
+        <MudTh>状态</MudTh>
+        <MudTh>操作</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        @if (_editingId == context.Id)
+        {
+            @* 内联编辑行 *@
+            <MudTd DataLabel="支票号">
+                <MudText Color="Color.Secondary">@context.CheckNumber</MudText>
+            </MudTd>
+            <MudTd DataLabel="客户">
+                <MudTextField @bind-Value="_editCustomerCode" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="min-width:120px" Placeholder="客户编号" />
+            </MudTd>
+            <MudTd DataLabel="支票金额">
+                <MudNumericField @bind-Value="_editAmount" Label="金额" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 Style="min-width:120px" Format="N2" />
+            </MudTd>
+            <MudTd DataLabel="日期">
+                <MudDatePicker @bind-Date="_editDate" Label="日期" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Style="min-width:150px" />
+            </MudTd>
+            <MudTd DataLabel="状态">
+                <MudSelect @bind-Value="_editStatus" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Style="min-width:130px">
+                    <MudSelectItem Value="@CheckStatus.PendingDebit">待扣款</MudSelectItem>
+                    <MudSelectItem Value="@CheckStatus.PendingReview">待核查</MudSelectItem>
+                    <MudSelectItem Value="@CheckStatus.Confirmed">已确认</MudSelectItem>
+                    <MudSelectItem Value="@CheckStatus.Questioned">存疑</MudSelectItem>
+                </MudSelect>
+            </MudTd>
+            <MudTd DataLabel="操作">
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                               OnClick="@(() => SaveEdit(context))">保存</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelEdit">取消</MudButton>
+                </MudStack>
+            </MudTd>
+        }
+        else
+        {
+            @* 只读行 *@
+            <MudTd DataLabel="支票号">
+                <MudLink Href="@($"/records/{context.Id}")" Color="Color.Inherit"
+                         Underline="Underline.None">@context.CheckNumber</MudLink>
+            </MudTd>
+            <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+            <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
+            <MudTd DataLabel="日期">@context.CheckDate.ToShortDateString()</MudTd>
+            <MudTd DataLabel="状态">
+                <MudChip T="string" Size="Size.Small" Color="GetStatusColor(context.Status)">
+                    @GetStatusText(context.Status)
+                </MudChip>
+            </MudTd>
+            <MudTd DataLabel="操作">
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                               Disabled="@(_editingId.HasValue)"
+                               OnClick="@(() => StartEdit(context))">编辑</MudButton>
+                    @if (context.Status == CheckStatus.Confirmed)
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                                   Disabled="@(_editingId.HasValue)"
+                                   Title="已确认记录不可删除">
+                            删除
+                        </MudButton>
+                    }
+                    else
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                                   Disabled="@(_editingId.HasValue)"
+                                   OnClick="@(() => ConfirmDelete(context))">
+                            删除
+                        </MudButton>
+                    }
+                </MudStack>
+            </MudTd>
+        }
+    </RowTemplate>
+    <FooterContent>
+        <MudTd colspan="6">
+            <MudText Typo="Typo.caption">共 @_filteredRecords.Count 条记录（筛选后）</MudText>
+        </MudTd>
+    </FooterContent>
+</MudTable>
+
+@* 删除确认对话框 *@
+<MudDialog @bind-IsOpen="_showDeleteDialog">
+    <TitleContent>确认删除</TitleContent>
+    <DialogContent>
+        <MudText>确定要删除支票记录 <b>@_toDelete?.CheckNumber</b> 吗？</MudText>
+        <MudText Typo="Typo.caption" Color="Color.Error" Class="mt-2">此操作不可恢复！</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CancelDelete">取消</MudButton>
+        <MudButton Color="Color.Error" OnClick="ExecuteDelete">删除</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private List<CheckRecord> _records = new();
+    private List<CheckRecord> _filteredRecords = new();
+    private bool _loading = true;
+
+    // 筛选条件
+    private string _filterCheckNumber = string.Empty;
+    private CheckStatus? _filterStatus;
+
+    // 内联编辑状态
+    private Guid? _editingId;
+    private string _editCustomerCode = string.Empty;
+    private decimal _editAmount;
+    private DateTime? _editDate;
+    private CheckStatus _editStatus;
+
+    // 删除确认
+    private bool _showDeleteDialog;
+    private CheckRecord? _toDelete;
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        _loading = true;
+        _records = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .OrderByDescending(c => c.CheckDate)
+            .ToListAsync();
+        ApplyFilterInternal();
+        _loading = false;
+    }
+
+    private void ApplyFilterInternal()
+    {
+        var query = _records.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_filterCheckNumber))
+            query = query.Where(c => c.CheckNumber.Contains(_filterCheckNumber, StringComparison.OrdinalIgnoreCase));
+
+        if (_filterStatus.HasValue)
+            query = query.Where(c => c.Status == _filterStatus.Value);
+
+        _filteredRecords = query.ToList();
+    }
+
+    private async Task ApplyFilter()
+    {
+        ApplyFilterInternal();
+        await Task.CompletedTask;
+    }
+
+    private void ClearFilter()
+    {
+        _filterCheckNumber = string.Empty;
+        _filterStatus = null;
+        ApplyFilterInternal();
+    }
+
+    private void StartEdit(CheckRecord record)
+    {
+        _editingId = record.Id;
+        _editCustomerCode = record.Customer?.CustomerCode ?? string.Empty;
+        _editAmount = record.CheckAmount;
+        _editDate = record.CheckDate;
+        _editStatus = record.Status;
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _editCustomerCode = string.Empty;
+        _editAmount = 0m;
+        _editDate = null;
+        _editStatus = CheckStatus.PendingDebit;
+    }
+
+    private async Task SaveEdit(CheckRecord original)
+    {
+        if (string.IsNullOrWhiteSpace(_editCustomerCode))
+        {
+            Snackbar.Add("客户编号不能为空", Severity.Error);
+            return;
+        }
+
+        // 重新从数据库获取（避免并发冲突）
+        var tracked = await DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .FirstOrDefaultAsync(c => c.Id == original.Id);
+
+        if (tracked == null)
+        {
+            Snackbar.Add("记录不存在或已被删除", Severity.Error);
+            await LoadData();
+            CancelEdit();
+            return;
+        }
+
+        // 查找或创建客户
+        var customer = await DbContext.Customers
+            .FirstOrDefaultAsync(c => c.CustomerCode == _editCustomerCode.Trim());
+
+        if (customer == null)
+        {
+            customer = new Customer
+            {
+                CustomerCode = _editCustomerCode.Trim(),
+                CustomerName = _editCustomerCode.Trim(),
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            DbContext.Customers.Add(customer);
+            await DbContext.SaveChangesAsync();
+        }
+
+        tracked.CustomerId = customer.Id;
+        tracked.CheckAmount = _editAmount;
+        tracked.CheckDate = DateTime.SpecifyKind(_editDate!.Value, DateTimeKind.Utc);
+        tracked.Status = _editStatus;
+        tracked.UpdatedAt = DateTime.UtcNow;
+
+        try
+        {
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add("记录已更新", Severity.Success);
+            await LoadData();
+            CancelEdit();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+            await LoadData();
+            CancelEdit();
+        }
+    }
+
+    private void ConfirmDelete(CheckRecord record)
+    {
+        _toDelete = record;
+        _showDeleteDialog = true;
+    }
+
+    private void CancelDelete()
+    {
+        _toDelete = null;
+        _showDeleteDialog = false;
+    }
+
+    private async Task ExecuteDelete()
+    {
+        if (_toDelete == null) return;
+
+        var tracked = await DbContext.CheckRecords.FindAsync(_toDelete.Id);
+        if (tracked == null)
+        {
+            Snackbar.Add("记录不存在或已被删除", Severity.Error);
+            await LoadData();
+            CancelDelete();
+            return;
+        }
+
+        DbContext.CheckRecords.Remove(tracked);
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add($"支票记录 {_toDelete.CheckNumber} 已删除", Severity.Success);
+        _showDeleteDialog = false;
+        _toDelete = null;
+        await LoadData();
+    }
+
+    private static Color GetStatusColor(CheckStatus status) => status switch
+    {
+        CheckStatus.PendingDebit   => Color.Info,
+        CheckStatus.PendingReview  => Color.Warning,
+        CheckStatus.Confirmed      => Color.Success,
+        CheckStatus.Questioned     => Color.Error,
+        _                          => Color.Default
+    };
+
+    private static string GetStatusText(CheckStatus status) => status switch
+    {
+        CheckStatus.PendingDebit   => "待扣款",
+        CheckStatus.PendingReview  => "待核查",
+        CheckStatus.Confirmed      => "已确认",
+        CheckStatus.Questioned     => "存疑",
+        _                          => status.ToString()
+    };
+}

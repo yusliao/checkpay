@@ -72,7 +72,37 @@ else
             <MudPaper Class="pa-4">
                 <MudText Typo="Typo.h6" GutterBottom="true">识别信息</MudText>
 
-                @* 支票号 - 置信度颜色 *@
+                @* OCR 引擎切换滑块 *@
+                @{
+                    var hunyuanReady = _ocrResult.Status == OcrStatus.Completed && _ocrResult.RawResult != null;
+                    var azureReady   = _ocrResult.AzureStatus == OcrStatus.Completed && _ocrResult.AzureRawResult != null;
+                }
+                @if (hunyuanReady && azureReady)
+                {
+                    <MudPaper Class="pa-3 mb-4" Style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight:600">OCR 识别引擎</MudText>
+                        <MudSlider @bind-Value="_ocrEngineSlider" Min="0" Max="1" Step="1" Vertical="false"
+                                   Color="Color.Primary" Class="mb-2"
+                                   OnValueChanged="OnOcrEngineChanged">
+                            @if (_ocrEngineSlider == 0)
+                            {
+                                <MudText Typo="Typo.caption">混元 Hunyuan</MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption">Azure AI Vision</MudText>
+                            }
+                        </MudSlider>
+                        <MudStack Row="true" Justify="Justify.SpaceBetween">
+                            <MudText Typo="Typo.caption" Color="@(_ocrEngineSlider == 0 ? Color.Primary : Color.Default)">
+                                混元 Hunyuan
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="@(_ocrEngineSlider == 1 ? Color.Primary : Color.Default)">
+                                Azure AI Vision
+                            </MudText>
+                        </MudStack>
+                    </MudPaper>
+                }
                 <div class="mb-2">
                     <MudTextField @bind-Value="_checkNumber"
                                   Label="支票号"
@@ -168,6 +198,7 @@ else
     private string _customerCode = string.Empty;
     private string _notes = string.Empty;
     private Dictionary<string, double> _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
+    private double _ocrEngineSlider = 0; // 0=混元，1=Azure
 
     protected override async Task OnInitializedAsync()
     {
@@ -192,13 +223,18 @@ else
 
     private void PopulateFromStoredResult(bool force = false)
     {
-        if (_ocrResult?.RawResult == null) return;
         if (_prefilledFromOcr && !force) return;
 
-        _confidenceScores = ExtractConfidenceScores();
-        var root = _ocrResult.RawResult.RootElement;
+        // 根据滑块选择引擎：0=混元，1=Azure
+        var useAzure = _ocrEngineSlider == 1;
+        var rawResult = useAzure ? _ocrResult?.AzureRawResult : _ocrResult?.RawResult;
+        var confScores = useAzure ? _ocrResult?.AzureConfidenceScores : _ocrResult?.ConfidenceScores;
 
-        // 始终预填识别到的值，置信度只影响视觉颜色/提示，不阻止填值
+        if (rawResult == null) return;
+
+        _confidenceScores = ExtractConfidenceScoresFrom(confScores);
+        var root = rawResult.RootElement;
+
         var recognizedNumber = ExtractString(root, "CheckNumber");
         var recognizedAmount = ExtractDecimal(root, "Amount");
         var recognizedDate   = ExtractDate(root, "Date");
@@ -210,22 +246,87 @@ else
         _prefilledFromOcr = true;
     }
 
+    /// <summary>滑块切换引擎时重新填充表单</summary>
+    private void OnOcrEngineChanged(double value)
+    {
+        PopulateFromStoredResult(force: true);
+        StateHasChanged();
+    }
+
+    /// <summary>采用指定引擎的结果覆盖表单字段</summary>
+    private void ApplyOcrResult(JsonDocument? rawResult, JsonDocument? confidenceScores)
+    {
+        if (rawResult == null) return;
+        var root = rawResult.RootElement;
+
+        var recognizedNumber = ExtractString(root, "CheckNumber");
+        var recognizedAmount = ExtractDecimal(root, "Amount");
+        var recognizedDate   = ExtractDate(root, "Date");
+
+        if (!string.IsNullOrEmpty(recognizedNumber)) _checkNumber = recognizedNumber;
+        if (recognizedAmount > 0) _amount = recognizedAmount;
+        if (recognizedDate.HasValue) _checkDate = recognizedDate;
+
+        // 同步置信度颜色
+        _confidenceScores = ExtractConfidenceScoresFrom(confidenceScores);
+    }
+
+    /// <summary>渲染 OCR 单元格内容（字段值 + 置信度色标）</summary>
+    private MarkupString RenderOcrCell(JsonDocument? rawResult, JsonDocument? confidenceScores,
+        string field, bool isAmount, string? fallback = null)
+    {
+        if (rawResult == null)
+        {
+            var msg = string.IsNullOrEmpty(fallback) ? "识别失败" : fallback;
+            return new MarkupString($"<span style='color:#9e9e9e'>{msg}</span>");
+        }
+
+        var root = rawResult.RootElement;
+        string value = field switch
+        {
+            "Amount"      => ExtractDecimal(root, "Amount") is decimal amt and > 0 ? $"${amt:N2}" : "-",
+            "Date"        => ExtractDate(root, "Date")?.ToString("yyyy-MM-dd") ?? "-",
+            "CheckNumber" => ExtractString(root, "CheckNumber") is string s and { Length: > 0 } ? s : "-",
+            _             => "-"
+        };
+
+        var conf = ExtractFieldConfidence(confidenceScores, field);
+        var (color, dot) = conf switch
+        {
+            >= 0.85 => ("#2e7d32", "🟢"),
+            >= 0.60 => ("#e65100", "🟡"),
+            _       => ("#c62828", "🔴")
+        };
+
+        return new MarkupString(
+            $"<span style='color:{color}'>{dot} {value}</span> <span style='color:#9e9e9e;font-size:0.75em'>({conf:P0})</span>");
+    }
+
+    private static double ExtractFieldConfidence(JsonDocument? confidenceScores, string field)
+    {
+        if (confidenceScores?.RootElement.ValueKind != JsonValueKind.Object) return 0.5;
+        if (confidenceScores.RootElement.TryGetProperty(field, out var el))
+        {
+            if (el.ValueKind == JsonValueKind.Number) return Math.Clamp(el.GetDouble(), 0.0, 1.0);
+        }
+        return 0.5;
+    }
+
     private Dictionary<string, double> ExtractConfidenceScores()
+        => ExtractConfidenceScoresFrom(_ocrResult?.ConfidenceScores);
+
+    private static Dictionary<string, double> ExtractConfidenceScoresFrom(JsonDocument? doc)
     {
         var dict = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        if (_ocrResult?.ConfidenceScores?.RootElement.ValueKind == JsonValueKind.Object)
+        if (doc?.RootElement.ValueKind == JsonValueKind.Object)
         {
-            foreach (var prop in _ocrResult.ConfidenceScores.RootElement.EnumerateObject())
+            foreach (var prop in doc.RootElement.EnumerateObject())
             {
                 if (prop.Value.ValueKind == JsonValueKind.Number)
-                {
                     dict[prop.Name] = prop.Value.GetDouble();
-                }
                 else if (prop.Value.ValueKind == JsonValueKind.String &&
                          double.TryParse(prop.Value.GetString(), out var parsed))
-                {
                     dict[prop.Name] = parsed;
-                }
             }
         }
         return dict;

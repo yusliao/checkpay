@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  # PostgreSQL数据库
+  # PostgreSQL 数据库
   postgres:
     image: postgres:16-alpine
     container_name: checkpay-postgres
@@ -19,7 +17,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # MinIO对象存储
+  # MinIO 对象存储
   minio:
     image: minio/minio:latest
     container_name: checkpay-minio
@@ -38,34 +36,52 @@ services:
       timeout: 5s
       retries: 5
 
-  # CheckPay Web应用
+  # CheckPay Web 应用
   web:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: checkpay-web
+    env_file:
+      - .env
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
+
+      # 数据库
       ConnectionStrings__DefaultConnection: "Host=postgres;Database=checkpay;Username=admin;Password=${DB_PASSWORD:-admin123}"
+
+      # MinIO 存储（容器内部网络访问 minio 服务）
       Minio__Endpoint: "minio:9000"
       Minio__AccessKey: ${MINIO_ROOT_USER:-minioadmin}
       Minio__SecretKey: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      Minio__BucketName: checkpay-files
+      Minio__BucketName: ${MINIO_BUCKET_NAME:-checkpay-files}
       Minio__UseSSL: "false"
+
+      # 腾讯混元 OCR（主引擎，留空则使用 Mock）
       Hunyuan__SecretId: ${HUNYUAN_SECRET_ID:-}
       Hunyuan__SecretKey: ${HUNYUAN_SECRET_KEY:-}
-      Hunyuan__Region: ap-guangzhou
+      Hunyuan__Region: ${HUNYUAN_REGION:-ap-guangzhou}
+      Ocr__Model: ${OCR_MODEL:-hunyuan-vision}
+      Ocr__MaxRetries: ${OCR_MAX_RETRIES:-3}
+      Ocr__RetryDelayMs: ${OCR_RETRY_DELAY_MS:-3000}
+
+      # Azure AI Vision OCR（对比引擎，留空则跳过）
+      Azure__DocumentIntelligence__Endpoint: ${AZURE_VISION_ENDPOINT:-}
+      Azure__DocumentIntelligence__ApiKey: ${AZURE_VISION_API_KEY:-}
+
     ports:
-      - "8080:8080"
+      - "${WEB_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
     restart: unless-stopped
+    # Windows Docker Desktop DNS 解析问题修复
+    extra_hosts:
+      - "minio:host-gateway"
 
 volumes:
   postgres_data:
   minio_data:
-

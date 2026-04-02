@@ -23,12 +23,33 @@ public static class DependencyInjection
 
         services.AddScoped<IApplicationDbContext>(provider => provider.GetRequiredService<ApplicationDbContext>());
 
-        // OCR服务：有腾讯混元凭证时用 HunyuanOcrService，否则用 MockOcrService（开发/测试用）
+        // OCR 服务（双引擎并行：混元 + Azure，用于比对评估）
+        // 混元：有凭证时注册具体类型，否则用 Mock 兜底
         var hunyuanSecretId = configuration["Hunyuan:SecretId"];
         if (!string.IsNullOrWhiteSpace(hunyuanSecretId))
-            services.AddScoped<IOcrService, HunyuanOcrService>();
+        {
+            services.AddScoped<HunyuanOcrService>();
+        }
         else
+        {
+            // 开发环境无凭证时，用工厂将 MockOcrService 适配为 HunyuanOcrService 的替代
+            services.AddScoped<HunyuanOcrService>(sp =>
+                throw new InvalidOperationException("混元凭证未配置，请检查 Hunyuan:SecretId 配置"));
             services.AddScoped<IOcrService, MockOcrService>();
+        }
+
+        // Azure：有凭证时注册具体类型（可选，未配置时 OcrWorker 跳过 Azure 引擎）
+        var azureEndpoint = configuration["Azure:DocumentIntelligence:Endpoint"];
+        var azureApiKey = configuration["Azure:DocumentIntelligence:ApiKey"];
+        if (!string.IsNullOrWhiteSpace(azureEndpoint) && !string.IsNullOrWhiteSpace(azureApiKey)
+            && !azureEndpoint.Contains("your-resource"))
+        {
+            services.AddScoped<AzureOcrService>();
+        }
+
+        // IOcrService 指向混元（供非 Worker 场景使用，如 OcrTraining 页面）
+        if (!string.IsNullOrWhiteSpace(hunyuanSecretId))
+            services.AddScoped<IOcrService>(sp => sp.GetRequiredService<HunyuanOcrService>());
 
         // Blob存储服务：优先 MinIO > Azure > Mock
         var minioEndpoint = configuration["Minio:Endpoint"];

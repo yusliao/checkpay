@@ -33,6 +33,22 @@ public class OcrResultConfiguration : IEntityTypeConfiguration<OcrResult>
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
 
+        // Azure OCR 结果（与混元并行，用于比对评估）
+        builder.Property(e => e.AzureStatus).HasColumnName("azure_status").HasConversion<string>().HasMaxLength(20)
+            .HasDefaultValue(OcrStatus.Pending).IsRequired();
+
+        builder.Property(e => e.AzureRawResult).HasColumnName("azure_raw_result").HasColumnType("jsonb")
+            .HasConversion(
+                v => v == null ? null : v.RootElement.GetRawText(),
+                v => v == null ? null : JsonDocument.Parse(v));
+
+        builder.Property(e => e.AzureConfidenceScores).HasColumnName("azure_confidence_scores").HasColumnType("jsonb")
+            .HasConversion(
+                v => v == null ? null : v.RootElement.GetRawText(),
+                v => v == null ? null : JsonDocument.Parse(v));
+
+        builder.Property(e => e.AzureErrorMessage).HasColumnName("azure_error_message");
+
         builder.HasIndex(e => e.Status).HasDatabaseName("ix_ocr_results_status");
     }
 }

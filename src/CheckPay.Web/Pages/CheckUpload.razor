@@ -134,7 +134,41 @@ else
             @* 右：复核表单 *@
             <MudItem xs="12" md="6">
                 <MudPaper Class="pa-4">
-                    <MudText Typo="Typo.h6" GutterBottom="true">录入信息</MudText>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.h6">录入信息</MudText>
+
+                        @* OCR 引擎切换滑块 *@
+                        @if (_current.OcrResultId.HasValue && _ocrResult != null)
+                        {
+                            var hunyuanReady = _ocrResult.Status == OcrStatus.Completed && _ocrResult.RawResult != null;
+                            var azureReady   = _ocrResult.AzureStatus == OcrStatus.Completed && _ocrResult.AzureRawResult != null;
+                            @if (hunyuanReady && azureReady)
+                            {
+                                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                                    <MudText Typo="Typo.caption" Color="@(_ocrEngineSlider == 0 ? Color.Primary : Color.Default)">
+                                        混元
+                                    </MudText>
+                                    <MudSlider @bind-Value="OcrEngineSlider" Min="0" Max="1" Step="1" Vertical="false"
+                                               Color="Color.Primary" Style="width:120px;margin:0" />
+                                    <MudText Typo="Typo.caption" Color="@(_ocrEngineSlider == 1 ? Color.Primary : Color.Default)">
+                                        Azure
+                                    </MudText>
+                                </MudStack>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Warning">
+                                    调试: 混元=@(hunyuanReady ? "✅" : "❌") Azure=@(azureReady ? "✅" : "❌")
+                                </MudText>
+                            }
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Default">
+                                调试: OcrResultId=@(_current.OcrResultId?.ToString() ?? "null") _ocrResult=@(_ocrResult != null ? "not null" : "null")
+                            </MudText>
+                        }
+                    </MudStack>
 
                     @if (_current.OcrStatus == CheckOcrStatus.Recognizing || _current.Uploading)
                     {
@@ -264,9 +298,12 @@ else
         public bool Done { get; set; }
         public CheckOcrStatus OcrStatus { get; set; } = CheckOcrStatus.Idle;
         public Guid? OcrResultId { get; set; }
-        // 识别完成后缓存的数据
+        // 识别完成后缓存的数据（混元）
         public JsonDocument? RawResult { get; set; }
         public Dictionary<string, double> ConfidenceScores { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        // Azure 结果缓存
+        public JsonDocument? AzureRawResult { get; set; }
+        public Dictionary<string, double> AzureConfidenceScores { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private List<QueueItem> _uploadQueue = new();
@@ -284,6 +321,23 @@ else
 
     private bool _saving;
     private bool _retryingOcr;
+    private double _ocrEngineSlider = 0; // 0=混元，1=Azure
+    private OcrResult? _ocrResult; // 当前 OCR 结果
+
+    // 滑块值变化时自动切换表单内容
+    private double OcrEngineSlider
+    {
+        get => _ocrEngineSlider;
+        set
+        {
+            if (_ocrEngineSlider != value)
+            {
+                _ocrEngineSlider = value;
+                if (_current != null)
+                    PrefillForm(_current, force: true);
+            }
+        }
+    }
 
     private readonly CancellationTokenSource _cts = new();
 
@@ -374,6 +428,17 @@ else
                     item.RawResult = result.RawResult;
                     item.ConfidenceScores = ExtractConfidenceScores(result);
 
+                    // 缓存 Azure 结果
+                    if (result.AzureStatus == OcrStatus.Completed && result.AzureRawResult != null)
+                    {
+                        item.AzureRawResult = result.AzureRawResult;
+                        item.AzureConfidenceScores = ExtractConfidenceScores(result, isAzure: true);
+                    }
+
+                    // 当前选中时更新 _ocrResult 用于滑块显示
+                    if (_current == item)
+                        _ocrResult = result;
+
                     // 当前选中且表单还是空的，自动预填
                     if (_current == item && IsFormEmpty())
                         PrefillForm(item);
@@ -401,31 +466,63 @@ else
     }
 
     /// <summary>将识别结果预填到当前表单</summary>
-    private void PrefillForm(QueueItem item)
+    private void PrefillForm(QueueItem item, bool force = false)
     {
-        if (item.RawResult == null) return;
+        // 根据滑块选择引擎：0=混元，1=Azure
+        var useAzure = _ocrEngineSlider == 1;
+        var rawResult = useAzure ? item.AzureRawResult : item.RawResult;
+        var confScores = useAzure ? item.AzureConfidenceScores : item.ConfidenceScores;
 
-        _confidenceScores = item.ConfidenceScores;
-        var root = item.RawResult.RootElement;
+        if (rawResult == null) return;
+
+        _confidenceScores = confScores;
+        var root = rawResult.RootElement;
 
         // 始终预填识别到的值，置信度只影响视觉颜色/提示，不阻止填值
         var number = ExtractString(root, "CheckNumber");
         var amount = ExtractDecimal(root, "Amount");
         var date = ExtractDate(root, "Date");
 
-        if (!string.IsNullOrEmpty(number) && string.IsNullOrEmpty(_checkNumber))
+        // force=true 时强制覆盖（切换滑块用），否则只在表单为空时预填
+        if (!string.IsNullOrEmpty(number) && (force || string.IsNullOrEmpty(_checkNumber)))
             _checkNumber = number;
-        if (amount > 0 && _amount <= 0)
+        if (amount > 0 && (force || _amount <= 0))
             _amount = amount;
-        if (date.HasValue && !_checkDate.HasValue)
+        if (date.HasValue && (force || !_checkDate.HasValue))
             _checkDate = date;
+    }
+
+    /// <summary>滑块切换引擎时重新填充表单</summary>
+    private void OnOcrEngineChanged(double value)
+    {
+        if (_current != null)
+            PrefillForm(_current, force: true);
+        StateHasChanged();
     }
 
     private void SelectItem(QueueItem item)
     {
         if (item.Done) return;
         _current = item;
+        _ocrEngineSlider = 0; // 重置为混元
         ClearForm();
+
+        // 异步加载 OCR 结果用于滑块显示
+        if (item.OcrResultId.HasValue)
+        {
+            _ = Task.Run(async () =>
+            {
+                var result = await DbContext.OcrResults
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(o => o.Id == item.OcrResultId.Value);
+                if (result != null)
+                {
+                    _ocrResult = result;
+                    await InvokeAsync(StateHasChanged);
+                }
+            });
+        }
+
         // 切换时如果 OCR 已完成，立即预填
         if (item.OcrStatus == CheckOcrStatus.Completed)
             PrefillForm(item);
@@ -671,13 +768,15 @@ else
 
     // ── JSON 解析工具 ─────────────────────────────────────────────
 
-    private static Dictionary<string, double> ExtractConfidenceScores(OcrResult ocrResult)
+    private static Dictionary<string, double> ExtractConfidenceScores(OcrResult ocrResult, bool isAzure = false)
     {
         var dict = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        if (ocrResult.ConfidenceScores?.RootElement.ValueKind != JsonValueKind.Object)
+        var confJson = isAzure ? ocrResult.AzureConfidenceScores : ocrResult.ConfidenceScores;
+
+        if (confJson?.RootElement.ValueKind != JsonValueKind.Object)
             return dict;
 
-        foreach (var prop in ocrResult.ConfidenceScores.RootElement.EnumerateObject())
+        foreach (var prop in confJson.RootElement.EnumerateObject())
         {
             if (prop.Value.ValueKind == JsonValueKind.Number)
                 dict[prop.Name] = prop.Value.GetDouble();

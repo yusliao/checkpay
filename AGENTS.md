@@ -20,3 +20,22 @@ Changelog entries in `CLAUDE.md` show the expected brevity, so commit subjects f
 
 ## Security & Configuration Tips
 Keep secrets in user-secrets or environment variables and scrub `appsettings.Development.json` before sharing logs. When adding Azure or Railway configuration, list the required keys in `docs/CLAUDE.md` with redacted placeholders, and never ship temporary data outside `temp/`.
+
+## Cursor Cloud specific instructions
+
+### Required services
+| Service | How to start | Default port |
+|---|---|---|
+| PostgreSQL 16 | `sudo pg_ctlcluster 16 main start` | 5432 |
+| MinIO | `MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin minio server /tmp/minio-data --console-address ":9001" --address ":9000"` | 9000 (API), 9001 (console) |
+| CheckPay Web | `ConnectionStrings__DefaultConnection="Host=localhost;Database=checkpay;Username=admin;Password=admin123" ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/CheckPay.Web` | 5000 |
+
+### Database setup (one-time, already done via update script)
+The PostgreSQL user `admin` / `admin123` and database `checkpay` are created by the update script. The app auto-runs EF Core migrations and seeds default users on startup.
+
+### Key gotchas
+- The default `appsettings.json` connection string uses `Password=admin` which does not match the docker-compose/update-script default of `admin123`. Override via env var `ConnectionStrings__DefaultConnection` as shown above.
+- OCR services (Hunyuan, Azure) fall back to mock implementations when credentials are not configured — the app starts and runs fine without them.
+- MinIO is required for realistic file upload/download testing. Without it, `MockBlobStorageService` provides fake URLs.
+- The OcrWorker runs in-process as a hosted service inside `CheckPay.Web` — no separate Worker process is needed for development.
+- Build/test/lint commands are documented in the "Build, Test & Development Commands" section above.

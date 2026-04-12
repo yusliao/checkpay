@@ -172,3 +172,4 @@ Logs/
 
 ## MSBuild 二进制日志（太大了）
 *.binlog
+/docs

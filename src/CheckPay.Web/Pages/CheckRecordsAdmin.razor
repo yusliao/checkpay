@@ -6,6 +6,7 @@
 @using Microsoft.EntityFrameworkCore
 @inject IApplicationDbContext DbContext
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @inject NavigationManager Navigation
 
 <PageTitle>支票记录管理 - CheckPay</PageTitle>
@@ -128,18 +129,6 @@
     </FooterContent>
 </MudTable>
 
-@* 删除确认对话框 *@
-<MudDialog @bind-IsOpen="_showDeleteDialog">
-    <TitleContent>确认删除</TitleContent>
-    <DialogContent>
-        <MudText>确定要删除支票记录 <b>@_toDelete?.CheckNumber</b> 吗？</MudText>
-        <MudText Typo="Typo.caption" Color="Color.Error" Class="mt-2">此操作不可恢复！</MudText>
-    </DialogContent>
-    <DialogActions>
-        <MudButton OnClick="CancelDelete">取消</MudButton>
-        <MudButton Color="Color.Error" OnClick="ExecuteDelete">删除</MudButton>
-    </DialogActions>
-</MudDialog>
 
 @code {
     private List<CheckRecord> _records = new();
@@ -157,9 +146,6 @@
     private DateTime? _editDate;
     private CheckStatus _editStatus;
 
-    // 删除确认
-    private bool _showDeleteDialog;
-    private CheckRecord? _toDelete;
 
     protected override async Task OnInitializedAsync() => await LoadData();
 
@@ -278,37 +264,35 @@
         }
     }
 
-    private void ConfirmDelete(CheckRecord record)
+    private async Task ConfirmDelete(CheckRecord record)
     {
-        _toDelete = record;
-        _showDeleteDialog = true;
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Message, $"确定要删除支票记录 {record.CheckNumber} 吗？此操作不可恢复！" },
+            { x => x.YesText, "删除" },
+            { x => x.CancelText, "取消" }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall };
+        var dialog = await DialogService.ShowAsync<MudMessageBox>("确认删除", parameters, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+            await ExecuteDelete(record);
     }
 
-    private void CancelDelete()
+    private async Task ExecuteDelete(CheckRecord record)
     {
-        _toDelete = null;
-        _showDeleteDialog = false;
-    }
-
-    private async Task ExecuteDelete()
-    {
-        if (_toDelete == null) return;
-
-        var tracked = await DbContext.CheckRecords.FindAsync(_toDelete.Id);
+        var tracked = await DbContext.CheckRecords.FindAsync(record.Id);
         if (tracked == null)
         {
             Snackbar.Add("记录不存在或已被删除", Severity.Error);
             await LoadData();
-            CancelDelete();
             return;
         }
 
         DbContext.CheckRecords.Remove(tracked);
         await DbContext.SaveChangesAsync();
 
-        Snackbar.Add($"支票记录 {_toDelete.CheckNumber} 已删除", Severity.Success);
-        _showDeleteDialog = false;
-        _toDelete = null;
+        Snackbar.Add($"支票记录 {record.CheckNumber} 已删除", Severity.Success);
         await LoadData();
     }
 

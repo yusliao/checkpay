@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-CheckPay.slnx anchors the .NET 10 solution. `src/CheckPay.Web` handles Blazor UI, `src/CheckPay.Application` hosts CQRS handlers, `src/CheckPay.Domain` holds entities and enums, `src/CheckPay.Infrastructure` manages EF Core plus Azure clients, and `src/CheckPay.Worker` runs OCR pipelines. Tests stay in `tests/CheckPay.Tests` with Business/Domain/Infrastructure folders mirroring the production tree. Blueprint docs sit under `docs/`, deployment defaults live in `railway.json`, and `temp/` is the only place disposable files belong.
+CheckPay.slnx anchors the .NET 10 solution. `src/CheckPay.Web` handles Blazor UI, `src/CheckPay.Application` hosts CQRS handlers, `src/CheckPay.Domain` holds entities and enums, `src/CheckPay.Infrastructure` manages EF Core plus Azure clients, and `src/CheckPay.Worker` runs OCR pipelines. Tests stay in `tests/CheckPay.Tests` with Business/Domain/Infrastructure folders mirroring the production tree. Blueprint docs sit under `docs/`. Prefer `docker-compose.yml` for integrated local/production-like runs; `temp/` is the only place disposable files belong.
 
 ## Build, Test & Development Commands
 - `dotnet restore` then `dotnet build CheckPay.slnx -c Release` before any PR.
@@ -19,4 +19,4 @@ xUnit is the accepted framework; store specs beside their feature under `tests/C
 Changelog entries in `CLAUDE.md` show the expected brevity, so commit subjects follow `<scope>: <imperative summary>` such as `Infrastructure: tighten blob ACL`. Bodies must explain motivation plus impact and reference issue IDs. PRs need a narrative description, testing log, screenshots for UI tweaks, a list of new migrations or settings, and updates to `README.md` or `docs/` whenever behavior changes.
 
 ## Security & Configuration Tips
-Keep secrets in user-secrets or environment variables and scrub `appsettings.Development.json` before sharing logs. When adding Azure or Railway configuration, list the required keys in `docs/CLAUDE.md` with redacted placeholders, and never ship temporary data outside `temp/`.
+Keep secrets in user-secrets or environment variables and scrub `appsettings.Development.json` before sharing logs. When adding cloud OCR/storage configuration, document required keys in `CLAUDE.md` or `README.md` with redacted placeholders, and never ship temporary data outside `temp/`.

@@ -16,6 +16,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
 
   # MinIO 对象存储
   minio:
@@ -29,12 +33,14 @@ services:
       - minio_data:/data
     ports:
       - "9000:9000"
-      - "9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
 
   # CheckPay Web 应用
   web:
@@ -78,10 +84,13 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
-    # Windows Docker Desktop DNS 解析问题修复
-    extra_hosts:
-      - "minio:host-gateway"
+    networks:
+      - app-network
 
 volumes:
   postgres_data:
   minio_data:
+  
+ networks:
+  app-network:
+    driver: bridge

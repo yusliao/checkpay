@@ -16,6 +16,37 @@ public class CheckRecord : BaseEntity
     public OcrResult? OcrResult { get; set; }
     public string? Notes { get; set; }
     public uint RowVersion { get; set; }
+
+    // ── ACH / 票面扩展 ───────────────────────────────────────────
+    public string? BankName { get; set; }
+    public string? RoutingNumber { get; set; }
+    public string? AccountNumber { get; set; }
+    public string? AccountType { get; set; }
+    public string? AccountHolderName { get; set; }
+    public string? AccountAddress { get; set; }
+    public string? PayToOrderOf { get; set; }
+    public string? ForMemo { get; set; }
+    public string? MicrLineRaw { get; set; }
+    public string? CheckNumberMicr { get; set; }
+
+    /// <summary>发票号，逗号分隔（产品约定：多发票用英文逗号）</summary>
+    public string? InvoiceNumbers { get; set; }
+
+    /// <summary>支付对应期间，如 2026-06</summary>
+    public string? PaymentPeriodText { get; set; }
+
+    /// <summary>销售/美财提交时间；null 表示草稿可编辑</summary>
+    public DateTime? SubmittedAt { get; set; }
+
+    /// <summary>与客户主数据期望银行/持有人不一致时置 true</summary>
+    public bool CustomerMasterMismatchWarning { get; set; }
+
+    /// <summary>美国侧 ACH 扣款是否已成功（由美财标记）</summary>
+    public bool AchDebitSucceeded { get; set; }
+
+    /// <summary>美财标记扣款成功的时间（UTC）</summary>
+    public DateTime? AchDebitSucceededAt { get; set; }
+
     // 反向导航：关联的扣款记录
     public DebitRecord? DebitRecord { get; set; }
 }

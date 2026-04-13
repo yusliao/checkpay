@@ -17,7 +17,9 @@ public class MockOcrServiceTests
         Assert.True(result.Amount > 0);
         Assert.True(result.Date <= DateTime.Today);
         Assert.NotNull(result.ConfidenceScores);
-        Assert.Equal(3, result.ConfidenceScores.Count);
+        Assert.True(result.ConfidenceScores.Count >= 10);
         Assert.True(result.ConfidenceScores["CheckNumber"] > 0.9);
+        Assert.False(string.IsNullOrEmpty(result.RoutingNumber));
+        Assert.False(string.IsNullOrEmpty(result.AccountNumber));
     }
 }

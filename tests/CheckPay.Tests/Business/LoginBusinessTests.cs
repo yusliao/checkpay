@@ -10,6 +10,7 @@ public class LoginBusinessTests
     private static string? GetRole(string username, string password)
     {
         if (username == "admin" && password == "admin123") return "Admin";
+        if (username == "sales" && password == "sales123") return "Sales";
         if (username == "usfinance" && password == "usfinance123") return "USFinance";
         if (username == "cnfinance" && password == "cnfinance123") return "CNFinance";
         return null;
@@ -17,6 +18,7 @@ public class LoginBusinessTests
 
     [Theory]
     [InlineData("admin", "admin123", "Admin")]
+    [InlineData("sales", "sales123", "Sales")]
     [InlineData("usfinance", "usfinance123", "USFinance")]
     [InlineData("cnfinance", "cnfinance123", "CNFinance")]
     public void GetRole_ShouldReturnCorrectRole_ForValidCredentials(string username, string password, string expectedRole)

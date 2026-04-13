@@ -40,6 +40,7 @@
             <MudTd DataLabel="角色">
                 <MudSelect @bind-Value="_editRole" Variant="Variant.Outlined" Margin="Margin.Dense"
                            Style="min-width:120px">
+                    <MudSelectItem Value="UserRole.Sales">销售</MudSelectItem>
                     <MudSelectItem Value="UserRole.USFinance">美国财务</MudSelectItem>
                     <MudSelectItem Value="UserRole.CNFinance">大陆财务</MudSelectItem>
                     <MudSelectItem Value="UserRole.Admin">管理员</MudSelectItem>
@@ -117,6 +118,7 @@
                     </MudItem>
                     <MudItem xs="12" sm="2">
                         <MudSelect @bind-Value="_newRole" Label="角色" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelectItem Value="UserRole.Sales">销售</MudSelectItem>
                             <MudSelectItem Value="UserRole.USFinance">美国财务</MudSelectItem>
                             <MudSelectItem Value="UserRole.CNFinance">大陆财务</MudSelectItem>
                             <MudSelectItem Value="UserRole.Admin">管理员</MudSelectItem>
@@ -280,6 +282,7 @@
     private static Color GetRoleColor(UserRole role) => role switch
     {
         UserRole.Admin => Color.Error,
+        UserRole.Sales => Color.Secondary,
         UserRole.USFinance => Color.Primary,
         UserRole.CNFinance => Color.Info,
         _ => Color.Default
@@ -288,6 +291,7 @@
     private static string GetRoleText(UserRole role) => role switch
     {
         UserRole.Admin => "管理员",
+        UserRole.Sales => "销售",
         UserRole.USFinance => "美国财务",
         UserRole.CNFinance => "大陆财务",
         _ => "未知"

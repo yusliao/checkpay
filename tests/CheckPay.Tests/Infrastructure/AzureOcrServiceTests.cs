@@ -1,3 +1,4 @@
+using CheckPay.Application.Common.Interfaces;
 using CheckPay.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -6,6 +7,14 @@ namespace CheckPay.Tests.Infrastructure;
 
 public class AzureOcrServiceTests
 {
+    private sealed class PassthroughCorrector : ICheckOcrParsedSampleCorrector
+    {
+        public Task<OcrResultDto> ApplyIfMatchedAsync(OcrResultDto parsed, CancellationToken cancellationToken = default) =>
+            Task.FromResult(parsed);
+    }
+
+    private static ICheckOcrParsedSampleCorrector Corrector() => new PassthroughCorrector();
+
     [Fact]
     public void Constructor_ShouldThrowException_WhenEndpointMissing()
     {
@@ -17,7 +26,7 @@ public class AzureOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(() =>
-            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!));
+            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!, Corrector()));
     }
 
     [Fact]
@@ -31,6 +40,6 @@ public class AzureOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(() =>
-            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!));
+            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!, Corrector()));
     }
 }

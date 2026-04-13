@@ -1,8 +1,9 @@
 @page "/checks/review/{Id:guid}"
-@attribute [Authorize]
+@attribute [Authorize(Roles = "Sales,Admin")]
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
+@using CheckPay.Application.Common
 @using CheckPay.Worker.Services
 @using Microsoft.EntityFrameworkCore
 @using System.Linq
@@ -141,6 +142,29 @@ else
                                    HelperText="@GetFieldHint("date")" />
                 </div>
 
+                <MudDivider Class="my-3" />
+                <MudText Typo="Typo.subtitle2" Class="mb-2">ACH / 票面信息</MudText>
+                <MudTextField @bind-Value="_routingNumber" Label="Routing Number (ABA)" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("routingNumber")" HelperText="@GetFieldHint("routingNumber")" />
+                <MudTextField @bind-Value="_accountNumber" Label="Account Number" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("accountNumber")" HelperText="@GetFieldHint("accountNumber")" />
+                <MudTextField @bind-Value="_bankName" Label="Bank Name" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("bankName")" HelperText="@GetFieldHint("bankName")" />
+                <MudTextField @bind-Value="_accountHolderName" Label="Account Holder Name" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("accountHolderName")" HelperText="@GetFieldHint("accountHolderName")" />
+                <MudTextField @bind-Value="_accountAddress" Label="Account Address" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
+                <MudTextField @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")" />
+                <MudTextField @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")" />
+                <MudTextField @bind-Value="_forMemo" Label="For / Memo" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("forMemo")" HelperText="@GetFieldHint("forMemo")" />
+                <MudTextField @bind-Value="_micrLineRaw" Label="MICR line (raw)" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("micrLineRaw")" HelperText="@GetFieldHint("micrLineRaw")" Lines="2" />
+                <MudTextField @bind-Value="_checkNumberMicr" Label="Check # (MICR)" Variant="Variant.Outlined" Class="mb-2"
+                              Style="@GetFieldStyle("checkNumberMicr")" HelperText="@GetFieldHint("checkNumberMicr")" />
+
                 <MudTextField @bind-Value="_customerCode"
                                Label="客户编号"
                                Required="true"
@@ -165,7 +189,9 @@ else
                     }
                 }
 
-                <MudTextField @bind-Value="_notes" Label="备注" Lines="3" Variant="Variant.Outlined" Class="mb-4" />
+                <MudTextField @bind-Value="_notes" Label="备注" Lines="3" Variant="Variant.Outlined" Class="mb-3" />
+                <MudTextField @bind-Value="_invoiceNumbers" Label="发票号码（多个用英文逗号分隔）" Variant="Variant.Outlined" Class="mb-2" />
+                <MudTextField @bind-Value="_paymentPeriodText" Label="支付对应期间（如 2026-06）" Variant="Variant.Outlined" Class="mb-4" />
 
                 @* 置信度图例说明 *@
                 <MudPaper Class="pa-2 mb-4" Style="background:#f5f5f5">
@@ -178,7 +204,8 @@ else
                 </MudPaper>
 
                 <MudButton Variant="Variant.Outlined" Color="Color.Default" Class="mr-2" OnClick="Abandon">放弃</MudButton>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveCheck">确认入库</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" Class="mr-2" OnClick="() => SaveCheck(false)">保存草稿</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SaveCheck(true)">提交入库</MudButton>
             </MudPaper>
         </MudItem>
     </MudGrid>
@@ -197,6 +224,18 @@ else
     private DateTime? _checkDate;
     private string _customerCode = string.Empty;
     private string _notes = string.Empty;
+    private string _routingNumber = "";
+    private string _accountNumber = "";
+    private string _bankName = "";
+    private string _accountHolderName = "";
+    private string _accountAddress = "";
+    private string _accountType = "";
+    private string _payToOrderOf = "";
+    private string _forMemo = "";
+    private string _micrLineRaw = "";
+    private string _checkNumberMicr = "";
+    private string _invoiceNumbers = "";
+    private string _paymentPeriodText = "";
     private Dictionary<string, double> _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
     private double _ocrEngineSlider = 0; // 0=混元，1=Azure
 
@@ -232,6 +271,12 @@ else
 
         if (rawResult == null) return;
 
+        if (force)
+        {
+            _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
+            _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
+        }
+
         _confidenceScores = ExtractConfidenceScoresFrom(confScores);
         var root = rawResult.RootElement;
 
@@ -242,6 +287,23 @@ else
         if (!string.IsNullOrEmpty(recognizedNumber)) _checkNumber = recognizedNumber;
         if (recognizedAmount > 0) _amount = recognizedAmount;
         if (recognizedDate.HasValue) _checkDate = recognizedDate;
+
+        void Pull(string jsonProp, ref string target)
+        {
+            var v = ExtractString(root, jsonProp);
+            if (!string.IsNullOrEmpty(v)) target = v;
+        }
+
+        Pull("RoutingNumber", ref _routingNumber);
+        Pull("AccountNumber", ref _accountNumber);
+        Pull("BankName", ref _bankName);
+        Pull("AccountHolderName", ref _accountHolderName);
+        Pull("AccountAddress", ref _accountAddress);
+        Pull("AccountType", ref _accountType);
+        Pull("PayToOrderOf", ref _payToOrderOf);
+        Pull("ForMemo", ref _forMemo);
+        Pull("MicrLineRaw", ref _micrLineRaw);
+        Pull("CheckNumberMicr", ref _checkNumberMicr);
 
         _prefilledFromOcr = true;
     }
@@ -266,6 +328,23 @@ else
         if (!string.IsNullOrEmpty(recognizedNumber)) _checkNumber = recognizedNumber;
         if (recognizedAmount > 0) _amount = recognizedAmount;
         if (recognizedDate.HasValue) _checkDate = recognizedDate;
+
+        void Pull2(string jsonProp, ref string target)
+        {
+            var v = ExtractString(root, jsonProp);
+            if (!string.IsNullOrEmpty(v)) target = v;
+        }
+
+        Pull2("RoutingNumber", ref _routingNumber);
+        Pull2("AccountNumber", ref _accountNumber);
+        Pull2("BankName", ref _bankName);
+        Pull2("AccountHolderName", ref _accountHolderName);
+        Pull2("AccountAddress", ref _accountAddress);
+        Pull2("AccountType", ref _accountType);
+        Pull2("PayToOrderOf", ref _payToOrderOf);
+        Pull2("ForMemo", ref _forMemo);
+        Pull2("MicrLineRaw", ref _micrLineRaw);
+        Pull2("CheckNumberMicr", ref _checkNumberMicr);
 
         // 同步置信度颜色
         _confidenceScores = ExtractConfidenceScoresFrom(confidenceScores);
@@ -333,7 +412,27 @@ else
     }
 
     private double GetConfidence(string field)
-        => _confidenceScores.TryGetValue(field, out var value) ? value : 0;
+    {
+        var key = field switch
+        {
+            "checkNumber" => "CheckNumber",
+            "amount" => "Amount",
+            "date" => "Date",
+            "routingNumber" => "RoutingNumber",
+            "accountNumber" => "AccountNumber",
+            "bankName" => "BankName",
+            "accountHolderName" => "AccountHolderName",
+            "accountAddress" => "AccountAddress",
+            "accountType" => "AccountType",
+            "payToOrderOf" => "PayToOrderOf",
+            "forMemo" => "ForMemo",
+            "micrLineRaw" => "MicrLineRaw",
+            "checkNumberMicr" => "CheckNumberMicr",
+            _ => field
+        };
+        if (_confidenceScores.TryGetValue(key, out var v)) return v;
+        return _confidenceScores.TryGetValue(field, out var v2) ? v2 : 0;
+    }
 
     private string GetFieldStyle(string field)
     {
@@ -422,10 +521,13 @@ else
         _checkDate = null;
         _customerCode = string.Empty;
         _notes = string.Empty;
+        _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
+        _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
+        _invoiceNumbers = _paymentPeriodText = "";
         _confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
     }
 
-    private async Task SaveCheck()
+    private async Task SaveCheck(bool submitAsFinal)
     {
         if (_ocrResult == null || _ocrResult.Status != OcrStatus.Completed)
         {
@@ -433,7 +535,7 @@ else
             return;
         }
 
-        var validationError = await ValidateFormAsync();
+        var validationError = await ValidateFormAsync(submitAsFinal);
         if (!string.IsNullOrEmpty(validationError))
         {
             Snackbar.Add(validationError, Severity.Error);
@@ -441,6 +543,9 @@ else
         }
 
         var customer = await ResolveCustomerAsync();
+        var mismatch = CheckMasterDataComparer.HasMismatch(customer, NullIfEmpty(_bankName), NullIfEmpty(_accountHolderName));
+        if (mismatch)
+            Snackbar.Add("与客户主数据中的期望银行/持有人不一致，已标记警告。", Severity.Warning);
 
         var check = new CheckRecord
         {
@@ -450,16 +555,30 @@ else
             CustomerId = customer.Id,
             ImageUrl = _ocrResult.ImageUrl,
             OcrResultId = _ocrResult.Id,
-            Notes = _notes,
+            Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
             Status = CheckStatus.PendingDebit,
-            RowVersion = 0
+            RowVersion = 0,
+            BankName = NullIfEmpty(_bankName),
+            RoutingNumber = NullIfEmpty(_routingNumber),
+            AccountNumber = NullIfEmpty(_accountNumber),
+            AccountType = NullIfEmpty(_accountType),
+            AccountHolderName = NullIfEmpty(_accountHolderName),
+            AccountAddress = NullIfEmpty(_accountAddress),
+            PayToOrderOf = NullIfEmpty(_payToOrderOf),
+            ForMemo = NullIfEmpty(_forMemo),
+            MicrLineRaw = NullIfEmpty(_micrLineRaw),
+            CheckNumberMicr = NullIfEmpty(_checkNumberMicr),
+            InvoiceNumbers = NullIfEmpty(_invoiceNumbers),
+            PaymentPeriodText = NullIfEmpty(_paymentPeriodText),
+            SubmittedAt = submitAsFinal ? DateTime.UtcNow : null,
+            CustomerMasterMismatchWarning = mismatch
         };
 
         DbContext.CheckRecords.Add(check);
         try
         {
             await DbContext.SaveChangesAsync();
-            Snackbar.Add("支票入库成功！", Severity.Success);
+            Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "支票草稿已保存。", Severity.Success);
             Navigation.NavigateTo("/records");
         }
         catch (DbUpdateConcurrencyException)
@@ -468,7 +587,7 @@ else
         }
     }
 
-    private async Task<string?> ValidateFormAsync()
+    private async Task<string?> ValidateFormAsync(bool submitAsFinal)
     {
         if (string.IsNullOrWhiteSpace(_checkNumber))
             return "支票号不能为空";
@@ -478,6 +597,13 @@ else
             return "请选择支票日期";
         if (string.IsNullOrWhiteSpace(_customerCode))
             return "请输入客户编号";
+        if (submitAsFinal)
+        {
+            if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
+                return "提交入库时 Routing Number 须为 9 位数字";
+            if (string.IsNullOrWhiteSpace(_accountNumber))
+                return "提交入库时请填写 Account Number";
+        }
 
         var exists = await DbContext.CheckRecords.AnyAsync(c => c.CheckNumber == _checkNumber);
         if (exists)
@@ -485,6 +611,8 @@ else
 
         return null;
     }
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
     private Customer? GetCustomerMatch()
     {

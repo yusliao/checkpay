@@ -1,0 +1,169 @@
+@page "/reports/ach-us"
+@attribute [Authorize(Roles = "USFinance,Admin")]
+@using System.Text
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>ACH 支票导出（美国财务） - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">ACH 支票导出（美国财务）</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    只读列表，按上传日期筛选；可下载 CSV 供银行界面粘贴。管理员可标记 ACH 扣款成功。
+</MudText>
+
+<MudPaper Class="pa-4 mb-4">
+    <MudGrid>
+        <MudItem xs="6" md="3">
+            <MudDatePicker @bind-Date="_from" Label="上传开始" />
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudDatePicker @bind-Date="_to" Label="上传结束" />
+        </MudItem>
+        <MudItem xs="12" md="6" Class="d-flex align-end flex-wrap" Style="gap:8px">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadAsync" Disabled="@_loading">查询</MudButton>
+            <MudButton Variant="Variant.Outlined" OnClick="ExportCsvAsync" Disabled="@(!_rows.Any() || _exporting)">导出 CSV（全部）</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="ExportFailedDebitAsync" Disabled="@(!_failedRows.Any() || _exporting)">导出扣款未成功</MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+<MudTable Items="_rows" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
+    <HeaderContent>
+        <MudTh>上传日期</MudTh>
+        <MudTh>客户编号</MudTh>
+        <MudTh>支票日期</MudTh>
+        <MudTh>Bank</MudTh>
+        <MudTh>RTN</MudTh>
+        <MudTh>Account</MudTh>
+        <MudTh>金额</MudTh>
+        <MudTh>扣款成功</MudTh>
+        @if (_isAdmin)
+        {
+            <MudTh>操作</MudTh>
+        }
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
+        <MudTd>@context.Customer.CustomerCode</MudTd>
+        <MudTd>@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
+        <MudTd>@(context.BankName ?? "—")</MudTd>
+        <MudTd>@(context.RoutingNumber ?? "—")</MudTd>
+        <MudTd>@(context.AccountNumber ?? "—")</MudTd>
+        <MudTd>@context.CheckAmount.ToString("N2")</MudTd>
+        <MudTd>@(context.AchDebitSucceeded ? "Y" : "N")</MudTd>
+        @if (_isAdmin)
+        {
+            <MudTd>
+                @if (!context.AchDebitSucceeded)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Success"
+                               OnClick="@(() => MarkDebitSuccess(context))">标为成功</MudButton>
+                }
+            </MudTd>
+        }
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private DateTime? _from = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1);
+    private DateTime? _to = DateTime.UtcNow.Date;
+    private List<CheckRecord> _rows = new();
+    private List<CheckRecord> _failedRows = new();
+    private bool _loading;
+    private bool _exporting;
+    private bool _isAdmin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _isAdmin = auth.User.IsInRole("Admin");
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (!_from.HasValue || !_to.HasValue) return;
+        _loading = true;
+        var start = DateTime.SpecifyKind(_from.Value.Date, DateTimeKind.Utc);
+        var end = DateTime.SpecifyKind(_to.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Utc);
+
+        _rows = await DbContext.CheckRecords
+            .AsNoTracking()
+            .Include(c => c.Customer)
+            .Where(c => c.CreatedAt >= start && c.CreatedAt <= end)
+            .OrderByDescending(c => c.CreatedAt)
+            .ToListAsync();
+
+        _failedRows = _rows.Where(c => c.SubmittedAt != null && !c.AchDebitSucceeded).ToList();
+        _loading = false;
+    }
+
+    private async Task MarkDebitSuccess(CheckRecord row)
+    {
+        var tracked = await DbContext.CheckRecords.FirstOrDefaultAsync(c => c.Id == row.Id);
+        if (tracked == null) return;
+        tracked.AchDebitSucceeded = true;
+        tracked.AchDebitSucceededAt = DateTime.UtcNow;
+        tracked.UpdatedAt = DateTime.UtcNow;
+        await DbContext.SaveChangesAsync();
+        Snackbar.Add("已标记扣款成功", Severity.Success);
+        await LoadAsync();
+    }
+
+    private async Task ExportCsvAsync() => await ExportRowsAsync(_rows, "ach_us_all");
+
+    private async Task ExportFailedDebitAsync() => await ExportRowsAsync(_failedRows, "ach_us_failed_debit");
+
+    private async Task ExportRowsAsync(List<CheckRecord> rows, string prefix)
+    {
+        _exporting = true;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("UploadDate,CustomerCode,CheckDate,BankName,RoutingNumber,AccountNumber,AccountType,AccountHolderName,AccountAddress,CheckNumber,Amount,Note,SubmittedAtUtc,AchDebitSucceeded,InvoiceNumbers,PaymentPeriod");
+            foreach (var c in rows)
+            {
+                sb.AppendLine(string.Join(',',
+                    Csv(c.CreatedAt.ToUniversalTime().ToString("yyyy-MM-dd")),
+                    Csv(c.Customer.CustomerCode),
+                    Csv(c.CheckDate.ToString("yyyy-MM-dd")),
+                    Csv(c.BankName),
+                    Csv(c.RoutingNumber),
+                    Csv(c.AccountNumber),
+                    Csv(c.AccountType),
+                    Csv(c.AccountHolderName),
+                    Csv(c.AccountAddress),
+                    Csv(c.CheckNumber),
+                    c.CheckAmount.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                    Csv(c.Notes),
+                    Csv(c.SubmittedAt?.ToUniversalTime().ToString("yyyy-MM-dd HH:mm")),
+                    c.AchDebitSucceeded ? "Y" : "N",
+                    Csv(c.InvoiceNumbers),
+                    Csv(c.PaymentPeriodText)));
+            }
+
+            var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+            var name = $"{prefix}_{DateTime.UtcNow:yyyyMMddHHmm}.csv";
+            await JS.InvokeVoidAsync("downloadFile", name, "text/csv;charset=utf-8", base64);
+            Snackbar.Add($"已生成 {rows.Count} 行", Severity.Success);
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return "\"\"";
+        var esc = v.Replace("\"", "\"\"");
+        return $"\"{esc}\"";
+    }
+}

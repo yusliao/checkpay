@@ -45,6 +45,8 @@
     <HeaderContent>
         <MudTh>支票号</MudTh>
         <MudTh>客户</MudTh>
+        <MudTh>RTN(后4)</MudTh>
+        <MudTh>提交</MudTh>
         <MudTh>支票金额</MudTh>
         <MudTh>扣款金额</MudTh>
         <MudTh>日期</MudTh>
@@ -53,6 +55,17 @@
     <RowTemplate>
         <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
         <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+        <MudTd DataLabel="RTN">@MaskRtn(context.RoutingNumber)</MudTd>
+        <MudTd DataLabel="提交">
+            @if (context.SubmittedAt.HasValue)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Success">已提交</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning">草稿</MudChip>
+            }
+        </MudTd>
         <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
         <MudTd DataLabel="扣款金额">
             @if (context.DebitRecord != null)
@@ -72,7 +85,7 @@
         </MudTd>
     </RowTemplate>
     <FooterContent>
-        <MudTd colspan="6">
+        <MudTd colspan="8">
             <MudText Typo="Typo.caption">共 @_records.Count 条记录</MudText>
         </MudTd>
     </FooterContent>
@@ -124,6 +137,38 @@
             <MudListItem T="string">
                 <MudText Typo="Typo.caption" Color="Color.Secondary">备注</MudText>
                 <MudText>@(_selectedRecord.Notes ?? "—")</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">提交状态</MudText>
+                <MudText>@(_selectedRecord.SubmittedAt.HasValue ? $"已提交 {_selectedRecord.SubmittedAt:yyyy-MM-dd HH:mm} UTC" : "草稿")</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">ACH 扣款成功</MudText>
+                <MudText>@(_selectedRecord.AchDebitSucceeded ? $"是 ({_selectedRecord.AchDebitSucceededAt:yyyy-MM-dd})" : "否")</MudText>
+            </MudListItem>
+            <MudDivider />
+            @if (_selectedRecord.CustomerMasterMismatchWarning)
+            {
+                <MudListItem T="string">
+                    <MudAlert Severity="Severity.Warning" Dense="true">与客户主数据期望银行/持有人不一致</MudAlert>
+                </MudListItem>
+                <MudDivider />
+            }
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Routing / Account</MudText>
+                <MudText Typo="Typo.body2">@MaskRtn(_selectedRecord.RoutingNumber) / @(string.IsNullOrEmpty(_selectedRecord.AccountNumber) ? "—" : "****" + _selectedRecord.AccountNumber[^Math.Min(4, _selectedRecord.AccountNumber.Length)..])</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">银行 / 持有人</MudText>
+                <MudText>@(_selectedRecord.BankName ?? "—") / @(_selectedRecord.AccountHolderName ?? "—")</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">发票 / 期间</MudText>
+                <MudText>@(_selectedRecord.InvoiceNumbers ?? "—") / @(_selectedRecord.PaymentPeriodText ?? "—")</MudText>
             </MudListItem>
             <MudDivider />
             <MudListItem T="string">
@@ -235,5 +280,11 @@
     {
         if (string.IsNullOrEmpty(imageUrl)) return string.Empty;
         return $"/api/ImageProxy?url={Uri.EscapeDataString(imageUrl)}";
+    }
+
+    private static string MaskRtn(string? routing)
+    {
+        if (string.IsNullOrEmpty(routing) || routing.Length < 4) return "—";
+        return "****" + routing[^4..];
     }
 }

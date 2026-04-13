@@ -82,6 +82,18 @@ using (var scope = app.Services.CreateScope())
             new CheckPay.Domain.Entities.User
             {
                 Id = Guid.NewGuid(),
+                Email = "sales@checkpay.local",
+                DisplayName = "销售",
+                Role = CheckPay.Domain.Enums.UserRole.Sales,
+                EntraId = "sales",
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("sales123"),
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            },
+            new CheckPay.Domain.Entities.User
+            {
+                Id = Guid.NewGuid(),
                 Email = "usfinance@checkpay.local",
                 DisplayName = "美国财务",
                 Role = CheckPay.Domain.Enums.UserRole.USFinance,
@@ -106,6 +118,23 @@ using (var scope = app.Services.CreateScope())
         };
         dbContext.Users.AddRange(defaultUsers);
         await dbContext.SaveChangesAsync();
+    }
+    else if (!await dbContext.Users.AnyAsync(u => u.EntraId == "sales"))
+    {
+        dbContext.Users.Add(new CheckPay.Domain.Entities.User
+        {
+            Id = Guid.NewGuid(),
+            Email = "sales@checkpay.local",
+            DisplayName = "销售",
+            Role = CheckPay.Domain.Enums.UserRole.Sales,
+            EntraId = "sales",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("sales123"),
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await dbContext.SaveChangesAsync();
+        logger.LogInformation("已补充默认销售账号 sales（历史库无此用户时自动创建）");
     }
 }
 

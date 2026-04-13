@@ -1,13 +1,17 @@
 @page "/checks/upload"
-@attribute [Authorize]
+@attribute [Authorize(Roles = "Sales,Admin")]
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
+@using CheckPay.Application.Common
+@using CheckPay.Application.Common.Models
 @using CheckPay.Worker.Services
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
 @using System.Text.Json
 @implements IDisposable
 @inject IBlobStorageService BlobStorage
+@inject IJSRuntime JS
 @inject IApplicationDbContext DbContext
 @inject ISnackbar Snackbar
 @inject NavigationManager Navigation
@@ -129,6 +133,27 @@ else
                         </MudStack>
                     }
                 </MudPaper>
+
+                @if (!string.IsNullOrEmpty(_ocrCopyPanelText))
+                {
+                    <MudPaper Class="pa-4 mt-3">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                            <MudText Typo="Typo.h6">抽取全文 / 解析摘要</MudText>
+                            <MudButton Variant="Variant.Outlined"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.ContentCopy"
+                                       OnClick="CopyOcrPanelAsync">
+                                复制全部
+                            </MudButton>
+                        </MudStack>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                            与训练标注页相同格式，可整段复制后粘贴到备忘录或其它系统。
+                        </MudText>
+                        <MudPaper Class="pa-3" Style="background:#1e1e1e;border-radius:4px;overflow-x:auto;max-height:320px;overflow-y:auto">
+                            <pre style="color:#d4d4d4;font-size:12px;margin:0;white-space:pre-wrap;word-break:break-all">@_ocrCopyPanelText</pre>
+                        </MudPaper>
+                    </MudPaper>
+                }
             </MudItem>
 
             @* 右：复核表单 *@
@@ -221,6 +246,29 @@ else
                                            HelperText="@GetFieldHint("date")" />
                         </div>
 
+                        <MudDivider Class="my-3" />
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">ACH / 票面信息</MudText>
+                        <MudTextField @bind-Value="_routingNumber" Label="Routing Number (ABA)" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("routingNumber")" HelperText="@GetFieldHint("routingNumber")" />
+                        <MudTextField @bind-Value="_accountNumber" Label="Account Number" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("accountNumber")" HelperText="@GetFieldHint("accountNumber")" />
+                        <MudTextField @bind-Value="_bankName" Label="Bank Name" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("bankName")" HelperText="@GetFieldHint("bankName")" />
+                        <MudTextField @bind-Value="_accountHolderName" Label="Account Holder Name" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("accountHolderName")" HelperText="@GetFieldHint("accountHolderName")" />
+                        <MudTextField @bind-Value="_accountAddress" Label="Account Address" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
+                        <MudTextField @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")" />
+                        <MudTextField @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")" />
+                        <MudTextField @bind-Value="_forMemo" Label="For / Memo" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("forMemo")" HelperText="@GetFieldHint("forMemo")" />
+                        <MudTextField @bind-Value="_micrLineRaw" Label="MICR line (raw)" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("micrLineRaw")" HelperText="@GetFieldHint("micrLineRaw")" Lines="2" />
+                        <MudTextField @bind-Value="_checkNumberMicr" Label="Check # (MICR)" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("checkNumberMicr")" HelperText="@GetFieldHint("checkNumberMicr")" />
+
                         @* 客户编号 *@
                         <MudTextField @bind-Value="_customerCode"
                                       Label="客户编号"
@@ -249,6 +297,9 @@ else
                         <MudTextField @bind-Value="_notes" Label="备注" Lines="2"
                                       Variant="Variant.Outlined" Class="mb-3" />
 
+                        <MudTextField @bind-Value="_invoiceNumbers" Label="发票号码（多个用英文逗号分隔）" Variant="Variant.Outlined" Class="mb-2" />
+                        <MudTextField @bind-Value="_paymentPeriodText" Label="支付对应期间（如 2026-06）" Variant="Variant.Outlined" Class="mb-3" />
+
                         @* 置信度图例 *@
                         @if (_confidenceScores.Count > 0)
                         {
@@ -264,9 +315,13 @@ else
 
                         <MudButton Variant="Variant.Outlined" Class="mr-2" OnClick="SkipCurrent"
                                    Disabled="@(_current.Uploading)">跳过</MudButton>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveCurrent"
+                        <MudButton Variant="Variant.Outlined" Color="Color.Info" Class="mr-2" OnClick="() => SaveCurrent(false)"
                                    Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing)">
-                            @(_saving ? "保存中..." : "确认入库 ✓")
+                            @(_saving ? "保存中..." : "保存草稿")
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SaveCurrent(true)"
+                                   Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing)">
+                            @(_saving ? "保存中..." : "提交入库")
                         </MudButton>
                     }
                 </MudPaper>
@@ -317,12 +372,25 @@ else
     private DateTime? _checkDate;
     private string _customerCode = "";
     private string _notes = "";
+    private string _routingNumber = "";
+    private string _accountNumber = "";
+    private string _bankName = "";
+    private string _accountHolderName = "";
+    private string _accountAddress = "";
+    private string _accountType = "";
+    private string _payToOrderOf = "";
+    private string _forMemo = "";
+    private string _micrLineRaw = "";
+    private string _checkNumberMicr = "";
+    private string _invoiceNumbers = "";
+    private string _paymentPeriodText = "";
     private Dictionary<string, double> _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
 
     private bool _saving;
     private bool _retryingOcr;
     private double _ocrEngineSlider = 0; // 0=混元，1=Azure
     private OcrResult? _ocrResult; // 当前 OCR 结果
+    private string _ocrCopyPanelText = "";
 
     // 滑块值变化时自动切换表单内容
     private double OcrEngineSlider
@@ -334,7 +402,10 @@ else
             {
                 _ocrEngineSlider = value;
                 if (_current != null)
+                {
                     PrefillForm(_current, force: true);
+                    RefreshOcrCopyPanelText();
+                }
             }
         }
     }
@@ -442,6 +513,8 @@ else
                     // 当前选中且表单还是空的，自动预填
                     if (_current == item && IsFormEmpty())
                         PrefillForm(item);
+                    if (_current == item)
+                        RefreshOcrCopyPanelText();
 
                     await InvokeAsync(StateHasChanged);
                     break;
@@ -450,6 +523,8 @@ else
                 if (result.Status == OcrStatus.Failed)
                 {
                     item.OcrStatus = CheckOcrStatus.Failed;
+                    if (_current == item)
+                        RefreshOcrCopyPanelText();
                     await InvokeAsync(StateHasChanged);
                     break;
                 }
@@ -490,6 +565,25 @@ else
             _amount = amount;
         if (date.HasValue && (force || !_checkDate.HasValue))
             _checkDate = date;
+
+        void PrefillStr(string jsonProp, ref string target, bool onlyIfEmpty = true)
+        {
+            var v = ExtractString(root, jsonProp);
+            if (string.IsNullOrEmpty(v)) return;
+            if (onlyIfEmpty && !force && !string.IsNullOrEmpty(target)) return;
+            target = v;
+        }
+
+        PrefillStr("RoutingNumber", ref _routingNumber);
+        PrefillStr("AccountNumber", ref _accountNumber);
+        PrefillStr("BankName", ref _bankName);
+        PrefillStr("AccountHolderName", ref _accountHolderName);
+        PrefillStr("AccountAddress", ref _accountAddress);
+        PrefillStr("AccountType", ref _accountType);
+        PrefillStr("PayToOrderOf", ref _payToOrderOf);
+        PrefillStr("ForMemo", ref _forMemo);
+        PrefillStr("MicrLineRaw", ref _micrLineRaw);
+        PrefillStr("CheckNumberMicr", ref _checkNumberMicr);
     }
 
     /// <summary>滑块切换引擎时重新填充表单</summary>
@@ -526,7 +620,35 @@ else
         // 切换时如果 OCR 已完成，立即预填
         if (item.OcrStatus == CheckOcrStatus.Completed)
             PrefillForm(item);
+        RefreshOcrCopyPanelText();
         StateHasChanged();
+    }
+
+    private void RefreshOcrCopyPanelText()
+    {
+        if (_current == null || _current.OcrStatus != CheckOcrStatus.Completed)
+        {
+            _ocrCopyPanelText = "";
+            return;
+        }
+
+        var useAzure = _ocrEngineSlider == 1;
+        var doc = useAzure ? _current.AzureRawResult : _current.RawResult;
+        _ocrCopyPanelText = OcrCheckCopyPanelFormatter.FromJsonDocument(doc);
+    }
+
+    private async Task CopyOcrPanelAsync()
+    {
+        if (string.IsNullOrEmpty(_ocrCopyPanelText)) return;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _ocrCopyPanelText);
+            Snackbar.Add("已复制到剪贴板", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"复制失败: {ex.Message}", Severity.Warning);
+        }
     }
 
     /// <summary>再次识别：重置 OcrResult 状态，重新入队</summary>
@@ -558,6 +680,9 @@ else
             _current.OcrStatus = CheckOcrStatus.Recognizing;
             _current.RawResult = null;
             _current.ConfidenceScores = new(StringComparer.OrdinalIgnoreCase);
+            _current.AzureRawResult = null;
+            _current.AzureConfidenceScores = new(StringComparer.OrdinalIgnoreCase);
+            _ocrCopyPanelText = "";
             ClearForm();
 
             Snackbar.Add("已重新提交 OCR 任务", Severity.Info);
@@ -575,14 +700,14 @@ else
         }
     }
 
-    private async Task SaveCurrent()
+    private async Task SaveCurrent(bool submitAsFinal)
     {
         if (_saving || _current == null) return;
         _saving = true;
 
         try
         {
-            var error = await ValidateFormAsync();
+            var error = await ValidateFormAsync(submitAsFinal);
             if (!string.IsNullOrEmpty(error))
             {
                 Snackbar.Add(error, Severity.Warning);
@@ -590,6 +715,9 @@ else
             }
 
             var customer = await ResolveCustomerAsync();
+            var mismatch = CheckMasterDataComparer.HasMismatch(customer, NullIfEmpty(_bankName), NullIfEmpty(_accountHolderName));
+            if (mismatch)
+                Snackbar.Add("与客户主数据中的期望银行/持有人不一致，已标记警告。", Severity.Warning);
 
             var check = new CheckRecord
             {
@@ -599,16 +727,30 @@ else
                 CustomerId = customer.Id,
                 ImageUrl = _current.ImageUrl,
                 OcrResultId = _current.OcrResultId,
-                Notes = _notes,
+                Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
                 Status = CheckStatus.PendingDebit,
-                RowVersion = 0
+                RowVersion = 0,
+                BankName = NullIfEmpty(_bankName),
+                RoutingNumber = NullIfEmpty(_routingNumber),
+                AccountNumber = NullIfEmpty(_accountNumber),
+                AccountType = NullIfEmpty(_accountType),
+                AccountHolderName = NullIfEmpty(_accountHolderName),
+                AccountAddress = NullIfEmpty(_accountAddress),
+                PayToOrderOf = NullIfEmpty(_payToOrderOf),
+                ForMemo = NullIfEmpty(_forMemo),
+                MicrLineRaw = NullIfEmpty(_micrLineRaw),
+                CheckNumberMicr = NullIfEmpty(_checkNumberMicr),
+                InvoiceNumbers = NullIfEmpty(_invoiceNumbers),
+                PaymentPeriodText = NullIfEmpty(_paymentPeriodText),
+                SubmittedAt = submitAsFinal ? DateTime.UtcNow : null,
+                CustomerMasterMismatchWarning = mismatch
             };
 
             DbContext.CheckRecords.Add(check);
             await DbContext.SaveChangesAsync();
 
             _current.Done = true;
-            Snackbar.Add("支票入库成功！", Severity.Success);
+            Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "支票草稿已保存。", Severity.Success);
 
             _current = _uploadQueue.FirstOrDefault(q => !q.Done);
             ClearForm();
@@ -658,7 +800,7 @@ else
         ClearForm();
     }
 
-    private async Task<string?> ValidateFormAsync()
+    private async Task<string?> ValidateFormAsync(bool submitAsFinal)
     {
         if (_current == null || string.IsNullOrEmpty(_current.ImageUrl))
             return "当前文件尚未上传完成";
@@ -670,6 +812,13 @@ else
             return "请选择支票日期";
         if (string.IsNullOrWhiteSpace(_customerCode))
             return "请输入客户编号";
+        if (submitAsFinal)
+        {
+            if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
+                return "提交入库时 Routing Number 须为 9 位数字";
+            if (string.IsNullOrWhiteSpace(_accountNumber))
+                return "提交入库时请填写 Account Number";
+        }
 
         var exists = await DbContext.CheckRecords.AnyAsync(c => c.CheckNumber == _checkNumber);
         if (exists)
@@ -677,6 +826,8 @@ else
 
         return null;
     }
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
     private Customer? GetCustomerMatch()
     {
@@ -711,11 +862,15 @@ else
         _checkDate = null;
         _customerCode = "";
         _notes = "";
+        _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
+        _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
+        _invoiceNumbers = _paymentPeriodText = "";
         _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private bool IsFormEmpty() =>
-        string.IsNullOrEmpty(_checkNumber) && _amount <= 0 && string.IsNullOrEmpty(_customerCode);
+        string.IsNullOrEmpty(_checkNumber) && _amount <= 0 && string.IsNullOrEmpty(_customerCode)
+        && string.IsNullOrEmpty(_routingNumber) && string.IsNullOrEmpty(_accountNumber);
 
     private void Reset()
     {
@@ -727,7 +882,29 @@ else
     // ── 置信度相关 ────────────────────────────────────────────────
 
     private double GetConfidence(string field)
-        => _confidenceScores.TryGetValue(field, out var value) ? value : 0;
+    {
+        var key = MapConfidenceKey(field);
+        if (_confidenceScores.TryGetValue(key, out var v)) return v;
+        return _confidenceScores.TryGetValue(field, out var v2) ? v2 : 0;
+    }
+
+    private static string MapConfidenceKey(string field) => field switch
+    {
+        "checkNumber" => "CheckNumber",
+        "amount" => "Amount",
+        "date" => "Date",
+        "routingNumber" => "RoutingNumber",
+        "accountNumber" => "AccountNumber",
+        "bankName" => "BankName",
+        "accountHolderName" => "AccountHolderName",
+        "accountAddress" => "AccountAddress",
+        "accountType" => "AccountType",
+        "payToOrderOf" => "PayToOrderOf",
+        "forMemo" => "ForMemo",
+        "micrLineRaw" => "MicrLineRaw",
+        "checkNumberMicr" => "CheckNumberMicr",
+        _ => field
+    };
 
     private string GetFieldStyle(string field)
     {

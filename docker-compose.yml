@@ -71,6 +71,11 @@ services:
       Ocr__Model: ${OCR_MODEL:-hunyuan-vision}
       Ocr__MaxRetries: ${OCR_MAX_RETRIES:-3}
       Ocr__RetryDelayMs: ${OCR_RETRY_DELAY_MS:-3000}
+      # 支票 OCR：从训练样本表注入混元 Prompt 的条数/总字符上限（0 条=关闭）
+      Ocr__CheckFewShotMaxSamples: ${OCR_CHECK_FEWSHOT_MAX_SAMPLES:-5}
+      Ocr__CheckFewShotMaxChars: ${OCR_CHECK_FEWSHOT_MAX_CHARS:-12000}
+      Ocr__CheckAzureTrainingCorrectionEnabled: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_ENABLED:-true}
+      Ocr__CheckAzureTrainingCorrectionMaxScan: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MAX_SCAN:-40}
 
       # Azure AI Vision OCR（对比引擎，留空则跳过）
       Azure__DocumentIntelligence__Endpoint: ${AZURE_VISION_ENDPOINT:-}
@@ -90,7 +95,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
-  
- networks:
+
+networks:
   app-network:
     driver: bridge

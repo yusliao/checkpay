@@ -1,18 +1,19 @@
 @page "/admin/ocr-training"
-@attribute [Authorize]
+@attribute [Authorize(Roles = "Admin")]
 @using CheckPay.Application.Common.Interfaces
+@using CheckPay.Application.Common
 @using CheckPay.Domain.Entities
 @using Microsoft.EntityFrameworkCore
 @inject IApplicationDbContext DbContext
 @inject IBlobStorageService BlobStorage
-@inject IOcrService OcrService
+@inject IAdminTrainingOcrService OcrService
 @inject ISnackbar Snackbar
 
-<PageTitle>OCR 训练标注 - CheckPay</PageTitle>
+<PageTitle>扣款 OCR 训练标注 - CheckPay</PageTitle>
 
-<MudText Typo="Typo.h4" GutterBottom="true">OCR 训练标注</MudText>
+<MudText Typo="Typo.h4" GutterBottom="true">扣款 OCR 训练标注</MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-    上传扣款凭证图片，查看 OCR 识别结果，填入正确值并保存。积累样本后由 AI 分析格式规律、优化识别 Prompt。
+    上传扣款凭证图片，查看 OCR 识别结果，填入正确值并保存。已配置 Azure Document Intelligence 时，本页优先使用 <strong>Azure AI Vision Read</strong> 抽字与启发式解析；否则使用混元。积累样本后可用于优化 Prompt 与规则。
 </MudText>
 
 <MudGrid>
@@ -123,11 +124,11 @@
 </MudGrid>
 
 @* ── 样本列表 ── *@
-<MudText Typo="Typo.h5" Class="mt-6 mb-2">已收集样本（@_samples.Count 条）</MudText>
+<MudText Typo="Typo.h5" Class="mt-6 mb-2">已收集扣款样本（@_samples.Count 条）</MudText>
 
 @if (_samples.Count == 0)
 {
-    <MudAlert Severity="Severity.Info">暂无样本，上传图片并标注后会显示在这里。</MudAlert>
+    <MudAlert Severity="Severity.Info">暂无扣款样本，上传图片并标注后会显示在这里。</MudAlert>
 }
 else
 {
@@ -222,6 +223,7 @@ else
     private async Task LoadSamplesAsync()
     {
         _samples = await DbContext.OcrTrainingSamples
+            .Where(s => s.DocumentType == "debit")
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
     }
@@ -277,7 +279,7 @@ else
 
             // 把日志中的原始响应暂时用占位（实际原始响应已在 docker logs 中可见）
             // 真实原始响应需要通过扩展 IOcrService 接口来获取，后续可优化
-            _ocrRawResponse = BuildDisplayResponse(result);
+            _ocrRawResponse = OcrDebitCopyPanelFormatter.Build(result);
 
             // 预填正确值（方便用户只改有误的字段）
             _correctCheckNumber   ??= result.CheckNumber;
@@ -295,22 +297,6 @@ else
             _running = false;
         }
     }
-
-    private static string BuildDisplayResponse(DebitOcrResultDto result)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("// 解析后的识别结果（原始响应请查看 docker logs）");
-        sb.AppendLine("{");
-        sb.AppendLine($"  \"check_number\": {JsonVal(result.CheckNumber)},");
-        sb.AppendLine($"  \"amount\": {JsonVal(result.Amount)},");
-        sb.AppendLine($"  \"date\": {JsonVal(result.Date?.ToString("yyyy-MM-dd"))},");
-        sb.AppendLine($"  \"bank_reference\": {JsonVal(result.BankReference)}");
-        sb.AppendLine("}");
-        return sb.ToString();
-    }
-
-    private static string JsonVal(string? v) => v == null ? "null" : $"\"{v}\"";
-    private static string JsonVal(decimal? v) => v == null ? "null" : v.Value.ToString("F2");
 
     private async Task SaveSample()
     {

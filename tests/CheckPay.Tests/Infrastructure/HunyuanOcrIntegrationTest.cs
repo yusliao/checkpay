@@ -11,6 +11,12 @@ namespace CheckPay.Tests.Infrastructure;
 /// </summary>
 public class HunyuanOcrIntegrationTest
 {
+    private sealed class EmptyFewShotProvider : ICheckOcrFewShotProvider
+    {
+        public Task<string> BuildCheckPromptAugmentationAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(string.Empty);
+    }
+
     // 用一张公开可访问的美国支票样本图片（Wiki Commons 公开图）
     private const string SampleCheckUrl =
         "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/Check_from_the_United_States.jpg/1280px-Check_from_the_United_States.jpg";
@@ -33,7 +39,11 @@ public class HunyuanOcrIntegrationTest
 
         // 集成测试需要真实 blob 服务，这里用 HttpClient 模拟下载
         var blobService = new HttpBlobStorageService();
-        var service = new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, blobService);
+        var service = new HunyuanOcrService(
+            configuration,
+            NullLogger<HunyuanOcrService>.Instance,
+            blobService,
+            new EmptyFewShotProvider());
 
         // Act
         var result = await service.ProcessCheckImageAsync(SampleCheckUrl);

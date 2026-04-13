@@ -16,6 +16,8 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.Property(e => e.CustomerCode).HasColumnName("customer_code").HasMaxLength(50).IsRequired();
         builder.Property(e => e.CustomerName).HasColumnName("customer_name").HasMaxLength(200).IsRequired();
         builder.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
+        builder.Property(e => e.ExpectedBankName).HasColumnName("expected_bank_name").HasMaxLength(200);
+        builder.Property(e => e.ExpectedAccountHolderName).HasColumnName("expected_account_holder_name").HasMaxLength(300);
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
         builder.Property(e => e.DeletedAt).HasColumnName("deleted_at");

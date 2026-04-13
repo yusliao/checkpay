@@ -1,10 +1,13 @@
 @page "/debits/import"
-@attribute [Authorize]
+@attribute [Authorize(Roles = "USFinance,Admin")]
 @using CheckPay.Application.Common.Interfaces
+@using CheckPay.Application.Common
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
 @inject IApplicationDbContext DbContext
+@inject IJSRuntime JS
 @inject IBlobStorageService BlobStorage
 @inject IOcrService OcrService
 @inject ISnackbar Snackbar
@@ -117,6 +120,27 @@ else
                         <MudText Class="mt-2">上传中...</MudText>
                     }
                 </MudPaper>
+
+                @if (!string.IsNullOrEmpty(_debitOcrCopyPanelText))
+                {
+                    <MudPaper Class="pa-4 mt-3">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                            <MudText Typo="Typo.h6">抽取全文 / 解析摘要</MudText>
+                            <MudButton Variant="Variant.Outlined"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.ContentCopy"
+                                       OnClick="CopyDebitOcrPanelAsync">
+                                复制全部
+                            </MudButton>
+                        </MudStack>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                            与训练标注页相同格式，可整段复制后粘贴到备忘录或其它系统。
+                        </MudText>
+                        <MudPaper Class="pa-3" Style="background:#1e1e1e;border-radius:4px;overflow-x:auto;max-height:320px;overflow-y:auto">
+                            <pre style="color:#d4d4d4;font-size:12px;margin:0;white-space:pre-wrap;word-break:break-all">@_debitOcrCopyPanelText</pre>
+                        </MudPaper>
+                    </MudPaper>
+                }
             </MudItem>
 
             @* 右：录入表单 *@
@@ -321,6 +345,7 @@ else
     private bool _checkedOnce;
     private bool _reOcring;
     private bool _saveOcrSample = true;
+    private string _debitOcrCopyPanelText = "";
 
     // 实时匹配状态
     private CheckRecord? _matchedCheck;
@@ -393,6 +418,7 @@ else
         // 重置 OCR 状态，准备重新识别
         _current.OcrStatus = DebitOcrStatus.Idle;
         _current.OcrResult = null;
+        _debitOcrCopyPanelText = "";
         StateHasChanged();
 
         try
@@ -410,6 +436,8 @@ else
     private async Task TriggerOcrAsync(QueueItem item)
     {
         item.OcrStatus = DebitOcrStatus.Recognizing;
+        if (_current == item)
+            _debitOcrCopyPanelText = "";
         StateHasChanged();
         try
         {
@@ -426,6 +454,8 @@ else
         }
         finally
         {
+            if (_current == item)
+                RefreshDebitOcrCopyPanelText();
             StateHasChanged();
         }
     }
@@ -462,6 +492,32 @@ else
         // 切换时如果 OCR 已完成，立即预填
         if (item.OcrStatus == DebitOcrStatus.Success && item.OcrResult != null)
             await ApplyOcrResultAsync(item.OcrResult);
+        RefreshDebitOcrCopyPanelText();
+    }
+
+    private void RefreshDebitOcrCopyPanelText()
+    {
+        if (_current?.OcrResult == null || _current.OcrStatus != DebitOcrStatus.Success)
+        {
+            _debitOcrCopyPanelText = "";
+            return;
+        }
+
+        _debitOcrCopyPanelText = OcrDebitCopyPanelFormatter.Build(_current.OcrResult);
+    }
+
+    private async Task CopyDebitOcrPanelAsync()
+    {
+        if (string.IsNullOrEmpty(_debitOcrCopyPanelText)) return;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _debitOcrCopyPanelText);
+            Snackbar.Add("已复制到剪贴板", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"复制失败: {ex.Message}", Severity.Warning);
+        }
     }
 
     /// <summary>客户切换时加载该客户的待扣款支票列表</summary>

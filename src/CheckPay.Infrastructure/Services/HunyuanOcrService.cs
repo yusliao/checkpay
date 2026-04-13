@@ -18,51 +18,9 @@ public class HunyuanOcrService : IOcrService
     private readonly HunyuanClient _client;
     private readonly ILogger<HunyuanOcrService> _logger;
     private readonly IBlobStorageService _blobStorageService;
+    private readonly ICheckOcrFewShotProvider _checkFewShotProvider;
     private readonly string _model;
 
-    /// <summary>
-    /// 支票 OCR Prompt：Chain-of-Thought 引导模型分步定位 MICR 行、金额、日期
-    /// 置信度直接输出 0.0-1.0 浮点数，精度远优于 high/medium/low 字符串
-    /// </summary>
-    private const string CheckOcrPrompt = """
-        You are an expert US bank check reader. Follow these steps carefully and return ONLY a valid JSON object, no explanations, no markdown.
-
-        Step 1 - Locate the MICR line (magnetic ink characters at the bottom of the check):
-          Format: ⑆routing_number⑆ ⑈account_number⑈ check_number
-          The check number is typically the 4-6 digit number at the far RIGHT of the MICR line.
-          Also find the printed check number in the upper-right corner of the check.
-          Cross-validate: if both MICR and printed numbers match, confidence is near 1.0.
-
-        Step 2 - Locate the amount:
-          Primary: the "courtesy amount box" (numeric amount in the top-right box, e.g. "$1,234.56")
-          Validation: the "legal amount line" (written-out amount, e.g. "One thousand two hundred thirty-four and 56/100")
-          If both agree, confidence is near 1.0.
-
-        Step 3 - Locate the date:
-          Common US formats: MM/DD/YYYY, Month DD YYYY, MM-DD-YY
-          Always output in YYYY-MM-DD format.
-
-        Step 4 - Output this exact JSON structure:
-        {
-          "check_number": "the check number as a string (digits only, no spaces)",
-          "amount": 0.00,
-          "date": "YYYY-MM-DD",
-          "confidence": {
-            "check_number": 0.0,
-            "amount": 0.0,
-            "date": 0.0
-          }
-        }
-
-        Confidence scoring rules (output a decimal number between 0.0 and 1.0):
-        - MICR and printed number match → check_number confidence: 0.95
-        - Only one source found, clearly readable → 0.75
-        - Partially visible or uncertain → 0.45
-        - Cannot be found → set field to null, confidence: 0.1
-        - Amount: both courtesy box and legal line agree → 0.95; only one source → 0.75; unclear → 0.45
-        - Date: clearly printed, unambiguous → 0.90; partially legible → 0.50
-        - amount must be a number without $ or comma symbols
-        """;
 
     /// <summary>
     /// 银行扣款凭证 OCR Prompt：识别扣款金额、日期、银行流水号、支票号（可能不存在）
@@ -94,10 +52,60 @@ public class HunyuanOcrService : IOcrService
         - bank_reference is the transaction reference / trace number from the bank statement
         """;
 
+    /// <summary>支票 ACH/MICR 扩展字段 OCR（与 ParseCheckOcrResponse 对齐）</summary>
+    private const string CheckOcrPromptAch = """
+        You are an expert US bank check reader for ACH and paper checks. Return ONLY a valid JSON object, no markdown, no explanation.
+
+        Step 1 - MICR line (bottom): bank order varies. Extract routing ABA (9 digits), account number, check number from MICR.
+          Copy readable MICR text to micr_line_raw. If field order is unusual, set micr_field_order_note briefly.
+          check_number_micr = check number read from MICR (may differ from upper-right printed).
+
+        Step 2 - Pay to the order of -> pay_to_order_of; For / memo -> for_memo (null if blank).
+
+        Step 3 - Top area: bank_name, account_holder_name, account_address (street city ST ZIP), account_type if shown.
+
+        Step 4 - Amount: number without $ or commas; null if blank check. Date: YYYY-MM-DD or null.
+
+        Output:
+        {
+          "check_number": null,
+          "check_number_micr": null,
+          "amount": null,
+          "date": null,
+          "routing_number": null,
+          "account_number": null,
+          "bank_name": null,
+          "account_holder_name": null,
+          "account_address": null,
+          "account_type": null,
+          "pay_to_order_of": null,
+          "for_memo": null,
+          "micr_line_raw": null,
+          "micr_field_order_note": null,
+          "confidence": {
+            "check_number": 0.0,
+            "check_number_micr": 0.0,
+            "amount": 0.0,
+            "date": 0.0,
+            "routing_number": 0.0,
+            "account_number": 0.0,
+            "bank_name": 0.0,
+            "account_holder_name": 0.0,
+            "account_address": 0.0,
+            "account_type": 0.0,
+            "pay_to_order_of": 0.0,
+            "for_memo": 0.0,
+            "micr_line_raw": 0.0
+          }
+        }
+        Confidence 0.0-1.0 each. routing_number must be exactly 9 digits or null; else null and low confidence.
+        """;
+
     public HunyuanOcrService(
         IConfiguration configuration,
         ILogger<HunyuanOcrService> logger,
-        IBlobStorageService blobStorageService)
+        IBlobStorageService blobStorageService,
+        ICheckOcrFewShotProvider checkFewShotProvider)
     {
         var secretId = configuration["Hunyuan:SecretId"]
             ?? throw new InvalidOperationException("腾讯混元 SecretId 未配置");
@@ -111,23 +119,27 @@ public class HunyuanOcrService : IOcrService
         _client = new HunyuanClient(credential, region);
         _logger = logger;
         _blobStorageService = blobStorageService;
+        _checkFewShotProvider = checkFewShotProvider;
     }
 
     public async Task<OcrResultDto> ProcessCheckImageAsync(string imageUrl, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("混元 OCR 开始处理支票: {ImageUrl}", imageUrl);
         var dataUri = await BuildDataUriAsync(imageUrl, cancellationToken);
-        var rawContent = await CallHunyuanVisionAsync(dataUri, CheckOcrPrompt);
+        var fewShot = await _checkFewShotProvider.BuildCheckPromptAugmentationAsync(cancellationToken);
+        var prompt = string.IsNullOrWhiteSpace(fewShot)
+            ? CheckOcrPromptAch
+            : CheckOcrPromptAch + "\n\n" + fewShot;
+        var rawContent = await CallHunyuanVisionAsync(dataUri, prompt);
         _logger.LogInformation("混元 OCR 原始响应（支票）: {Content}", rawContent);
         var result = ParseCheckOcrResponse(rawContent);
         _logger.LogInformation(
-            "混元 OCR 解析结果 — 支票号: {CheckNumber} | 金额: {Amount} | 日期: {Date} | 置信度: 支票号={ConfCheckNumber:F2} 金额={ConfAmount:F2} 日期={ConfDate:F2}",
+            "混元 OCR 解析结果 — 支票号: {CheckNumber} | RTN: {Rtn} | 账号末4: {AcctTail} | 金额: {Amount} | 日期: {Date}",
             result.CheckNumber,
+            result.RoutingNumber ?? "-",
+            result.AccountNumber is { Length: >= 4 } a ? a[^4..] : "-",
             result.Amount,
-            result.Date.ToString("yyyy-MM-dd"),
-            result.ConfidenceScores.GetValueOrDefault("CheckNumber"),
-            result.ConfidenceScores.GetValueOrDefault("Amount"),
-            result.ConfidenceScores.GetValueOrDefault("Date"));
+            result.Date.ToString("yyyy-MM-dd"));
         return result;
     }
 
@@ -213,18 +225,77 @@ public class HunyuanOcrService : IOcrService
         var amount = GetDecimal(root, "amount") ?? 0m;
         var date = GetDate(root, "date") ?? DateTime.UtcNow;
 
-        var confidenceScores = new Dictionary<string, double>
+        var routing = NormalizeDigits(GetString(root, "routing_number"));
+        var accountNumber = GetString(root, "account_number")?.Trim();
+        var bankName = GetString(root, "bank_name")?.Trim();
+        var holder = GetString(root, "account_holder_name")?.Trim();
+        var address = GetString(root, "account_address")?.Trim();
+        var accountType = GetString(root, "account_type")?.Trim();
+        var payTo = GetString(root, "pay_to_order_of")?.Trim();
+        var forMemo = GetString(root, "for_memo")?.Trim();
+        var micrRaw = GetString(root, "micr_line_raw")?.Trim();
+        var checkMicr = GetString(root, "check_number_micr")?.Trim();
+        var orderNote = GetString(root, "micr_field_order_note")?.Trim();
+
+        var confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
         {
-            { "CheckNumber", 0.5 }, { "Amount", 0.5 }, { "Date", 0.5 }
+            { "CheckNumber", 0.5 }, { "CheckNumberMicr", 0.5 }, { "Amount", 0.5 }, { "Date", 0.5 },
+            { "RoutingNumber", 0.5 }, { "AccountNumber", 0.5 }, { "BankName", 0.5 },
+            { "AccountHolderName", 0.5 }, { "AccountAddress", 0.5 }, { "AccountType", 0.5 },
+            { "PayToOrderOf", 0.5 }, { "ForMemo", 0.5 }, { "MicrLineRaw", 0.5 }
         };
         if (root.TryGetProperty("confidence", out var conf))
         {
             confidenceScores["CheckNumber"] = GetDoubleConfidence(conf, "check_number");
-            confidenceScores["Amount"]      = GetDoubleConfidence(conf, "amount");
-            confidenceScores["Date"]        = GetDoubleConfidence(conf, "date");
+            confidenceScores["CheckNumberMicr"] = GetDoubleConfidence(conf, "check_number_micr");
+            confidenceScores["Amount"] = GetDoubleConfidence(conf, "amount");
+            confidenceScores["Date"] = GetDoubleConfidence(conf, "date");
+            confidenceScores["RoutingNumber"] = GetDoubleConfidence(conf, "routing_number");
+            confidenceScores["AccountNumber"] = GetDoubleConfidence(conf, "account_number");
+            confidenceScores["BankName"] = GetDoubleConfidence(conf, "bank_name");
+            confidenceScores["AccountHolderName"] = GetDoubleConfidence(conf, "account_holder_name");
+            confidenceScores["AccountAddress"] = GetDoubleConfidence(conf, "account_address");
+            confidenceScores["AccountType"] = GetDoubleConfidence(conf, "account_type");
+            confidenceScores["PayToOrderOf"] = GetDoubleConfidence(conf, "pay_to_order_of");
+            confidenceScores["ForMemo"] = GetDoubleConfidence(conf, "for_memo");
+            confidenceScores["MicrLineRaw"] = GetDoubleConfidence(conf, "micr_line_raw");
         }
 
-        return new OcrResultDto(checkNumber, amount, date, confidenceScores);
+        if (routing is { Length: not 9 } or null)
+        {
+            routing = null;
+            if (confidenceScores.GetValueOrDefault("RoutingNumber") > 0.2)
+                confidenceScores["RoutingNumber"] = 0.15;
+        }
+        else if (!routing.All(char.IsDigit))
+        {
+            routing = null;
+            confidenceScores["RoutingNumber"] = 0.12;
+        }
+
+        return new OcrResultDto(
+            checkNumber,
+            amount,
+            date,
+            confidenceScores,
+            RoutingNumber: routing,
+            AccountNumber: string.IsNullOrWhiteSpace(accountNumber) ? null : accountNumber,
+            BankName: string.IsNullOrWhiteSpace(bankName) ? null : bankName,
+            AccountHolderName: string.IsNullOrWhiteSpace(holder) ? null : holder,
+            AccountAddress: string.IsNullOrWhiteSpace(address) ? null : address,
+            AccountType: string.IsNullOrWhiteSpace(accountType) ? null : accountType,
+            PayToOrderOf: string.IsNullOrWhiteSpace(payTo) ? null : payTo,
+            ForMemo: string.IsNullOrWhiteSpace(forMemo) ? null : forMemo,
+            MicrLineRaw: string.IsNullOrWhiteSpace(micrRaw) ? null : micrRaw,
+            CheckNumberMicr: string.IsNullOrWhiteSpace(checkMicr) ? null : checkMicr,
+            MicrFieldOrderNote: string.IsNullOrWhiteSpace(orderNote) ? null : orderNote);
+    }
+
+    private static string? NormalizeDigits(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var only = new string(s.Where(char.IsDigit).ToArray());
+        return only.Length == 0 ? null : only;
     }
 
     private static DebitOcrResultDto ParseDebitOcrResponse(string rawContent)

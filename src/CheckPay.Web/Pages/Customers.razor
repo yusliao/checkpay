@@ -22,6 +22,8 @@
     <HeaderContent>
         <MudTh>客户编号</MudTh>
         <MudTh>客户名称</MudTh>
+        <MudTh>期望银行</MudTh>
+        <MudTh>期望持有人</MudTh>
         <MudTh>状态</MudTh>
         <MudTh>操作</MudTh>
     </HeaderContent>
@@ -33,9 +35,15 @@
                 <MudText Color="Color.Secondary">@context.CustomerCode</MudText>
             </MudTd>
             <MudTd DataLabel="客户名称">
-                <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Style="min-width:200px" />
+                <MudStack Spacing="1">
+                    <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Style="min-width:200px" />
+                    <MudTextField @bind-Value="_editExpectedBank" Label="期望银行" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    <MudTextField @bind-Value="_editExpectedHolder" Label="期望账户持有人" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudStack>
             </MudTd>
+            <MudTd DataLabel="期望银行"><MudText Typo="Typo.caption" Color="Color.Secondary">见名称列</MudText></MudTd>
+            <MudTd DataLabel="期望持有人"><MudText Typo="Typo.caption" Color="Color.Secondary">见名称列</MudText></MudTd>
             <MudTd DataLabel="状态">
                 <MudSelect @bind-Value="_editIsActive" Variant="Variant.Outlined" Margin="Margin.Dense"
                            Style="min-width:100px">
@@ -56,6 +64,8 @@
             @* 只读行 *@
             <MudTd DataLabel="客户编号">@context.CustomerCode</MudTd>
             <MudTd DataLabel="客户名称">@context.CustomerName</MudTd>
+            <MudTd DataLabel="期望银行">@(context.ExpectedBankName ?? "—")</MudTd>
+            <MudTd DataLabel="期望持有人">@(context.ExpectedAccountHolderName ?? "—")</MudTd>
             <MudTd DataLabel="状态">
                 <MudChip T="string" Size="Size.Small"
                          Color="@(context.IsActive ? Color.Success : Color.Default)">
@@ -88,15 +98,19 @@
     <FooterContent>
         @if (_addingNew)
         {
-            <MudTd colspan="4">
+            <MudTd colspan="6">
                 <MudGrid Class="pa-2" AlignItems="AlignItems.Center">
                     <MudItem xs="3">
                         <MudTextField @bind-Value="_newCode" Label="客户编号" Variant="Variant.Outlined"
                                       Margin="Margin.Dense" Placeholder="如 CUST-003" />
                     </MudItem>
                     <MudItem xs="5">
-                        <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
+                        <MudStack Spacing="1">
+                            <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" />
+                            <MudTextField @bind-Value="_newExpectedBank" Label="期望银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            <MudTextField @bind-Value="_newExpectedHolder" Label="期望持有人（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudStack>
                     </MudItem>
                     <MudItem xs="4">
                         <MudStack Row="true" Spacing="1">
@@ -121,12 +135,16 @@
     // 内联编辑状态
     private Guid? _editingId;
     private string _editName = "";
+    private string _editExpectedBank = "";
+    private string _editExpectedHolder = "";
     private bool _editIsActive;
 
     // 新增行状态
     private bool _addingNew;
     private string _newCode = "";
     private string _newName = "";
+    private string _newExpectedBank = "";
+    private string _newExpectedHolder = "";
 
     protected override async Task OnInitializedAsync() => await LoadData();
 
@@ -145,6 +163,8 @@
     {
         _editingId = c.Id;
         _editName = c.CustomerName;
+        _editExpectedBank = c.ExpectedBankName ?? "";
+        _editExpectedHolder = c.ExpectedAccountHolderName ?? "";
         _editIsActive = c.IsActive;
     }
 
@@ -152,6 +172,8 @@
     {
         _editingId = null;
         _editName = "";
+        _editExpectedBank = "";
+        _editExpectedHolder = "";
     }
 
     private async Task SaveEdit(Customer c)
@@ -159,6 +181,8 @@
         if (string.IsNullOrWhiteSpace(_editName)) return;
 
         c.CustomerName = _editName.Trim();
+        c.ExpectedBankName = string.IsNullOrWhiteSpace(_editExpectedBank) ? null : _editExpectedBank.Trim();
+        c.ExpectedAccountHolderName = string.IsNullOrWhiteSpace(_editExpectedHolder) ? null : _editExpectedHolder.Trim();
         c.IsActive = _editIsActive;
         c.UpdatedAt = DateTime.UtcNow;
         await DbContext.SaveChangesAsync();
@@ -180,11 +204,13 @@
     }
 
     // 新增行
-    private void StartAddNew()
+       private void StartAddNew()
     {
         _addingNew = true;
         _newCode = "";
         _newName = "";
+        _newExpectedBank = "";
+        _newExpectedHolder = "";
     }
 
     private void CancelNew()
@@ -210,6 +236,8 @@
         {
             CustomerCode = _newCode.Trim().ToUpper(),
             CustomerName = _newName.Trim(),
+            ExpectedBankName = string.IsNullOrWhiteSpace(_newExpectedBank) ? null : _newExpectedBank.Trim(),
+            ExpectedAccountHolderName = string.IsNullOrWhiteSpace(_newExpectedHolder) ? null : _newExpectedHolder.Trim(),
             IsActive = true
         };
         DbContext.Customers.Add(customer);

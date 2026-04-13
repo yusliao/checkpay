@@ -10,6 +10,14 @@ public class HunyuanOcrServiceTests
     // 构造函数测试只验证配置校验，blob 服务用不到，给个空实现即可
     private static IBlobStorageService NullBlob() => new NullBlobStorageService();
 
+    private sealed class EmptyFewShotProvider : ICheckOcrFewShotProvider
+    {
+        public Task<string> BuildCheckPromptAugmentationAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(string.Empty);
+    }
+
+    private static ICheckOcrFewShotProvider EmptyFewShot() => new EmptyFewShotProvider();
+
     private sealed class NullBlobStorageService : IBlobStorageService
     {
         public Task<string> UploadAsync(Stream data, string fileName, CancellationToken ct = default) => Task.FromResult(string.Empty);
@@ -28,7 +36,7 @@ public class HunyuanOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob(), EmptyFewShot()));
     }
 
     [Fact]
@@ -42,7 +50,7 @@ public class HunyuanOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob(), EmptyFewShot()));
     }
 
     [Fact]
@@ -58,7 +66,7 @@ public class HunyuanOcrServiceTests
 
         // 不抛异常就算通过，不需要真实凭证创建客户端
         var ex = Record.Exception(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob(), EmptyFewShot()));
 
         Assert.Null(ex);
     }
@@ -76,7 +84,7 @@ public class HunyuanOcrServiceTests
             .Build();
 
         var ex = Record.Exception(
-            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob()));
+            () => new HunyuanOcrService(configuration, NullLogger<HunyuanOcrService>.Instance, NullBlob(), EmptyFewShot()));
 
         Assert.Null(ex);
     }

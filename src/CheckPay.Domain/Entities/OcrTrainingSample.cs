@@ -30,4 +30,10 @@ public class OcrTrainingSample : BaseEntity
 
     /// <summary>备注（如图片来源、特殊格式说明）</summary>
     public string? Notes { get; set; }
+
+    /// <summary>支票 ACH 扩展字段 OCR 快照（JSON，与 OcrResultDto 扩展字段对齐）</summary>
+    public string? OcrAchExtensionJson { get; set; }
+
+    /// <summary>支票 ACH 扩展字段人工标注（JSON）</summary>
+    public string? CorrectAchExtensionJson { get; set; }
 }

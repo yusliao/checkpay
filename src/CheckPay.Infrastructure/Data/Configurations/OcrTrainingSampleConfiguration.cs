@@ -28,6 +28,8 @@ public class OcrTrainingSampleConfiguration : IEntityTypeConfiguration<OcrTraini
         builder.Property(e => e.CorrectBankReference).HasColumnName("correct_bank_reference").HasMaxLength(200);
 
         builder.Property(e => e.Notes).HasColumnName("notes").HasColumnType("text");
+        builder.Property(e => e.OcrAchExtensionJson).HasColumnName("ocr_ach_extension_json").HasColumnType("text");
+        builder.Property(e => e.CorrectAchExtensionJson).HasColumnName("correct_ach_extension_json").HasColumnType("text");
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
 

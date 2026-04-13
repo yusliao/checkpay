@@ -1,0 +1,113 @@
+@page "/reports/ach-cn"
+@attribute [Authorize(Roles = "CNFinance,Admin")]
+@using System.Text
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>ACH 已扣款导出（大陆财务） - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">ACH 已扣款导出（大陆财务）</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    筛选美国侧已标记「ACH 扣款成功」的支票，按扣款成功日期导出。
+</MudText>
+
+<MudPaper Class="pa-4 mb-4">
+    <MudGrid>
+        <MudItem xs="6" md="3">
+            <MudDatePicker @bind-Date="_from" Label="扣款成功开始" />
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudDatePicker @bind-Date="_to" Label="扣款成功结束" />
+        </MudItem>
+        <MudItem xs="12" md="6" Class="d-flex align-end flex-wrap" Style="gap:8px">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadAsync" Disabled="@_loading">查询</MudButton>
+            <MudButton Variant="Variant.Outlined" OnClick="ExportCsvAsync" Disabled="@(!_rows.Any() || _exporting)">导出 CSV</MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+<MudTable Items="_rows" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
+    <HeaderContent>
+        <MudTh>客户编号</MudTh>
+        <MudTh>扣款日期</MudTh>
+        <MudTh>金额</MudTh>
+        <MudTh>发票</MudTh>
+        <MudTh>期间</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Customer.CustomerCode</MudTd>
+        <MudTd>@context.AchDebitSucceededAt?.ToString("yyyy-MM-dd")</MudTd>
+        <MudTd>@context.CheckAmount.ToString("N2")</MudTd>
+        <MudTd>@(context.InvoiceNumbers ?? "—")</MudTd>
+        <MudTd>@(context.PaymentPeriodText ?? "—")</MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private DateTime? _from = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1);
+    private DateTime? _to = DateTime.UtcNow.Date;
+    private List<CheckRecord> _rows = new();
+    private bool _loading;
+    private bool _exporting;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (!_from.HasValue || !_to.HasValue) return;
+        _loading = true;
+        var start = DateTime.SpecifyKind(_from.Value.Date, DateTimeKind.Utc);
+        var end = DateTime.SpecifyKind(_to.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Utc);
+
+        _rows = await DbContext.CheckRecords
+            .AsNoTracking()
+            .Include(c => c.Customer)
+            .Where(c => c.AchDebitSucceeded && c.AchDebitSucceededAt != null
+                && c.AchDebitSucceededAt >= start && c.AchDebitSucceededAt <= end)
+            .OrderByDescending(c => c.AchDebitSucceededAt)
+            .ToListAsync();
+
+        _loading = false;
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        _exporting = true;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("CustomerCode,DebitDate,Amount,InvoiceNumbers,PaymentPeriod,CheckNumber");
+            foreach (var c in _rows)
+            {
+                sb.AppendLine(string.Join(',',
+                    Csv(c.Customer.CustomerCode),
+                    Csv(c.AchDebitSucceededAt?.ToUniversalTime().ToString("yyyy-MM-dd")),
+                    c.CheckAmount.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                    Csv(c.InvoiceNumbers),
+                    Csv(c.PaymentPeriodText),
+                    Csv(c.CheckNumber)));
+            }
+
+            var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+            var name = $"ach_cn_success_{DateTime.UtcNow:yyyyMMddHHmm}.csv";
+            await JS.InvokeVoidAsync("downloadFile", name, "text/csv;charset=utf-8", base64);
+            Snackbar.Add($"已生成 {_rows.Count} 行", Severity.Success);
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return "\"\"";
+        var esc = v.Replace("\"", "\"\"");
+        return $"\"{esc}\"";
+    }
+}

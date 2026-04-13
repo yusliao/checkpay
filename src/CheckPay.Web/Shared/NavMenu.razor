@@ -1,8 +1,8 @@
 <MudNavMenu>
     <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
 
-    @* 上传支票 / 导入扣款：美国财务 + 管理员 *@
-    <AuthorizeView Roles="USFinance,Admin">
+    @* 上传支票：销售 + 管理员；导入扣款：美国财务 + 管理员 *@
+    <AuthorizeView Roles="Sales,Admin">
         <MudNavLink Href="/checks/upload" Icon="@Icons.Material.Filled.CloudUpload">上传支票</MudNavLink>
     </AuthorizeView>
 
@@ -20,12 +20,20 @@
     <MudNavLink Href="/exceptions" Icon="@Icons.Material.Filled.Warning">异常列表</MudNavLink>
     <MudNavLink Href="/reports" Icon="@Icons.Material.Filled.Assessment">导出报表</MudNavLink>
 
+    <AuthorizeView Roles="USFinance,Admin">
+        <MudNavLink Href="/reports/ach-us" Icon="@Icons.Material.Filled.AccountBalanceWallet">ACH 支票导出</MudNavLink>
+    </AuthorizeView>
+    <AuthorizeView Roles="CNFinance,Admin">
+        <MudNavLink Href="/reports/ach-cn" Icon="@Icons.Material.Filled.Payments">ACH 已扣款导出</MudNavLink>
+    </AuthorizeView>
+
     <MudNavGroup Title="系统管理" Icon="@Icons.Material.Filled.Settings">
         <MudNavLink Href="/customers" Icon="@Icons.Material.Filled.Business">客户管理</MudNavLink>
         @* 用户管理：仅管理员 *@
         <AuthorizeView Roles="Admin">
             <MudNavLink Href="/users" Icon="@Icons.Material.Filled.People">用户管理</MudNavLink>
-            <MudNavLink Href="/admin/ocr-training" Icon="@Icons.Material.Filled.ModelTraining">OCR 训练标注</MudNavLink>
+            <MudNavLink Href="/admin/ocr-training-checks" Icon="@Icons.Material.Filled.Receipt">支票 OCR 训练标注</MudNavLink>
+            <MudNavLink Href="/admin/ocr-training" Icon="@Icons.Material.Filled.ModelTraining">扣款 OCR 训练标注</MudNavLink>
             <MudNavLink Href="/admin/check-records" Icon="@Icons.Material.Filled.ReceiptLong">支票记录管理</MudNavLink>
         </AuthorizeView>
         <MudNavLink Href="/change-password" Icon="@Icons.Material.Filled.Lock">修改密码</MudNavLink>

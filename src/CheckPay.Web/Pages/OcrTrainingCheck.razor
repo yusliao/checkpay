@@ -1,0 +1,505 @@
+@page "/admin/ocr-training-checks"
+@attribute [Authorize(Roles = "Admin")]
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Application.Common.Models
+@using CheckPay.Application.Common
+@using CheckPay.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject IBlobStorageService BlobStorage
+@inject IAdminTrainingOcrService OcrService
+@inject ISnackbar Snackbar
+
+<PageTitle>支票 OCR 训练标注 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">支票 OCR 训练标注</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    上传支票图片并对比标注。已配置 Azure Document Intelligence 时，本页优先使用 <strong>Azure AI Vision Read</strong> 抽字与字段启发式解析；否则与线上一致使用混元。样本含 ACH/MICR 扩展字段。
+</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="5">
+        <MudPaper Class="pa-4 mb-4">
+            <MudText Typo="Typo.h6" GutterBottom="true">上传图片</MudText>
+
+            @if (string.IsNullOrEmpty(_imageUrl))
+            {
+                <MudPaper Class="pa-6 text-center" Style="border:2px dashed #ccc;min-height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+                    <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Large" Color="Color.Primary" />
+                    <MudText Class="mt-2">选择支票图片</MudText>
+                    <InputFile id="trainCheckFile" OnChange="OnFileSelected" accept="image/*" hidden />
+                    <MudButton HtmlTag="label" Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" for="trainCheckFile"
+                               Disabled="@_uploading">
+                        @(_uploading ? "上传中..." : "选择文件")
+                    </MudButton>
+                </MudPaper>
+            }
+            else
+            {
+                <MudImage Src="@GetProxyUrl(_imageUrl)" Alt="支票图片" Style="max-width:100%;border-radius:4px" />
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="mt-2" OnClick="ResetImage"
+                           Disabled="@(_running)">
+                    换一张
+                </MudButton>
+            }
+        </MudPaper>
+
+        @if (!string.IsNullOrEmpty(_ocrRawResponse))
+        {
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6" GutterBottom="true">抽取全文 / 解析摘要</MudText>
+                <MudPaper Class="pa-3" Style="background:#1e1e1e;border-radius:4px;overflow-x:auto">
+                    <pre style="color:#d4d4d4;font-size:12px;margin:0;white-space:pre-wrap;word-break:break-all">@_ocrRawResponse</pre>
+                </MudPaper>
+            </MudPaper>
+        }
+    </MudItem>
+
+    <MudItem xs="12" md="7">
+        <MudPaper Class="pa-4">
+            <MudText Typo="Typo.h6" GutterBottom="true">识别结果对比 & 标注</MudText>
+
+            @if (_running)
+            {
+                <MudStack AlignItems="AlignItems.Center" Class="py-6">
+                    <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">支票 OCR 识别中，请稍候...</MudText>
+                </MudStack>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-2">基本字段</MudText>
+                <MudSimpleTable Dense="true" Class="mb-4">
+                    <thead>
+                        <tr>
+                            <th style="width:120px">字段</th>
+                            <th>OCR 识别值</th>
+                            <th>正确值（请填写）</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">支票号</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrCheckNumber)">@(_ocrCheckNumber ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctCheckNumber" Placeholder="输入正确支票号" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">金额</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrAmount?.ToString("N2"))">@(_ocrAmount.HasValue ? $"${_ocrAmount:N2}" : "未识别")</MudChip></td>
+                            <td><MudNumericField @bind-Value="_correctAmount" Placeholder="输入正确金额" Variant="Variant.Outlined" Margin="Margin.Dense" Format="N2" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">日期</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrDate?.ToString("yyyy-MM-dd"))">@(_ocrDate?.ToString("yyyy-MM-dd") ?? "未识别")</MudChip></td>
+                            <td><MudDatePicker @bind-Date="_correctDate" Placeholder="选择正确日期" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                    </tbody>
+                </MudSimpleTable>
+
+                <MudText Typo="Typo.subtitle2" Class="mb-2">ACH / MICR</MudText>
+                <MudSimpleTable Dense="true" Class="mb-4">
+                    <thead>
+                        <tr>
+                            <th style="width:140px">字段</th>
+                            <th>OCR</th>
+                            <th>正确值</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">路由号 RTN</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrRtn)">@(_ocrRtn ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctRtn" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">账号</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrAcct)">@(_ocrAcct ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctAcct" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">银行名</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrBank)">@(_ocrBank ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctBank" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">账户持有人</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrHolder)">@(_ocrHolder ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctHolder" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">地址</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrAddr)">@(_ocrAddr ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctAddr" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">账户类型</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrType)">@(_ocrType ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctType" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">Pay to</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrPayTo)">@(_ocrPayTo ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctPayTo" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">For / 备注</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrFor)">@(_ocrFor ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctFor" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">MICR 原文</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrMicr)">@(_ocrMicr ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctMicr" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">支票号(MICR)</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrChkMicr)">@(_ocrChkMicr ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctChkMicr" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.body2">MICR 顺序说明</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrMicrNote)">@(_ocrMicrNote ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctMicrNote" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                    </tbody>
+                </MudSimpleTable>
+
+                <MudTextField @bind-Value="_notes" Label="备注（如版式、清晰度等）"
+                              Variant="Variant.Outlined" Lines="2" Class="mb-4" />
+
+                <MudStack Row="true" Spacing="2">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               OnClick="SaveSample"
+                               Disabled="@(string.IsNullOrEmpty(_imageUrl) || _saving)">
+                        @(_saving ? "保存中..." : "保存样本")
+                    </MudButton>
+                    @if (!string.IsNullOrEmpty(_imageUrl) && string.IsNullOrEmpty(_ocrRawResponse) && !_running)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Info" OnClick="RunOcr">
+                            手动触发识别
+                        </MudButton>
+                    }
+                </MudStack>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+<MudText Typo="Typo.h5" Class="mt-6 mb-2">已收集支票样本（@_samples.Count 条）</MudText>
+
+@if (_samples.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">暂无支票样本，上传图片并标注后会显示在这里。</MudAlert>
+}
+else
+{
+    <MudTable Items="_samples" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm">
+        <HeaderContent>
+            <MudTh>时间</MudTh>
+            <MudTh>图片</MudTh>
+            <MudTh>支票号</MudTh>
+            <MudTh>RTN</MudTh>
+            <MudTh>金额</MudTh>
+            <MudTh>日期</MudTh>
+            <MudTh>备注</MudTh>
+            <MudTh>操作</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm")</MudTd>
+            <MudTd>
+                <MudIconButton Icon="@Icons.Material.Filled.Image" Size="Size.Small"
+                               Href="@GetProxyUrl(context.ImageUrl)" Target="_blank" />
+            </MudTd>
+            <MudTd>
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">识别: @(context.OcrCheckNumber ?? "-")</MudText>
+                    <MudText Typo="Typo.body2" Color="@DiffColor(context.OcrCheckNumber, context.CorrectCheckNumber)">
+                        正确: @(context.CorrectCheckNumber ?? "-")
+                    </MudText>
+                </MudStack>
+            </MudTd>
+            <MudTd>
+                <MudText Typo="Typo.caption" Style="word-break:break-all">@FormatRtnPair(context)</MudText>
+            </MudTd>
+            <MudTd>
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.OcrAmount.HasValue ? $"${context.OcrAmount:N2}" : "-")</MudText>
+                    <MudText Typo="Typo.body2" Color="@DiffColor(context.OcrAmount?.ToString(), context.CorrectAmount?.ToString())">
+                        @(context.CorrectAmount.HasValue ? $"${context.CorrectAmount:N2}" : "-")
+                    </MudText>
+                </MudStack>
+            </MudTd>
+            <MudTd>
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.OcrDate?.ToString("yyyy-MM-dd") ?? "-")</MudText>
+                    <MudText Typo="Typo.body2" Color="@DiffColor(context.OcrDate?.ToString("yyyy-MM-dd"), context.CorrectDate?.ToString("yyyy-MM-dd"))">
+                        @(context.CorrectDate?.ToString("yyyy-MM-dd") ?? "-")
+                    </MudText>
+                </MudStack>
+            </MudTd>
+            <MudTd><MudText Typo="Typo.caption">@(context.Notes ?? "")</MudText></MudTd>
+            <MudTd>
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                               Color="Color.Error" OnClick="() => DeleteSample(context)" />
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private bool _uploading;
+    private bool _running;
+    private bool _saving;
+    private string _imageUrl = "";
+    private string _ocrRawResponse = "";
+
+    private string? _ocrCheckNumber;
+    private decimal? _ocrAmount;
+    private DateTime? _ocrDate;
+
+    private string? _correctCheckNumber;
+    private decimal? _correctAmount;
+    private DateTime? _correctDate;
+    private string? _notes;
+
+    private string? _ocrRtn, _ocrAcct, _ocrBank, _ocrHolder, _ocrAddr, _ocrType, _ocrPayTo, _ocrFor, _ocrMicr, _ocrChkMicr, _ocrMicrNote;
+    private string? _correctRtn, _correctAcct, _correctBank, _correctHolder, _correctAddr, _correctType, _correctPayTo, _correctFor, _correctMicr, _correctChkMicr, _correctMicrNote;
+
+    private List<OcrTrainingSample> _samples = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSamplesAsync();
+    }
+
+    private async Task LoadSamplesAsync()
+    {
+        _samples = await DbContext.OcrTrainingSamples
+            .Where(s => s.DocumentType == "check")
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+    }
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.GetMultipleFiles(1).FirstOrDefault();
+        if (file == null) return;
+
+        _uploading = true;
+        ResetOcrFields();
+        StateHasChanged();
+
+        try
+        {
+            using var raw = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await raw.CopyToAsync(ms);
+            ms.Position = 0;
+            _imageUrl = await BlobStorage.UploadAsync(ms, file.Name);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"上传失败: {ex.Message}", Severity.Error);
+            _uploading = false;
+            return;
+        }
+
+        _uploading = false;
+        await RunOcr();
+    }
+
+    private async Task RunOcr()
+    {
+        if (string.IsNullOrEmpty(_imageUrl)) return;
+
+        _running = true;
+        ResetOcrFields();
+        StateHasChanged();
+
+        try
+        {
+            var result = await OcrService.ProcessCheckImageAsync(_imageUrl);
+
+            _ocrCheckNumber = string.IsNullOrWhiteSpace(result.CheckNumber) ? null : result.CheckNumber.Trim();
+            _ocrAmount = result.Amount;
+            _ocrDate = result.Date;
+
+            var ach = CheckAchExtensionData.FromOcrResult(result);
+            _ocrRtn = ach.RoutingNumber;
+            _ocrAcct = ach.AccountNumber;
+            _ocrBank = ach.BankName;
+            _ocrHolder = ach.AccountHolderName;
+            _ocrAddr = ach.AccountAddress;
+            _ocrType = ach.AccountType;
+            _ocrPayTo = ach.PayToOrderOf;
+            _ocrFor = ach.ForMemo;
+            _ocrMicr = ach.MicrLineRaw;
+            _ocrChkMicr = ach.CheckNumberMicr;
+            _ocrMicrNote = ach.MicrFieldOrderNote;
+
+            _ocrRawResponse = OcrCheckCopyPanelFormatter.Build(result);
+
+            _correctCheckNumber ??= _ocrCheckNumber;
+            _correctAmount ??= result.Amount;
+            _correctDate ??= NormalizePickerDate(result.Date);
+            _correctRtn ??= _ocrRtn;
+            _correctAcct ??= _ocrAcct;
+            _correctBank ??= _ocrBank;
+            _correctHolder ??= _ocrHolder;
+            _correctAddr ??= _ocrAddr;
+            _correctType ??= _ocrType;
+            _correctPayTo ??= _ocrPayTo;
+            _correctFor ??= _ocrFor;
+            _correctMicr ??= _ocrMicr;
+            _correctChkMicr ??= _ocrChkMicr;
+            _correctMicrNote ??= _ocrMicrNote;
+        }
+        catch (Exception ex)
+        {
+            _ocrRawResponse = $"[识别失败] {ex.Message}";
+            Snackbar.Add($"OCR 识别失败: {ex.Message}", Severity.Warning);
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private static DateTime? NormalizePickerDate(DateTime date)
+    {
+        if (date == default) return null;
+        return date.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(date, DateTimeKind.Utc)
+            : date.ToUniversalTime();
+    }
+
+    private CheckAchExtensionData BuildOcrAchData() =>
+        new(
+            NullIfEmpty(_ocrRtn),
+            NullIfEmpty(_ocrAcct),
+            NullIfEmpty(_ocrBank),
+            NullIfEmpty(_ocrHolder),
+            NullIfEmpty(_ocrAddr),
+            NullIfEmpty(_ocrType),
+            NullIfEmpty(_ocrPayTo),
+            NullIfEmpty(_ocrFor),
+            NullIfEmpty(_ocrMicr),
+            NullIfEmpty(_ocrChkMicr),
+            NullIfEmpty(_ocrMicrNote));
+
+    private CheckAchExtensionData BuildCorrectAchData() =>
+        new(
+            NullIfEmpty(_correctRtn),
+            NullIfEmpty(_correctAcct),
+            NullIfEmpty(_correctBank),
+            NullIfEmpty(_correctHolder),
+            NullIfEmpty(_correctAddr),
+            NullIfEmpty(_correctType),
+            NullIfEmpty(_correctPayTo),
+            NullIfEmpty(_correctFor),
+            NullIfEmpty(_correctMicr),
+            NullIfEmpty(_correctChkMicr),
+            NullIfEmpty(_correctMicrNote));
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    private async Task SaveSample()
+    {
+        if (string.IsNullOrEmpty(_imageUrl))
+        {
+            Snackbar.Add("请先上传图片", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var sample = new OcrTrainingSample
+            {
+                ImageUrl = _imageUrl,
+                DocumentType = "check",
+                OcrRawResponse = _ocrRawResponse,
+                OcrCheckNumber = _ocrCheckNumber,
+                OcrAmount = _ocrAmount,
+                OcrDate = _ocrDate.HasValue ? DateTime.SpecifyKind(_ocrDate.Value, DateTimeKind.Utc) : null,
+                OcrBankReference = null,
+                CorrectCheckNumber = string.IsNullOrWhiteSpace(_correctCheckNumber) ? null : _correctCheckNumber.Trim(),
+                CorrectAmount = _correctAmount,
+                CorrectDate = _correctDate.HasValue ? DateTime.SpecifyKind(_correctDate.Value, DateTimeKind.Utc) : null,
+                CorrectBankReference = null,
+                Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
+                OcrAchExtensionJson = CheckAchExtensionData.Serialize(BuildOcrAchData()),
+                CorrectAchExtensionJson = CheckAchExtensionData.Serialize(BuildCorrectAchData())
+            };
+
+            DbContext.OcrTrainingSamples.Add(sample);
+            await DbContext.SaveChangesAsync();
+
+            Snackbar.Add("样本保存成功！", Severity.Success);
+            ResetAll();
+            await LoadSamplesAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"保存失败: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DeleteSample(OcrTrainingSample sample)
+    {
+        DbContext.OcrTrainingSamples.Remove(sample);
+        await DbContext.SaveChangesAsync();
+        await LoadSamplesAsync();
+        Snackbar.Add("已删除", Severity.Info);
+    }
+
+    private void ResetImage()
+    {
+        _imageUrl = "";
+        ResetOcrFields();
+    }
+
+    private void ResetOcrFields()
+    {
+        _ocrRawResponse = "";
+        _ocrCheckNumber = null;
+        _ocrAmount = null;
+        _ocrDate = null;
+        _correctCheckNumber = null;
+        _correctAmount = null;
+        _correctDate = null;
+        _notes = null;
+        _ocrRtn = _ocrAcct = _ocrBank = _ocrHolder = _ocrAddr = _ocrType = _ocrPayTo = _ocrFor = _ocrMicr = _ocrChkMicr = _ocrMicrNote = null;
+        _correctRtn = _correctAcct = _correctBank = _correctHolder = _correctAddr = _correctType = _correctPayTo = _correctFor = _correctMicr = _correctChkMicr = _correctMicrNote = null;
+    }
+
+    private void ResetAll()
+    {
+        _imageUrl = "";
+        ResetOcrFields();
+    }
+
+    private static Color ChipColor(string? value)
+        => string.IsNullOrEmpty(value) ? Color.Error : Color.Default;
+
+    private static Color DiffColor(string? ocr, string? correct)
+    {
+        if (string.IsNullOrEmpty(correct)) return Color.Default;
+        return string.Equals(ocr?.Trim(), correct?.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? Color.Success : Color.Error;
+    }
+
+    private static string GetProxyUrl(string url)
+        => $"/api/ImageProxy?url={Uri.EscapeDataString(url)}";
+
+    private static string FormatRtnPair(OcrTrainingSample c)
+    {
+        var o = CheckAchExtensionData.Deserialize(c.OcrAchExtensionJson);
+        var x = CheckAchExtensionData.Deserialize(c.CorrectAchExtensionJson);
+        return $"{o?.RoutingNumber ?? "-"} / {x?.RoutingNumber ?? "-"}";
+    }
+}

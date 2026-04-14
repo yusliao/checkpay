@@ -1,23 +1,47 @@
 @page "/customers"
 @attribute [Authorize]
+@using System.Text
 @using CheckPay.Application.Common
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
+@using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
 @inject IApplicationDbContext DbContext
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject IJSRuntime JS
 
 <PageTitle>客户管理 - CheckPay</PageTitle>
 
 <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-4">
     <MudText Typo="Typo.h4">客户管理</MudText>
-    <MudButton Variant="Variant.Filled" Color="Color.Primary"
-               StartIcon="@Icons.Material.Filled.Add"
-               OnClick="StartAddNew"
-               Disabled="@(_addingNew || _editingId.HasValue)">
-        新增客户
-    </MudButton>
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                   StartIcon="@Icons.Material.Filled.Download"
+                   OnClick="ExportCsvAsync"
+                   Disabled="@(_loading || _importing)">
+            导出 CSV
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                   StartIcon="@Icons.Material.Filled.Description"
+                   OnClick="DownloadTemplateAsync"
+                   Disabled="@_importing">
+            下载模板
+        </MudButton>
+        <InputFile id="customerCsvImport" OnChange="OnImportCsvAsync" accept=".csv,text/csv" hidden />
+        <MudButton HtmlTag="label" Variant="Variant.Outlined" Color="Color.Secondary"
+                   for="customerCsvImport"
+                   Disabled="@(_loading || _importing)">
+            导入 CSV
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Add"
+                   OnClick="StartAddNew"
+                   Disabled="@(_addingNew || _editingId.HasValue || _importing)">
+            新增客户
+        </MudButton>
+    </MudStack>
 </MudStack>
 
 <MudTable Items="@_customers" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="Customer">
@@ -201,6 +225,7 @@
 @code {
     private List<Customer> _customers = new();
     private bool _loading = true;
+    private bool _importing;
 
     // 内联编辑状态
     private Guid? _editingId;
@@ -221,6 +246,154 @@
     private string _newCompaniesRaw = "";
 
     protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var list = await DbContext.Customers
+                .Include(c => c.CompanyNames)
+                .OrderBy(c => c.CustomerCode)
+                .ToListAsync();
+            var bytes = CustomerCsvImportExport.ExportToUtf8BomBytes(list);
+            var base64 = Convert.ToBase64String(bytes);
+            var name = $"customers_{DateTime.UtcNow:yyyyMMddHHmmss}.csv";
+            await JS.InvokeVoidAsync("downloadFile", name, "text/csv;charset=utf-8", base64);
+            Snackbar.Add($"已导出 {list.Count} 条客户", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"导出失败：{ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DownloadTemplateAsync()
+    {
+        try
+        {
+            var bytes = CustomerCsvImportExport.TemplateUtf8BomBytes();
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("downloadFile", "customers_import_template.csv", "text/csv;charset=utf-8", base64);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"下载失败：{ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnImportCsvAsync(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+        if (!file.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+        {
+            Snackbar.Add("请上传 .csv 文件", Severity.Warning);
+            return;
+        }
+
+        _importing = true;
+        try
+        {
+            await using var stream = file.OpenReadStream(5_242_880);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var text = Encoding.UTF8.GetString(ms.ToArray());
+            var (rows, errors) = CustomerCsvImportExport.Parse(text);
+            if (errors.Count > 0)
+            {
+                Snackbar.Add(string.Join("；", errors.Take(10)), Severity.Error);
+                return;
+            }
+
+            if (rows.Count == 0)
+            {
+                Snackbar.Add("没有可导入的数据行", Severity.Warning);
+                return;
+            }
+
+            await ApplyCustomerImportAsync(rows);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"导入失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _importing = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ApplyCustomerImportAsync(List<CustomerCsvImportRow> rows)
+    {
+        var codes = rows.Select(r => r.CustomerCode).ToList();
+        var existing = await DbContext.Customers
+            .Include(c => c.CompanyNames)
+            .Where(c => codes.Contains(c.CustomerCode))
+            .ToListAsync();
+        var dict = existing.ToDictionary(c => c.CustomerCode, StringComparer.OrdinalIgnoreCase);
+        var now = DateTime.UtcNow;
+        var inserted = 0;
+        var updated = 0;
+
+        foreach (var r in rows)
+        {
+            if (!dict.TryGetValue(r.CustomerCode, out var c))
+            {
+                var ocr = r.OcrCompanyName;
+                c = new Customer
+                {
+                    CustomerCode = r.CustomerCode,
+                    CustomerName = r.CustomerName,
+                    ExpectedBankName = r.ExpectedBankName,
+                    ExpectedAccountHolderName = ocr,
+                    ExpectedCompanyName = ocr,
+                    ExpectedAccountAddress = r.ExpectedAccountAddress,
+                    IsActive = r.IsActive ?? true,
+                    IsAuthorized = r.IsAuthorized ?? false
+                };
+                DbContext.Customers.Add(c);
+                dict[r.CustomerCode] = c;
+                inserted++;
+                ReplaceCompanyNamesForImport(c, CustomerCsvImportExport.ParseCompanyNamesCell(r.CompanyNamesRaw));
+            }
+            else
+            {
+                c.CustomerName = r.CustomerName;
+                c.ExpectedBankName = r.ExpectedBankName;
+                var ocr2 = r.OcrCompanyName;
+                c.ExpectedAccountHolderName = ocr2;
+                c.ExpectedCompanyName = ocr2;
+                c.ExpectedAccountAddress = r.ExpectedAccountAddress;
+                if (r.IsActive.HasValue) c.IsActive = r.IsActive.Value;
+                if (r.IsAuthorized.HasValue) c.IsAuthorized = r.IsAuthorized.Value;
+                c.UpdatedAt = now;
+                updated++;
+                ReplaceCompanyNamesForImport(c, CustomerCsvImportExport.ParseCompanyNamesCell(r.CompanyNamesRaw));
+            }
+        }
+
+        await DbContext.SaveChangesAsync();
+        Snackbar.Add($"导入完成：新增 {inserted} 条，更新 {updated} 条", Severity.Success);
+        CancelEdit();
+        CancelNew();
+        await LoadData();
+    }
+
+    private void ReplaceCompanyNamesForImport(Customer c, List<string> names)
+    {
+        var trackedNames = DbContext.CustomerCompanyNames.Where(x => x.CustomerId == c.Id).ToList();
+        if (trackedNames.Count > 0)
+            DbContext.CustomerCompanyNames.RemoveRange(trackedNames);
+        foreach (var name in names)
+        {
+            DbContext.CustomerCompanyNames.Add(new CustomerCompanyName
+            {
+                CustomerId = c.Id,
+                CompanyName = name
+            });
+        }
+    }
 
     /// <summary>列表「关联公司」列：优先展示多名称表；无登记时回退票面 OCR 公司/持有人（与已删列信息不重复展示）。</summary>
     private static string DisplayCompanyNamesColumn(Customer c)

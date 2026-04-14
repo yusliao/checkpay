@@ -29,6 +29,12 @@ public class CheckRecord : BaseEntity
     public string? MicrLineRaw { get; set; }
     public string? CheckNumberMicr { get; set; }
 
+    /// <summary>支票关联的公司名称（付款/开票主体，可与客户主数据多名称比对）</summary>
+    public string? CompanyName { get; set; }
+
+    /// <summary>与客户主数据中已登记的公司名称均不匹配时置 true（提示新业务关系）</summary>
+    public bool CustomerCompanyNewRelationshipWarning { get; set; }
+
     /// <summary>发票号，逗号分隔（产品约定：多发票用英文逗号）</summary>
     public string? InvoiceNumbers { get; set; }
 

@@ -110,6 +110,18 @@
             </MudListItem>
             <MudDivider />
             <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">公司名称</MudText>
+                <MudText>@(_selectedRecord.CompanyName ?? "—")</MudText>
+            </MudListItem>
+            <MudDivider />
+            @if (_selectedRecord.CustomerCompanyNewRelationshipWarning)
+            {
+                <MudListItem T="string">
+                    <MudAlert Severity="Severity.Error" Dense="true">新的客户关系：公司名称未在该客户编号下登记</MudAlert>
+                </MudListItem>
+                <MudDivider />
+            }
+            <MudListItem T="string">
                 <MudText Typo="Typo.caption" Color="Color.Secondary">支票金额</MudText>
                 <MudText>@_selectedRecord.CheckAmount.ToString("C")</MudText>
             </MudListItem>
@@ -226,7 +238,11 @@
     private async Task LoadRecords()
     {
         _loading = true;
-        var query = DbContext.CheckRecords.Include(c => c.Customer).Include(c => c.DebitRecord).AsQueryable();
+        var query = DbContext.CheckRecords
+            .Include(c => c.Customer)
+            .ThenInclude(cu => cu.CompanyNames)
+            .Include(c => c.DebitRecord)
+            .AsQueryable();
 
         if (_filterStatus.HasValue)
             query = query.Where(c => c.Status == _filterStatus.Value);

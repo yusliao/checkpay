@@ -269,13 +269,23 @@ else
                         <MudTextField @bind-Value="_checkNumberMicr" Label="Check # (MICR)" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("checkNumberMicr")" HelperText="@GetFieldHint("checkNumberMicr")" />
 
-                        @* 客户编号 *@
+                        <MudTextField @bind-Value="_companyName" Label="公司名称（付款/开票主体）" Variant="Variant.Outlined" Class="mb-2"
+                                      Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")" />
+
+                        @* 客户账号 (customer_code =支票账号) *@
                         <MudTextField @bind-Value="_customerCode"
-                                      Label="客户编号"
+                                      Label="客户账号"
                                       Required="true"
                                       Variant="Variant.Outlined"
                                       Class="mb-2"
-                                      Placeholder="输入客户编号，支持新建" />
+                                      Placeholder="与支票账号一致，支持新建" />
+
+                        @if (ShowCustomerAuthorizationHint())
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Warning" Class="mb-2" Style="display:block">
+                                该账号与公司信息可能未授权，请注意确认
+                            </MudText>
+                        }
 
                         @if (!string.IsNullOrWhiteSpace(_customerCode))
                         {
@@ -292,6 +302,13 @@ else
                                     新客户将自动创建：@_customerCode.Trim()
                                 </MudAlert>
                             }
+                        }
+
+                        @if (ShowNewCompanyRelationshipWarning())
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-2">
+                                这是新的客户关系：当前公司名称未在该客户账号下登记，请在客户管理中维护关联公司后再核对。
+                            </MudAlert>
                         }
 
                         <MudTextField @bind-Value="_notes" Label="备注" Lines="2"
@@ -384,6 +401,7 @@ else
     private string _checkNumberMicr = "";
     private string _invoiceNumbers = "";
     private string _paymentPeriodText = "";
+    private string _companyName = "";
     private Dictionary<string, double> _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
 
     private bool _saving;
@@ -414,7 +432,10 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        _customers = await DbContext.Customers.Where(c => c.IsActive).ToListAsync();
+        _customers = await DbContext.Customers
+            .Where(c => c.IsActive)
+            .Include(c => c.CompanyNames)
+            .ToListAsync();
     }
 
     private async Task OnFilesSelected(InputFileChangeEventArgs e)
@@ -576,14 +597,44 @@ else
 
         PrefillStr("RoutingNumber", ref _routingNumber);
         PrefillStr("AccountNumber", ref _accountNumber);
+        var acctForCustomer = ExtractString(root, "AccountNumber");
+        if (!string.IsNullOrEmpty(acctForCustomer) && (force || string.IsNullOrWhiteSpace(_customerCode)))
+            _customerCode = acctForCustomer;
         PrefillStr("BankName", ref _bankName);
-        PrefillStr("AccountHolderName", ref _accountHolderName);
         PrefillStr("AccountAddress", ref _accountAddress);
         PrefillStr("AccountType", ref _accountType);
         PrefillStr("PayToOrderOf", ref _payToOrderOf);
         PrefillStr("ForMemo", ref _forMemo);
         PrefillStr("MicrLineRaw", ref _micrLineRaw);
         PrefillStr("CheckNumberMicr", ref _checkNumberMicr);
+
+        var mergedHolderCompany = OcrCheckCustomerFields.MergeHolderCompanyDisplayName(
+            ExtractString(root, "CompanyName"),
+            ExtractString(root, "AccountHolderName"),
+            ExtractString(root, "PayToOrderOf"));
+        if (!string.IsNullOrEmpty(mergedHolderCompany))
+        {
+            if (force)
+            {
+                _accountHolderName = mergedHolderCompany;
+                _companyName = mergedHolderCompany;
+            }
+            else if (string.IsNullOrEmpty(_accountHolderName) && string.IsNullOrEmpty(_companyName))
+            {
+                _accountHolderName = mergedHolderCompany;
+                _companyName = mergedHolderCompany;
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(_accountHolderName)) _accountHolderName = mergedHolderCompany;
+                if (string.IsNullOrEmpty(_companyName)) _companyName = mergedHolderCompany;
+                if (!string.Equals(_accountHolderName, _companyName, StringComparison.Ordinal))
+                {
+                    _accountHolderName = mergedHolderCompany;
+                    _companyName = mergedHolderCompany;
+                }
+            }
+        }
     }
 
     /// <summary>滑块切换引擎时重新填充表单</summary>
@@ -715,16 +766,25 @@ else
             }
 
             var customer = await ResolveCustomerAsync();
-            var mismatch = CheckMasterDataComparer.HasMismatch(customer, NullIfEmpty(_bankName), NullIfEmpty(_accountHolderName));
+            var mismatch = CheckMasterDataComparer.HasMismatch(
+                customer,
+                NullIfEmpty(_bankName),
+                NullIfEmpty(_accountHolderName),
+                NullIfEmpty(_companyName),
+                NullIfEmpty(_accountNumber),
+                NullIfEmpty(_accountAddress));
             if (mismatch)
-                Snackbar.Add("与客户主数据中的期望银行/持有人不一致，已标记警告。", Severity.Warning);
+                Snackbar.Add("与客户主数据中的期望银行/账号/持有人/公司/地址不一致，已标记警告。", Severity.Warning);
+
+            var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
+            var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
 
             var check = new CheckRecord
             {
                 CheckNumber = _checkNumber,
                 CheckAmount = _amount,
                 CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc),
-                CustomerId = customer.Id,
+                Customer = customer,
                 ImageUrl = _current.ImageUrl,
                 OcrResultId = _current.OcrResultId,
                 Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
@@ -742,8 +802,10 @@ else
                 CheckNumberMicr = NullIfEmpty(_checkNumberMicr),
                 InvoiceNumbers = NullIfEmpty(_invoiceNumbers),
                 PaymentPeriodText = NullIfEmpty(_paymentPeriodText),
+                CompanyName = NullIfEmpty(_companyName),
                 SubmittedAt = submitAsFinal ? DateTime.UtcNow : null,
-                CustomerMasterMismatchWarning = mismatch
+                CustomerMasterMismatchWarning = mismatch,
+                CustomerCompanyNewRelationshipWarning = companyWarn
             };
 
             DbContext.CheckRecords.Add(check);
@@ -811,7 +873,7 @@ else
         if (!_checkDate.HasValue)
             return "请选择支票日期";
         if (string.IsNullOrWhiteSpace(_customerCode))
-            return "请输入客户编号";
+            return "请输入客户账号";
         if (submitAsFinal)
         {
             if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
@@ -836,20 +898,75 @@ else
         return _customers.FirstOrDefault(c => c.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
     }
 
+    private bool ShowNewCompanyRelationshipWarning()
+    {
+        var match = GetCustomerMatch();
+        if (match == null || string.IsNullOrWhiteSpace(_companyName)) return false;
+        var names = match.CompanyNames.Select(cn => cn.CompanyName);
+        return !CustomerCompanyNameRules.IsRegisteredCompany(names, _companyName);
+    }
+
+    /// <summary>OCR 结果 JSON 中是否含有非空 AccountNumber（按当前选择的引擎）。</summary>
+    private bool CurrentOcrJsonHasAccountNumber()
+    {
+        if (_current == null || _current.OcrStatus != CheckOcrStatus.Completed) return false;
+        var useAzure = _ocrEngineSlider == 1;
+        var doc = useAzure ? _current.AzureRawResult : _current.RawResult;
+        if (doc == null) return false;
+        return !string.IsNullOrWhiteSpace(ExtractString(doc.RootElement, "AccountNumber"));
+    }
+
+    /// <summary>OCR 未识别账号，或当前账号/公司组合未在客户主数据中登记。</summary>
+    private bool ShowCustomerAuthorizationHint()
+    {
+        if (_current == null || _current.OcrStatus != CheckOcrStatus.Completed) return false;
+
+        if (!CurrentOcrJsonHasAccountNumber())
+            return true;
+
+        if (string.IsNullOrWhiteSpace(_customerCode))
+            return false;
+
+        var match = GetCustomerMatch();
+        if (match == null)
+            return true;
+
+        if (ShowNewCompanyRelationshipWarning())
+            return true;
+
+        return false;
+    }
+
     private async Task<Customer> ResolveCustomerAsync()
     {
         var code = _customerCode.Trim();
-        var existing = await DbContext.Customers.FirstOrDefaultAsync(c => c.CustomerCode == code);
+        var existing = await DbContext.Customers
+            .Include(c => c.CompanyNames)
+            .FirstOrDefaultAsync(c => c.CustomerCode == code);
         if (existing != null) return existing;
+
+        var ocrCompany = OcrCheckCustomerFields.MergeHolderCompanyDisplayName(_companyName, _accountHolderName, _payToOrderOf);
+        var ocrCompanyTrim = string.IsNullOrWhiteSpace(ocrCompany) ? null : ocrCompany.Trim();
+        var displayName = ocrCompanyTrim ?? code;
 
         var customer = new Customer
         {
             CustomerCode = code,
-            CustomerName = code,
+            CustomerName = displayName,
+            ExpectedBankName = NullIfEmpty(_bankName),
+            ExpectedAccountHolderName = ocrCompanyTrim,
+            ExpectedCompanyName = ocrCompanyTrim,
+            ExpectedAccountAddress = NullIfEmpty(_accountAddress),
             IsActive = true,
+            IsAuthorized = false,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
+        if (ocrCompanyTrim != null)
+        {
+            customer.CompanyNames.Add(new CustomerCompanyName { CompanyName = ocrCompanyTrim });
+        }
+
         DbContext.Customers.Add(customer);
         _customers.Add(customer);
         return customer;
@@ -865,6 +982,7 @@ else
         _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
         _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
         _invoiceNumbers = _paymentPeriodText = "";
+        _companyName = "";
         _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -903,6 +1021,7 @@ else
         "forMemo" => "ForMemo",
         "micrLineRaw" => "MicrLineRaw",
         "checkNumberMicr" => "CheckNumberMicr",
+        "companyName" => "CompanyName",
         _ => field
     };
 

@@ -236,6 +236,7 @@
                 CustomerCode = _editCustomerCode.Trim(),
                 CustomerName = _editCustomerCode.Trim(),
                 IsActive = true,
+                IsAuthorized = false,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -266,16 +267,16 @@
 
     private async Task ConfirmDelete(CheckRecord record)
     {
-        var parameters = new DialogParameters<MudMessageBox>
-        {
-            { x => x.Message, $"确定要删除支票记录 {record.CheckNumber} 吗？此操作不可恢复！" },
-            { x => x.YesText, "删除" },
-            { x => x.CancelText, "取消" }
-        };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall };
-        var dialog = await DialogService.ShowAsync<MudMessageBox>("确认删除", parameters, options);
-        var result = await dialog.Result;
-        if (result is { Canceled: false })
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: "确认删除",
+            message: $"确定要删除支票记录 {record.CheckNumber} 吗？此操作不可恢复！",
+            yesText: "删除",
+            noText: null,
+            cancelText: "取消",
+            options: options);
+
+        if (confirmed == true)
             await ExecuteDelete(record);
     }
 
@@ -287,6 +288,19 @@
             Snackbar.Add("记录不存在或已被删除", Severity.Error);
             await LoadData();
             return;
+        }
+
+        // 物理删除支票时 FK 会将 debit_records.check_record_id 置空，但 debit_status 仍为 Matched，
+        // 导致扣款不出现在「异常列表-未匹配」中。先显式打回未匹配，便于后续关联或清理。
+        var linkedDebits = await DbContext.DebitRecords
+            .Where(d => d.CheckRecordId == record.Id)
+            .ToListAsync();
+        var now = DateTime.UtcNow;
+        foreach (var d in linkedDebits)
+        {
+            d.CheckRecordId = null;
+            d.DebitStatus = DebitStatus.Unmatched;
+            d.UpdatedAt = now;
         }
 
         DbContext.CheckRecords.Remove(tracked);

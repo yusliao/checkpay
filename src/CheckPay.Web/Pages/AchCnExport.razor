@@ -36,6 +36,7 @@
         <MudTh>扣款日期</MudTh>
         <MudTh>金额</MudTh>
         <MudTh>发票</MudTh>
+        <MudTh>公司名称</MudTh>
         <MudTh>期间</MudTh>
     </HeaderContent>
     <RowTemplate>
@@ -43,6 +44,7 @@
         <MudTd>@context.AchDebitSucceededAt?.ToString("yyyy-MM-dd")</MudTd>
         <MudTd>@context.CheckAmount.ToString("N2")</MudTd>
         <MudTd>@(context.InvoiceNumbers ?? "—")</MudTd>
+        <MudTd>@(context.CompanyName ?? "—")</MudTd>
         <MudTd>@(context.PaymentPeriodText ?? "—")</MudTd>
     </RowTemplate>
 </MudTable>
@@ -80,7 +82,7 @@
         try
         {
             var sb = new StringBuilder();
-            sb.AppendLine("CustomerCode,DebitDate,Amount,InvoiceNumbers,PaymentPeriod,CheckNumber");
+            sb.AppendLine("CustomerCode,DebitDate,Amount,InvoiceNumbers,CompanyName,PaymentPeriod,CheckNumber");
             foreach (var c in _rows)
             {
                 sb.AppendLine(string.Join(',',
@@ -88,6 +90,7 @@
                     Csv(c.AchDebitSucceededAt?.ToUniversalTime().ToString("yyyy-MM-dd")),
                     c.CheckAmount.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
                     Csv(c.InvoiceNumbers),
+                    Csv(c.CompanyName),
                     Csv(c.PaymentPeriodText),
                     Csv(c.CheckNumber)));
             }

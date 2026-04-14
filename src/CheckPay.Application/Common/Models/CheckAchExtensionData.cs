@@ -15,7 +15,8 @@ public record CheckAchExtensionData(
     string? ForMemo,
     string? MicrLineRaw,
     string? CheckNumberMicr,
-    string? MicrFieldOrderNote)
+    string? MicrFieldOrderNote,
+    string? CompanyName = null)
 {
     public static CheckAchExtensionData FromOcrResult(OcrResultDto r) =>
         new(
@@ -29,7 +30,8 @@ public record CheckAchExtensionData(
             r.ForMemo,
             r.MicrLineRaw,
             r.CheckNumberMicr,
-            r.MicrFieldOrderNote);
+            r.MicrFieldOrderNote,
+            r.CompanyName);
 
     public static string? Serialize(CheckAchExtensionData? d)
     {

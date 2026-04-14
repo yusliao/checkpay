@@ -61,6 +61,7 @@ public class HunyuanOcrService : IOcrService
           check_number_micr = check number read from MICR (may differ from upper-right printed).
 
         Step 2 - Pay to the order of -> pay_to_order_of; For / memo -> for_memo (null if blank).
+          company_name: the payee / business legal name on the check (often identical to pay_to_order_of; if only one line exists, duplicate it in both fields).
 
         Step 3 - Top area: bank_name, account_holder_name, account_address (street city ST ZIP), account_type if shown.
 
@@ -79,6 +80,7 @@ public class HunyuanOcrService : IOcrService
           "account_address": null,
           "account_type": null,
           "pay_to_order_of": null,
+          "company_name": null,
           "for_memo": null,
           "micr_line_raw": null,
           "micr_field_order_note": null,
@@ -94,6 +96,7 @@ public class HunyuanOcrService : IOcrService
             "account_address": 0.0,
             "account_type": 0.0,
             "pay_to_order_of": 0.0,
+            "company_name": 0.0,
             "for_memo": 0.0,
             "micr_line_raw": 0.0
           }
@@ -232,6 +235,7 @@ public class HunyuanOcrService : IOcrService
         var address = GetString(root, "account_address")?.Trim();
         var accountType = GetString(root, "account_type")?.Trim();
         var payTo = GetString(root, "pay_to_order_of")?.Trim();
+        var companyName = GetString(root, "company_name")?.Trim();
         var forMemo = GetString(root, "for_memo")?.Trim();
         var micrRaw = GetString(root, "micr_line_raw")?.Trim();
         var checkMicr = GetString(root, "check_number_micr")?.Trim();
@@ -242,7 +246,7 @@ public class HunyuanOcrService : IOcrService
             { "CheckNumber", 0.5 }, { "CheckNumberMicr", 0.5 }, { "Amount", 0.5 }, { "Date", 0.5 },
             { "RoutingNumber", 0.5 }, { "AccountNumber", 0.5 }, { "BankName", 0.5 },
             { "AccountHolderName", 0.5 }, { "AccountAddress", 0.5 }, { "AccountType", 0.5 },
-            { "PayToOrderOf", 0.5 }, { "ForMemo", 0.5 }, { "MicrLineRaw", 0.5 }
+            { "PayToOrderOf", 0.5 }, { "CompanyName", 0.5 }, { "ForMemo", 0.5 }, { "MicrLineRaw", 0.5 }
         };
         if (root.TryGetProperty("confidence", out var conf))
         {
@@ -257,6 +261,7 @@ public class HunyuanOcrService : IOcrService
             confidenceScores["AccountAddress"] = GetDoubleConfidence(conf, "account_address");
             confidenceScores["AccountType"] = GetDoubleConfidence(conf, "account_type");
             confidenceScores["PayToOrderOf"] = GetDoubleConfidence(conf, "pay_to_order_of");
+            confidenceScores["CompanyName"] = GetDoubleConfidence(conf, "company_name");
             confidenceScores["ForMemo"] = GetDoubleConfidence(conf, "for_memo");
             confidenceScores["MicrLineRaw"] = GetDoubleConfidence(conf, "micr_line_raw");
         }
@@ -288,7 +293,8 @@ public class HunyuanOcrService : IOcrService
             ForMemo: string.IsNullOrWhiteSpace(forMemo) ? null : forMemo,
             MicrLineRaw: string.IsNullOrWhiteSpace(micrRaw) ? null : micrRaw,
             CheckNumberMicr: string.IsNullOrWhiteSpace(checkMicr) ? null : checkMicr,
-            MicrFieldOrderNote: string.IsNullOrWhiteSpace(orderNote) ? null : orderNote);
+            MicrFieldOrderNote: string.IsNullOrWhiteSpace(orderNote) ? null : orderNote,
+            CompanyName: string.IsNullOrWhiteSpace(companyName) ? null : companyName);
     }
 
     private static string? NormalizeDigits(string? s)

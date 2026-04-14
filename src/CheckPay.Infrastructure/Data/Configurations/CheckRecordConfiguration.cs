@@ -32,6 +32,10 @@ public class CheckRecordConfiguration : IEntityTypeConfiguration<CheckRecord>
         builder.Property(e => e.ForMemo).HasColumnName("for_memo").HasMaxLength(500);
         builder.Property(e => e.MicrLineRaw).HasColumnName("micr_line_raw").HasColumnType("text");
         builder.Property(e => e.CheckNumberMicr).HasColumnName("check_number_micr").HasMaxLength(50);
+        builder.Property(e => e.CompanyName).HasColumnName("company_name").HasMaxLength(300);
+        builder.Property(e => e.CustomerCompanyNewRelationshipWarning)
+            .HasColumnName("customer_company_new_relationship_warning")
+            .IsRequired();
         builder.Property(e => e.InvoiceNumbers).HasColumnName("invoice_numbers").HasColumnType("text");
         builder.Property(e => e.PaymentPeriodText).HasColumnName("payment_period_text").HasMaxLength(50);
         builder.Property(e => e.SubmittedAt).HasColumnName("submitted_at");

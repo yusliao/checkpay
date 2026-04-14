@@ -12,6 +12,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<DebitRecord> DebitRecords => Set<DebitRecord>();
     public DbSet<OcrResult> OcrResults => Set<OcrResult>();
     public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<CustomerCompanyName> CustomerCompanyNames => Set<CustomerCompanyName>();
     public DbSet<User> Users => Set<User>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<OcrTrainingSample> OcrTrainingSamples => Set<OcrTrainingSample>();
@@ -26,5 +27,6 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<DebitRecord>().HasQueryFilter(e => e.DeletedAt == null);
         modelBuilder.Entity<Customer>().HasQueryFilter(e => e.DeletedAt == null);
         modelBuilder.Entity<User>().HasQueryFilter(e => e.DeletedAt == null);
+        modelBuilder.Entity<CustomerCompanyName>().HasQueryFilter(e => e.DeletedAt == null);
     }
 }

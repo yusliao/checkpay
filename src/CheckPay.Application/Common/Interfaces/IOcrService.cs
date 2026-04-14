@@ -25,6 +25,8 @@ public record OcrResultDto(
     string? MicrLineRaw = null,
     string? CheckNumberMicr = null,
     string? MicrFieldOrderNote = null,
+    /// <summary>票面公司名称 / 付款主体（常与 Pay to the order of 一致，可空）。</summary>
+    string? CompanyName = null,
     /// <summary>通用 OCR 引擎抽取的全文（如 Azure Read），供训练页展示；混元等可为空。</summary>
     string? ExtractedText = null);
 

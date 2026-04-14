@@ -127,6 +127,7 @@ public sealed class CheckOcrParsedSampleCorrector(
             MicrLineRaw: pick(cAch?.MicrLineRaw, current.MicrLineRaw),
             CheckNumberMicr: pick(cAch?.CheckNumberMicr, current.CheckNumberMicr),
             MicrFieldOrderNote: pick(cAch?.MicrFieldOrderNote, current.MicrFieldOrderNote),
+            CompanyName: pick(cAch?.CompanyName, current.CompanyName),
             ExtractedText: current.ExtractedText);
 
         return merged;
@@ -139,7 +140,7 @@ public sealed class CheckOcrParsedSampleCorrector(
         foreach (var key in new[]
  {
                      "CheckNumber", "CheckNumberMicr", "Amount", "Date", "RoutingNumber", "AccountNumber",
-                     "BankName", "AccountHolderName", "AccountAddress", "AccountType", "PayToOrderOf", "ForMemo",
+                     "BankName", "AccountHolderName", "AccountAddress", "AccountType", "PayToOrderOf", "CompanyName", "ForMemo",
                      "MicrLineRaw"
                  })
         {

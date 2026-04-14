@@ -19,6 +19,7 @@ public class MockOcrService : IOcrService
             { "AccountAddress", 0.84 },
             { "AccountType", 0.85 },
             { "PayToOrderOf", 0.40 },
+            { "CompanyName", 0.82 },
             { "ForMemo", 0.35 },
             { "MicrLineRaw", 0.72 }
         };
@@ -34,11 +35,12 @@ public class MockOcrService : IOcrService
             AccountHolderName: "MOCK YUMTN INC",
             AccountAddress: "1735 W MOCK RD STE 8, JOHNSON CITY, TN 37604",
             AccountType: "Business Checking",
-            PayToOrderOf: null,
+            PayToOrderOf: "MOCK PAYEE LLC",
             ForMemo: null,
             MicrLineRaw: "MOCK MICR 064201450 22000378552 2944",
             CheckNumberMicr: "2944",
-            MicrFieldOrderNote: null);
+            MicrFieldOrderNote: null,
+            CompanyName: "MOCK PAYEE LLC");
 
         return Task.FromResult(result);
     }

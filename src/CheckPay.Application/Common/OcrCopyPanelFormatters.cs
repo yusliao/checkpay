@@ -54,6 +54,7 @@ public static class OcrCheckCopyPanelFormatter
         sb.AppendLine($"  \"routing_number\": {JsonVal(ach.RoutingNumber)},");
         sb.AppendLine($"  \"account_number\": {JsonVal(ach.AccountNumber)},");
         sb.AppendLine($"  \"bank_name\": {JsonVal(ach.BankName)},");
+        sb.AppendLine($"  \"company_name\": {JsonVal(ach.CompanyName)},");
         sb.AppendLine($"  \"check_number_micr\": {JsonVal(ach.CheckNumberMicr)},");
         sb.AppendLine($"  \"micr_line_raw\": {JsonVal(ach.MicrLineRaw)},");
         sb.AppendLine("}");

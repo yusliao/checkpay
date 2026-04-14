@@ -128,6 +128,7 @@ public sealed class CheckOcrFewShotProvider(
         put("account_address", ach.AccountAddress);
         put("account_type", ach.AccountType);
         put("pay_to_order_of", ach.PayToOrderOf);
+        put("company_name", ach.CompanyName);
         put("for_memo", ach.ForMemo);
         put("micr_line_raw", ach.MicrLineRaw, truncate: true);
         put("check_number_micr", ach.CheckNumberMicr);

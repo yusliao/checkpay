@@ -138,6 +138,36 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+// Blazor Server 预渲染用 Request 构造 NavigationManager.BaseUri；Host 为空、仅端口、或主机名不符合 URI 规则（如部分内网名下划线）时会抛出 UriFormatException。将 Host 改为可解析形式，避免整页 500。
+app.Use(async (context, next) =>
+{
+    var request = context.Request;
+    var hostPart = request.Host.Host;
+    var needsFix = string.IsNullOrWhiteSpace(hostPart);
+    if (!needsFix)
+    {
+        try
+        {
+            var pathBase = request.PathBase.HasValue ? request.PathBase.Value! : string.Empty;
+            _ = new Uri($"{request.Scheme}://{request.Host.Value}{pathBase}/", UriKind.Absolute);
+        }
+        catch (UriFormatException)
+        {
+            needsFix = true;
+        }
+    }
+
+    if (needsFix)
+    {
+        var port = request.Host.Port;
+        request.Headers.Host = port is > 0 and not 80 and not 443
+            ? $"127.0.0.1:{port}"
+            : "127.0.0.1";
+    }
+
+    await next();
+});
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");

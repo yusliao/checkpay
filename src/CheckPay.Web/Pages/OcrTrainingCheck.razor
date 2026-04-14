@@ -142,6 +142,11 @@
                             <td><MudTextField @bind-Value="_correctPayTo" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
                         </tr>
                         <tr>
+                            <td><MudText Typo="Typo.body2">公司名称</MudText></td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrCompanyName)">@(_ocrCompanyName ?? "未识别")</MudChip></td>
+                            <td><MudTextField @bind-Value="_correctCompanyName" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                        </tr>
+                        <tr>
                             <td><MudText Typo="Typo.body2">For / 备注</MudText></td>
                             <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrFor)">@(_ocrFor ?? "未识别")</MudChip></td>
                             <td><MudTextField @bind-Value="_correctFor" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
@@ -262,8 +267,8 @@ else
     private DateTime? _correctDate;
     private string? _notes;
 
-    private string? _ocrRtn, _ocrAcct, _ocrBank, _ocrHolder, _ocrAddr, _ocrType, _ocrPayTo, _ocrFor, _ocrMicr, _ocrChkMicr, _ocrMicrNote;
-    private string? _correctRtn, _correctAcct, _correctBank, _correctHolder, _correctAddr, _correctType, _correctPayTo, _correctFor, _correctMicr, _correctChkMicr, _correctMicrNote;
+    private string? _ocrRtn, _ocrAcct, _ocrBank, _ocrHolder, _ocrAddr, _ocrType, _ocrPayTo, _ocrCompanyName, _ocrFor, _ocrMicr, _ocrChkMicr, _ocrMicrNote;
+    private string? _correctRtn, _correctAcct, _correctBank, _correctHolder, _correctAddr, _correctType, _correctPayTo, _correctCompanyName, _correctFor, _correctMicr, _correctChkMicr, _correctMicrNote;
 
     private List<OcrTrainingSample> _samples = new();
 
@@ -332,6 +337,7 @@ else
             _ocrAddr = ach.AccountAddress;
             _ocrType = ach.AccountType;
             _ocrPayTo = ach.PayToOrderOf;
+            _ocrCompanyName = ach.CompanyName;
             _ocrFor = ach.ForMemo;
             _ocrMicr = ach.MicrLineRaw;
             _ocrChkMicr = ach.CheckNumberMicr;
@@ -349,6 +355,7 @@ else
             _correctAddr ??= _ocrAddr;
             _correctType ??= _ocrType;
             _correctPayTo ??= _ocrPayTo;
+            _correctCompanyName ??= _ocrCompanyName;
             _correctFor ??= _ocrFor;
             _correctMicr ??= _ocrMicr;
             _correctChkMicr ??= _ocrChkMicr;
@@ -385,7 +392,8 @@ else
             NullIfEmpty(_ocrFor),
             NullIfEmpty(_ocrMicr),
             NullIfEmpty(_ocrChkMicr),
-            NullIfEmpty(_ocrMicrNote));
+            NullIfEmpty(_ocrMicrNote),
+            NullIfEmpty(_ocrCompanyName));
 
     private CheckAchExtensionData BuildCorrectAchData() =>
         new(
@@ -399,7 +407,8 @@ else
             NullIfEmpty(_correctFor),
             NullIfEmpty(_correctMicr),
             NullIfEmpty(_correctChkMicr),
-            NullIfEmpty(_correctMicrNote));
+            NullIfEmpty(_correctMicrNote),
+            NullIfEmpty(_correctCompanyName));
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
@@ -473,8 +482,8 @@ else
         _correctAmount = null;
         _correctDate = null;
         _notes = null;
-        _ocrRtn = _ocrAcct = _ocrBank = _ocrHolder = _ocrAddr = _ocrType = _ocrPayTo = _ocrFor = _ocrMicr = _ocrChkMicr = _ocrMicrNote = null;
-        _correctRtn = _correctAcct = _correctBank = _correctHolder = _correctAddr = _correctType = _correctPayTo = _correctFor = _correctMicr = _correctChkMicr = _correctMicrNote = null;
+        _ocrRtn = _ocrAcct = _ocrBank = _ocrHolder = _ocrAddr = _ocrType = _ocrPayTo = _ocrCompanyName = _ocrFor = _ocrMicr = _ocrChkMicr = _ocrMicrNote = null;
+        _correctRtn = _correctAcct = _correctBank = _correctHolder = _correctAddr = _correctType = _correctPayTo = _correctCompanyName = _correctFor = _correctMicr = _correctChkMicr = _correctMicrNote = null;
     }
 
     private void ResetAll()

@@ -12,6 +12,7 @@ public class CustomerTests
         Assert.Equal(string.Empty, customer.CustomerCode);
         Assert.Equal(string.Empty, customer.CustomerName);
         Assert.True(customer.IsActive);
+        Assert.False(customer.IsAuthorized);
     }
 
     [Fact]

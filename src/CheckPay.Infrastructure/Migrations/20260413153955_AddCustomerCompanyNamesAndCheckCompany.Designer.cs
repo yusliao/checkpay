@@ -3,6 +3,7 @@ using System;
 using CheckPay.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CheckPay.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260413153955_AddCustomerCompanyNamesAndCheckCompany")]
+    partial class AddCustomerCompanyNamesAndCheckCompany
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -273,11 +276,6 @@ namespace CheckPay.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at");
 
-                    b.Property<string>("ExpectedAccountAddress")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("expected_account_address");
-
                     b.Property<string>("ExpectedAccountHolderName")
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)")
@@ -288,19 +286,9 @@ namespace CheckPay.Infrastructure.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("expected_bank_name");
 
-                    b.Property<string>("ExpectedCompanyName")
-                        .HasMaxLength(300)
-                        .HasColumnType("character varying(300)")
-                        .HasColumnName("expected_company_name");
-
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean")
                         .HasColumnName("is_active");
-
-                    b.Property<bool>("IsAuthorized")
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("is_authorized");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -310,8 +298,7 @@ namespace CheckPay.Infrastructure.Migrations
 
                     b.HasIndex("CustomerCode")
                         .IsUnique()
-                        .HasDatabaseName("ix_customers_customer_code")
-                        .HasFilter("deleted_at IS NULL");
+                        .HasDatabaseName("ix_customers_customer_code");
 
                     b.ToTable("customers", (string)null);
                 });

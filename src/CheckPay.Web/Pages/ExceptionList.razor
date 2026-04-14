@@ -6,6 +6,7 @@
 @using Microsoft.EntityFrameworkCore
 @inject IApplicationDbContext DbContext
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 
 <PageTitle>异常列表 - CheckPay</PageTitle>
 
@@ -16,7 +17,7 @@
     @* Tab 1：未匹配扣款 *@
     <MudTabPanel Text="@($"未匹配扣款（{_unmatchedDebits.Count}）")">
         <MudAlert Severity="Severity.Info" Dense="true" Class="ma-3">
-            支票号识别有误或遗漏会导致匹配失败，请核对后手动关联
+            包含：导入时未匹配支票的扣款，以及<strong>曾匹配但支票记录已被删除</strong>的孤儿扣款（状态为「待重关联」）。请手动关联到其他支票，或由管理员删除无效数据。
         </MudAlert>
         <MudTable Items="@_unmatchedDebits" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
             <HeaderContent>
@@ -25,6 +26,7 @@
                 <MudTh>扣款金额</MudTh>
                 <MudTh>扣款日期</MudTh>
                 <MudTh>银行流水号</MudTh>
+                <MudTh>匹配</MudTh>
                 <MudTh>操作</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -33,11 +35,34 @@
                 <MudTd DataLabel="扣款金额">@context.DebitAmount.ToString("C")</MudTd>
                 <MudTd DataLabel="扣款日期">@context.DebitDate.ToString("yyyy-MM-dd")</MudTd>
                 <MudTd DataLabel="银行流水号">@context.BankReference</MudTd>
+                <MudTd DataLabel="匹配">
+                    @if (context.DebitStatus == DebitStatus.Matched)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                                 title="原关联支票已不存在，请重新关联或删除本条">
+                            待重关联
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default">未匹配</MudChip>
+                    }
+                </MudTd>
                 <MudTd DataLabel="操作">
-                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
-                               OnClick="@(() => OpenLinkModal(context))">
-                        手动关联
-                    </MudButton>
+                    <MudStack Row="true" Spacing="1">
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                   OnClick="@(() => OpenLinkModal(context))">
+                            手动关联
+                        </MudButton>
+                        <AuthorizeView Roles="Admin" Context="_">
+                            <Authorized>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                                           OnClick="@(async () => await ConfirmSoftDeleteDebitAsync(context))">
+                                    删除
+                                </MudButton>
+                            </Authorized>
+                        </AuthorizeView>
+                    </MudStack>
                 </MudTd>
             </RowTemplate>
         </MudTable>
@@ -159,9 +184,10 @@
     private async Task LoadData()
     {
         _loading = true;
+        // 未关联到支票的扣款：含从未匹配的，以及支票删除后 FK 被清空但仍为 Matched 的孤儿行
         _unmatchedDebits = await DbContext.DebitRecords
             .Include(d => d.Customer)
-            .Where(d => d.DebitStatus == DebitStatus.Unmatched)
+            .Where(d => d.CheckRecordId == null)
             .OrderByDescending(d => d.CreatedAt)
             .ToListAsync();
 
@@ -218,6 +244,34 @@
             .ToListAsync();
     }
 
+    private async Task ConfirmSoftDeleteDebitAsync(DebitRecord debit)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall };
+        var ok = await DialogService.ShowMessageBoxAsync(
+            title: "删除扣款记录",
+            message: $"确定软删除该条银行扣款吗？支票号 {debit.CheckNumber}，流水 {debit.BankReference}。删除后不再参与匹配与统计。",
+            yesText: "删除",
+            noText: null,
+            cancelText: "取消",
+            options: options);
+        if (ok != true) return;
+
+        var tracked = await DbContext.DebitRecords.FindAsync(debit.Id);
+        if (tracked == null)
+        {
+            Snackbar.Add("记录不存在", Severity.Error);
+            await LoadData();
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        tracked.DeletedAt = now;
+        tracked.UpdatedAt = now;
+        await DbContext.SaveChangesAsync();
+        Snackbar.Add("扣款记录已删除", Severity.Success);
+        await LoadData();
+    }
+
     private async Task ConfirmLink()
     {
         if (_linkTarget == null || _selectedCheckId == Guid.Empty) return;
@@ -227,6 +281,7 @@
 
         _linkTarget.CheckRecordId = check.Id;
         _linkTarget.DebitStatus = DebitStatus.Matched;
+        _linkTarget.UpdatedAt = DateTime.UtcNow;
         check.Status = CheckStatus.PendingReview;
 
         try

@@ -37,6 +37,7 @@ internal static class CheckOcrTrainingSampleDiff
         && string.Equals(Norm(a.AccountAddress), Norm(b.AccountAddress), StringComparison.OrdinalIgnoreCase)
         && string.Equals(Norm(a.AccountType), Norm(b.AccountType), StringComparison.OrdinalIgnoreCase)
         && string.Equals(Norm(a.PayToOrderOf), Norm(b.PayToOrderOf), StringComparison.OrdinalIgnoreCase)
+        && string.Equals(Norm(a.CompanyName), Norm(b.CompanyName), StringComparison.OrdinalIgnoreCase)
         && string.Equals(Norm(a.ForMemo), Norm(b.ForMemo), StringComparison.OrdinalIgnoreCase)
         && string.Equals(Norm(a.MicrLineRaw), Norm(b.MicrLineRaw), StringComparison.Ordinal)
         && string.Equals(Norm(a.CheckNumberMicr), Norm(b.CheckNumberMicr), StringComparison.Ordinal)

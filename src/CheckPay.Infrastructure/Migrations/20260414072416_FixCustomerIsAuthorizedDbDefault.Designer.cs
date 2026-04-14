@@ -3,6 +3,7 @@ using System;
 using CheckPay.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CheckPay.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260414072416_FixCustomerIsAuthorizedDbDefault")]
+    partial class FixCustomerIsAuthorizedDbDefault
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -298,6 +301,7 @@ namespace CheckPay.Infrastructure.Migrations
                         .HasColumnName("is_active");
 
                     b.Property<bool>("IsAuthorized")
+                        .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(false)
                         .HasColumnName("is_authorized");
@@ -310,8 +314,7 @@ namespace CheckPay.Infrastructure.Migrations
 
                     b.HasIndex("CustomerCode")
                         .IsUnique()
-                        .HasDatabaseName("ix_customers_customer_code")
-                        .HasFilter("deleted_at IS NULL");
+                        .HasDatabaseName("ix_customers_customer_code");
 
                     b.ToTable("customers", (string)null);
                 });

@@ -46,6 +46,10 @@ public class AzureOcrService : IOcrService
         @"(?i)(?:ref(?:erence)?|trace(?:\s*(?:no\.?|number|#))?|confirmation|confirm(?:ation)?\s*#|trans(?:action)?(?:\s*id|#)?)\s*[:\#]?\s*([A-Z0-9][A-Z0-9\-]{3,48})",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
+    private static readonly Regex PayToOrderLineRegex = new(
+        @"(?i)pay\s+to\s+the\s+order\s+of\s*[:\s]*([^\r\n]{2,200})",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     public AzureOcrService(
         IConfiguration configuration,
         ILogger<AzureOcrService> logger,
@@ -79,6 +83,7 @@ public class AzureOcrService : IOcrService
             checkNumber, checkConf, amount, amountConf, date?.ToString("yyyy-MM-dd"), dateConf);
 
         var (routing, acct, micrLine, rtConf, acConf, micConf) = ParseMicrHeuristic(rawText);
+        var (payToLine, payToConf) = ParsePayToOrderLine(rawText);
 
         var conf = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
         {
@@ -92,7 +97,8 @@ public class AzureOcrService : IOcrService
             { "AccountHolderName", 0.1 },
             { "AccountAddress", 0.1 },
             { "AccountType", 0.1 },
-            { "PayToOrderOf", 0.1 },
+            { "PayToOrderOf", payToConf },
+            { "CompanyName", payToConf },
             { "ForMemo", 0.1 },
             { "MicrLineRaw", micConf }
         };
@@ -104,6 +110,8 @@ public class AzureOcrService : IOcrService
             ConfidenceScores: conf,
             RoutingNumber: routing,
             AccountNumber: acct,
+            PayToOrderOf: payToLine,
+            CompanyName: payToLine,
             MicrLineRaw: micrLine,
             ExtractedText: rawText);
 
@@ -273,6 +281,24 @@ public class AzureOcrService : IOcrService
             return (dt, 0.82);
 
         return (null, 0.1);
+    }
+
+    /// <summary>从支票全文启发式提取 Pay to the order of 行，作为公司名称与 Pay to 字段来源。</summary>
+    private static (string? line, double confidence) ParsePayToOrderLine(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return (null, 0.1);
+
+        var m = PayToOrderLineRegex.Match(text);
+        if (!m.Success)
+            return (null, 0.1);
+
+        var raw = m.Groups[1].Value.Trim();
+        if (raw.Length < 2)
+            return (null, 0.1);
+
+        var cut = Regex.Replace(raw, @"\s{2,}", " ");
+        return (cut, 0.48);
     }
 
     /// <summary>从银行扣款/ACH 回单文字中启发式提取流水号或 Trace。</summary>

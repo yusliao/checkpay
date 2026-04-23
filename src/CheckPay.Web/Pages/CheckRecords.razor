@@ -230,8 +230,13 @@
                     <MudPaper Class="ma-4 pa-3" Elevation="0" Outlined="true">
                         <MudText Typo="Typo.subtitle2" Class="mb-2">草稿 — 提交入库</MudText>
                         <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2" Style="display:block">
-                            保存草稿时未要求填写完整 ACH；请补全后提交，规则与上传页「提交入库」相同。
+                            保存草稿时未要求填写完整 ACH；请补全后提交，规则与上传页「提交入库」相同。需修改支票号、金额、客户等请使用「编辑草稿」。
                         </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" FullWidth="true" Class="mb-3"
+                                   StartIcon="@Icons.Material.Filled.EditNote"
+                                   OnClick="@(() => Navigation.NavigateTo($"/checks/draft/{_selectedRecord.Id}"))">
+                            编辑草稿（完整表单，可多次保存）
+                        </MudButton>
                         <MudTextField @bind-Value="_draftRouting" Label="Routing Number (9 位数字)" Variant="Variant.Outlined"
                                       Class="mb-2" MaxLength="9" Margin="Margin.Dense" />
                         <MudTextField @bind-Value="_draftAccount" Label="Account Number" Variant="Variant.Outlined"

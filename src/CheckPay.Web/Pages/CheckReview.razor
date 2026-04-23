@@ -1,4 +1,5 @@
 @page "/checks/review/{Id:guid}"
+@page "/checks/draft/{DraftId:guid}"
 @attribute [Authorize(Roles = "Sales,Admin")]
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
@@ -13,54 +14,20 @@
 @inject NavigationManager Navigation
 @inject OcrWorker OcrWorker
 
-<PageTitle>复核支票 - CheckPay</PageTitle>
+<PageTitle>@(_editingCheckRecordId.HasValue ? "编辑草稿 - CheckPay" : "复核支票 - CheckPay")</PageTitle>
 
-<MudText Typo="Typo.h4" GutterBottom="true">复核支票信息</MudText>
+<MudText Typo="Typo.h4" GutterBottom="true">@(_editingCheckRecordId.HasValue ? "编辑草稿" : "复核支票信息")</MudText>
 
 @if (_loading)
 {
     <MudProgressCircular Indeterminate="true" />
 }
-else if (_ocrResult == null)
+else if (!string.IsNullOrEmpty(_initError))
 {
-    <MudAlert Severity="Severity.Error">未找到 OCR 记录</MudAlert>
+    <MudAlert Severity="Severity.Error" Class="mb-3">@_initError</MudAlert>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => Navigation.NavigateTo("/records"))">返回收款记录</MudButton>
 }
-else if (_ocrResult.Status == OcrStatus.Pending || _ocrResult.Status == OcrStatus.Processing)
-{
-    <MudPaper Class="pa-4 mt-4">
-        <MudStack Spacing="2">
-            <MudText Typo="Typo.h6">OCR 正在处理中...</MudText>
-            <MudText Typo="Typo.body2">请稍候或点击下方按钮刷新状态。</MudText>
-            <MudStack Row="true" Spacing="1">
-                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">提交时间：@_ocrResult.CreatedAt.ToLocalTime():g</MudText>
-            </MudStack>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RefreshStatus">刷新状态</MudButton>
-        </MudStack>
-    </MudPaper>
-}
-else if (_ocrResult.Status == OcrStatus.Failed)
-{
-    <MudAlert Severity="Severity.Error" Class="mb-3">
-        OCR 识别失败：@(_ocrResult.ErrorMessage ?? "未知错误")
-    </MudAlert>
-    <MudStack Row="true" Spacing="2">
-        <MudButton Variant="Variant.Outlined" OnClick="RefreshStatus">刷新状态</MudButton>
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RetryOcr" Disabled="@_retryingOcr">
-            @(_retryingOcr ? "重新提交中..." : "重新提交 OCR 任务")
-        </MudButton>
-    </MudStack>
-}
-else if (_ocrResult.RawResult == null)
-{
-    <MudAlert Severity="Severity.Warning" Class="mb-3">
-        未找到 OCR 结果，请重新触发识别。
-    </MudAlert>
-    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RetryOcr" Disabled="@_retryingOcr">
-        @(_retryingOcr ? "重新提交中..." : "重新提交 OCR 任务")
-    </MudButton>
-}
-else
+else if (ShowCheckEditForm())
 {
     <MudGrid>
         <MudItem xs="12" md="6">
@@ -75,8 +42,15 @@ else
 
                 @* OCR 引擎切换滑块 *@
                 @{
-                    var hunyuanReady = _ocrResult.Status == OcrStatus.Completed && _ocrResult.RawResult != null;
-                    var azureReady   = _ocrResult.AzureStatus == OcrStatus.Completed && _ocrResult.AzureRawResult != null;
+                    var ocr = _ocrResult!;
+                    var hunyuanReady = ocr.Status == OcrStatus.Completed && ocr.RawResult != null;
+                    var azureReady   = ocr.AzureStatus == OcrStatus.Completed && ocr.AzureRawResult != null;
+                }
+                @if (_editingCheckRecordId.HasValue)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                        正在编辑已保存的草稿，可多次修改后保存或提交入库；切换 OCR 引擎仅影响置信度颜色，不会覆盖已填字段。
+                    </MudAlert>
                 }
                 @if (hunyuanReady && azureReady)
                 {
@@ -236,20 +210,64 @@ else
                     </MudStack>
                 </MudPaper>
 
-                <MudButton Variant="Variant.Outlined" Color="Color.Default" Class="mr-2" OnClick="Abandon">放弃</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" Class="mr-2" OnClick="Abandon">
+                    @(_editingCheckRecordId.HasValue ? "返回收款记录" : "放弃")
+                </MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" Class="mr-2" OnClick="() => SaveCheck(false)">保存草稿</MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SaveCheck(true)">提交入库</MudButton>
             </MudPaper>
         </MudItem>
     </MudGrid>
 }
+else if (_ocrResult == null)
+{
+    <MudAlert Severity="Severity.Error">未找到 OCR 记录</MudAlert>
+}
+else if (_ocrResult.Status == OcrStatus.Pending || _ocrResult.Status == OcrStatus.Processing)
+{
+    <MudPaper Class="pa-4 mt-4">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.h6">OCR 正在处理中...</MudText>
+            <MudText Typo="Typo.body2">请稍候或点击下方按钮刷新状态。</MudText>
+            <MudStack Row="true" Spacing="1">
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">提交时间：@_ocrResult.CreatedAt.ToLocalTime():g</MudText>
+            </MudStack>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RefreshStatus">刷新状态</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+else if (_ocrResult.Status == OcrStatus.Failed)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-3">
+        OCR 识别失败：@(_ocrResult.ErrorMessage ?? "未知错误")
+    </MudAlert>
+    <MudStack Row="true" Spacing="2">
+        <MudButton Variant="Variant.Outlined" OnClick="RefreshStatus">刷新状态</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RetryOcr" Disabled="@_retryingOcr">
+            @(_retryingOcr ? "重新提交中..." : "重新提交 OCR 任务")
+        </MudButton>
+    </MudStack>
+}
+else if (_ocrResult.RawResult == null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-3">
+        未找到 OCR 结果，请重新触发识别。
+    </MudAlert>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RetryOcr" Disabled="@_retryingOcr">
+        @(_retryingOcr ? "重新提交中..." : "重新提交 OCR 任务")
+    </MudButton>
+}
 
 @code {
     [Parameter] public Guid Id { get; set; }
+    [Parameter] public Guid DraftId { get; set; }
 
     private bool _loading = true;
     private bool _retryingOcr;
     private bool _prefilledFromOcr;
+    private Guid? _editingCheckRecordId;
+    private string? _initError;
     private OcrResult? _ocrResult;
     private List<Customer> _customers = new();
     private string _checkNumber = string.Empty;
@@ -276,12 +294,138 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadOcrResultAsync();
+        if (DraftId != Guid.Empty)
+            await LoadDraftForEditAsync();
+        else
+            await LoadOcrResultAsync();
+    }
+
+    private bool ShowCheckEditForm()
+    {
+        if (_editingCheckRecordId.HasValue) return true;
+        return _ocrResult != null
+               && _ocrResult.Status == OcrStatus.Completed
+               && _ocrResult.RawResult != null;
+    }
+
+    private async Task LoadDraftForEditAsync()
+    {
+        _loading = true;
+        _initError = null;
+        try
+        {
+            if (DraftId == Guid.Empty)
+            {
+                _initError = "无效的草稿 Id";
+                return;
+            }
+
+            var draft = await DbContext.CheckRecords
+                .AsNoTracking()
+                .Include(c => c.Customer)
+                .ThenInclude(cu => cu.CompanyNames)
+                .Include(c => c.OcrResult)
+                .Include(c => c.DebitRecord)
+                .FirstOrDefaultAsync(c => c.Id == DraftId);
+
+            if (draft == null)
+            {
+                _initError = "未找到该支票记录";
+                return;
+            }
+
+            if (draft.SubmittedAt != null)
+            {
+                _initError = "该记录已提交入库，请在收款记录中查看。";
+                return;
+            }
+
+            if (draft.Status != CheckStatus.PendingDebit)
+            {
+                _initError = "仅待扣款状态的草稿可在此编辑";
+                return;
+            }
+
+            if (draft.DebitRecord != null)
+            {
+                _initError = "该草稿已关联银行扣款，无法在此编辑";
+                return;
+            }
+
+            if (draft.OcrResult == null)
+            {
+                _initError = "草稿缺少关联的 OCR 记录，无法打开编辑页";
+                return;
+            }
+
+            _editingCheckRecordId = draft.Id;
+            _ocrResult = draft.OcrResult;
+
+            _customers = await DbContext.Customers
+                .Where(c => c.IsActive)
+                .Include(c => c.CompanyNames)
+                .ToListAsync();
+
+            ApplyCheckRecordToForm(draft);
+            RefreshConfidenceFromSelectedOcrEngine();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyCheckRecordToForm(CheckRecord c)
+    {
+        _checkNumber = c.CheckNumber;
+        _amount = c.CheckAmount;
+        _checkDate = c.CheckDate;
+        _notes = c.Notes ?? string.Empty;
+        _routingNumber = c.RoutingNumber ?? string.Empty;
+        _accountNumber = c.AccountNumber ?? string.Empty;
+        _bankName = c.BankName ?? string.Empty;
+        _accountHolderName = c.AccountHolderName ?? string.Empty;
+        _accountAddress = c.AccountAddress ?? string.Empty;
+        _accountType = c.AccountType ?? string.Empty;
+        _payToOrderOf = c.PayToOrderOf ?? string.Empty;
+        _forMemo = c.ForMemo ?? string.Empty;
+        _micrLineRaw = c.MicrLineRaw ?? string.Empty;
+        _checkNumberMicr = c.CheckNumberMicr ?? string.Empty;
+        _invoiceNumbers = c.InvoiceNumbers ?? string.Empty;
+        _paymentPeriodText = c.PaymentPeriodText ?? string.Empty;
+        _companyName = c.CompanyName ?? string.Empty;
+        _customerCode = c.Customer?.CustomerCode ?? string.Empty;
+        _customerPhone = c.Customer?.MobilePhone ?? string.Empty;
+        _prefilledFromOcr = true;
+    }
+
+    private void RefreshConfidenceFromSelectedOcrEngine()
+    {
+        if (_ocrResult == null)
+        {
+            _confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            return;
+        }
+
+        var useAzure = _ocrEngineSlider == 1;
+        var rawReady = useAzure
+            ? _ocrResult.AzureStatus == OcrStatus.Completed && _ocrResult.AzureRawResult != null
+            : _ocrResult.Status == OcrStatus.Completed && _ocrResult.RawResult != null;
+        if (!rawReady)
+        {
+            _confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            return;
+        }
+
+        var conf = useAzure ? _ocrResult.AzureConfidenceScores : _ocrResult.ConfidenceScores;
+        _confidenceScores = ExtractConfidenceScoresFrom(conf);
     }
 
     private async Task LoadOcrResultAsync()
     {
         _loading = true;
+        _editingCheckRecordId = null;
+        _initError = null;
         _ocrResult = await DbContext.OcrResults
             .AsNoTracking()
             .FirstOrDefaultAsync(o => o.Id == Id);
@@ -370,6 +514,13 @@ else
     /// <summary>滑块切换引擎时重新填充表单</summary>
     private void OnOcrEngineChanged(double value)
     {
+        if (_editingCheckRecordId.HasValue)
+        {
+            RefreshConfidenceFromSelectedOcrEngine();
+            StateHasChanged();
+            return;
+        }
+
         PopulateFromStoredResult(force: true);
         StateHasChanged();
     }
@@ -537,9 +688,21 @@ else
             ? Icons.Material.Filled.Warning
             : Icons.Material.Filled.Error;
 
-    private void Abandon() => Navigation.NavigateTo("/checks/upload");
+    private void Abandon()
+    {
+        if (_editingCheckRecordId.HasValue)
+            Navigation.NavigateTo("/records");
+        else
+            Navigation.NavigateTo("/checks/upload");
+    }
 
-    private async Task RefreshStatus() => await LoadOcrResultAsync();
+    private async Task RefreshStatus()
+    {
+        if (_editingCheckRecordId.HasValue)
+            await LoadDraftForEditAsync();
+        else
+            await LoadOcrResultAsync();
+    }
 
     private async Task RetryOcr()
     {
@@ -561,8 +724,11 @@ else
             tracked.RawResult = null;
             tracked.ConfidenceScores?.Dispose();
             tracked.ConfidenceScores = null;
-            _prefilledFromOcr = false;
-            ResetRecognizedFields();
+            if (!_editingCheckRecordId.HasValue)
+            {
+                _prefilledFromOcr = false;
+                ResetRecognizedFields();
+            }
 
             await DbContext.SaveChangesAsync();
             await OcrWorker.EnqueueAsync(tracked.Id);
@@ -575,7 +741,10 @@ else
         finally
         {
             _retryingOcr = false;
-            await LoadOcrResultAsync();
+            if (_editingCheckRecordId.HasValue)
+                await LoadDraftForEditAsync();
+            else
+                await LoadOcrResultAsync();
         }
     }
 
@@ -596,7 +765,13 @@ else
 
     private async Task SaveCheck(bool submitAsFinal)
     {
-        if (_ocrResult == null || _ocrResult.Status != OcrStatus.Completed)
+        if (_ocrResult == null)
+        {
+            Snackbar.Add("缺少 OCR 记录，无法保存", Severity.Error);
+            return;
+        }
+
+        if (!_editingCheckRecordId.HasValue && _ocrResult.Status != OcrStatus.Completed)
         {
             Snackbar.Add("OCR 尚未完成，无法入库", Severity.Warning);
             return;
@@ -606,6 +781,12 @@ else
         if (!string.IsNullOrEmpty(validationError))
         {
             Snackbar.Add(validationError, Severity.Error);
+            return;
+        }
+
+        if (_editingCheckRecordId.HasValue)
+        {
+            await UpdateDraftCheckAsync(submitAsFinal);
             return;
         }
 
@@ -625,7 +806,7 @@ else
 
         var check = new CheckRecord
         {
-            CheckNumber = _checkNumber,
+            CheckNumber = _checkNumber.Trim(),
             CheckAmount = _amount,
             CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc),
             Customer = customer,
@@ -665,6 +846,87 @@ else
         }
     }
 
+    private async Task UpdateDraftCheckAsync(bool submitAsFinal)
+    {
+        var id = _editingCheckRecordId!.Value;
+
+        var customer = await ResolveCustomerAsync();
+        var mismatch = CheckMasterDataComparer.HasMismatch(
+            customer,
+            NullIfEmpty(_bankName),
+            NullIfEmpty(_accountHolderName),
+            NullIfEmpty(_companyName),
+            NullIfEmpty(_accountNumber),
+            NullIfEmpty(_accountAddress));
+        if (mismatch)
+            Snackbar.Add("与客户主数据中的期望银行/账号/持有人/公司/地址不一致，已标记警告。", Severity.Warning);
+
+        var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
+        var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
+
+        try
+        {
+            var tracked = await DbContext.CheckRecords.FirstOrDefaultAsync(c => c.Id == id);
+            if (tracked == null)
+            {
+                Snackbar.Add("记录不存在", Severity.Error);
+                Navigation.NavigateTo("/records");
+                return;
+            }
+
+            if (tracked.SubmittedAt != null)
+            {
+                Snackbar.Add("该记录已提交", Severity.Info);
+                Navigation.NavigateTo("/records");
+                return;
+            }
+
+            if (tracked.Status != CheckStatus.PendingDebit)
+            {
+                Snackbar.Add("状态已变更，无法保存", Severity.Warning);
+                Navigation.NavigateTo("/records");
+                return;
+            }
+
+            if (await DbContext.DebitRecords.AnyAsync(d => d.CheckRecordId == id))
+            {
+                Snackbar.Add("已关联银行扣款，无法保存", Severity.Error);
+                return;
+            }
+
+            tracked.CheckNumber = _checkNumber.Trim();
+            tracked.CheckAmount = _amount;
+            tracked.CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
+            tracked.CustomerId = customer.Id;
+            tracked.Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim();
+            tracked.BankName = NullIfEmpty(_bankName);
+            tracked.RoutingNumber = NullIfEmpty(_routingNumber);
+            tracked.AccountNumber = NullIfEmpty(_accountNumber);
+            tracked.AccountType = NullIfEmpty(_accountType);
+            tracked.AccountHolderName = NullIfEmpty(_accountHolderName);
+            tracked.AccountAddress = NullIfEmpty(_accountAddress);
+            tracked.PayToOrderOf = NullIfEmpty(_payToOrderOf);
+            tracked.ForMemo = NullIfEmpty(_forMemo);
+            tracked.MicrLineRaw = NullIfEmpty(_micrLineRaw);
+            tracked.CheckNumberMicr = NullIfEmpty(_checkNumberMicr);
+            tracked.InvoiceNumbers = NullIfEmpty(_invoiceNumbers);
+            tracked.PaymentPeriodText = NullIfEmpty(_paymentPeriodText);
+            tracked.CompanyName = NullIfEmpty(_companyName);
+            tracked.SubmittedAt = submitAsFinal ? DateTime.UtcNow : null;
+            tracked.CustomerMasterMismatchWarning = mismatch;
+            tracked.CustomerCompanyNewRelationshipWarning = companyWarn;
+            tracked.UpdatedAt = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "草稿已保存。", Severity.Success);
+            Navigation.NavigateTo("/records");
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+        }
+    }
+
     private async Task<string?> ValidateFormAsync(bool submitAsFinal)
     {
         if (string.IsNullOrWhiteSpace(_checkNumber))
@@ -685,9 +947,11 @@ else
                 return "提交入库时请填写 Account Number";
         }
 
-        var exists = await DbContext.CheckRecords.AnyAsync(c => c.CheckNumber == _checkNumber);
+        var num = _checkNumber.Trim();
+        var selfId = _editingCheckRecordId ?? Guid.Empty;
+        var exists = await DbContext.CheckRecords.AnyAsync(c => c.CheckNumber == num && c.Id != selfId);
         if (exists)
-            return $"支票号 {_checkNumber} 已存在";
+            return $"支票号 {num} 已存在";
 
         return null;
     }

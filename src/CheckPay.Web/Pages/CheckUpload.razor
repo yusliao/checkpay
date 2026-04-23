@@ -871,7 +871,7 @@ else
             _current.Done = true;
             Snackbar.Add(submitAsFinal
                 ? "支票已提交入库！"
-                : "支票草稿已保存。可稍后在「收款记录」中打开该笔，补全 Routing / Account 后点击「提交入库」。",
+                : "支票草稿已保存。可稍后在「收款记录」中打开该笔，使用「编辑草稿」继续修改，或在收款记录中补全 Routing / Account 后「提交入库」。",
                 Severity.Success);
 
             _current = _uploadQueue.FirstOrDefault(q => !q.Done);

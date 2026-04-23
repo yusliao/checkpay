@@ -13,6 +13,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject IAuditLogService AuditLog
+@inject IBlobStorageService BlobStorage
 
 <PageTitle>收款记录 - CheckPay</PageTitle>
 
@@ -236,10 +237,19 @@
                         <MudTextField @bind-Value="_draftAccount" Label="Account Number" Variant="Variant.Outlined"
                                       Class="mb-2" Margin="Margin.Dense" />
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
-                                   Disabled="@_submittingDraft"
+                                   Disabled="@(_submittingDraft || _deletingDraft)"
                                    OnClick="SubmitDraftAsync">
                             @(_submittingDraft ? "提交中…" : "提交入库")
                         </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" FullWidth="true" Class="mt-2"
+                                   StartIcon="@Icons.Material.Filled.DeleteOutline"
+                                   Disabled="@(_submittingDraft || _deletingDraft)"
+                                   OnClick="ConfirmDeleteDraftAsync">
+                            @(_deletingDraft ? "删除中…" : "删除草稿")
+                        </MudButton>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1" Style="display:block">
+                            不再需要该笔时可删除草稿：记录与 OCR 结果将移除，已上传图片会尽量从存储删除，支票号可重新使用。
+                        </MudText>
                     </MudPaper>
                 </Authorized>
             </AuthorizeView>
@@ -298,6 +308,7 @@
     private bool _revokingDebit;
     private bool _revokingAchSuccess;
     private bool _submittingDraft;
+    private bool _deletingDraft;
     private string _draftRouting = "";
     private string _draftAccount = "";
 
@@ -441,6 +452,125 @@
         finally
         {
             _submittingDraft = false;
+        }
+    }
+
+    private async Task ConfirmDeleteDraftAsync()
+    {
+        if (_selectedRecord == null || _deletingDraft || _submittingDraft) return;
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small };
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: "删除草稿",
+            message: $"确定删除支票号 {_selectedRecord.CheckNumber} 的草稿吗？此操作不可恢复，支票号将可重新用于上传。",
+            yesText: "删除",
+            cancelText: "取消",
+            options: options);
+        if (confirmed != true) return;
+
+        await DeleteDraftAsync();
+    }
+
+    private async Task DeleteDraftAsync()
+    {
+        if (_selectedRecord == null) return;
+
+        var checkId = _selectedRecord.Id;
+        _deletingDraft = true;
+        try
+        {
+            var tracked = await DbContext.CheckRecords
+                .Include(c => c.DebitRecord)
+                .FirstOrDefaultAsync(c => c.Id == checkId);
+
+            if (tracked == null)
+            {
+                Snackbar.Add("记录不存在", Severity.Error);
+                _drawerOpen = false;
+                _selectedRecord = null;
+                await LoadRecords();
+                return;
+            }
+
+            if (tracked.SubmittedAt != null)
+            {
+                Snackbar.Add("已提交的记录不能作为草稿删除", Severity.Warning);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            if (tracked.Status != CheckStatus.PendingDebit || tracked.DebitRecord != null)
+            {
+                Snackbar.Add("仅允许删除未关联扣款、且状态为待扣款的草稿", Severity.Warning);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            var checkNumber = tracked.CheckNumber;
+            var imageUrl = tracked.ImageUrl;
+            var ocrResultId = tracked.OcrResultId;
+
+            var linkedDebits = await DbContext.DebitRecords
+                .Where(d => d.CheckRecordId == checkId)
+                .ToListAsync();
+            var now = DateTime.UtcNow;
+            foreach (var d in linkedDebits)
+            {
+                d.CheckRecordId = null;
+                d.DebitStatus = DebitStatus.Unmatched;
+                d.UpdatedAt = now;
+            }
+
+            DbContext.CheckRecords.Remove(tracked);
+
+            if (ocrResultId.HasValue)
+            {
+                var ocr = await DbContext.OcrResults.FirstOrDefaultAsync(o => o.Id == ocrResultId.Value);
+                if (ocr != null)
+                    DbContext.OcrResults.Remove(ocr);
+            }
+
+            try
+            {
+                await DbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(imageUrl))
+            {
+                try
+                {
+                    await BlobStorage.DeleteAsync(imageUrl);
+                }
+                catch
+                {
+                    // 存储删除失败不阻断业务；记录已从库中移除
+                }
+            }
+
+            await AuditLog.LogAsync(AuditAction.Delete, "CheckRecord", checkId,
+                new { CheckNumber = checkNumber, SubmittedAt = (DateTime?)null, Status = CheckStatus.PendingDebit },
+                new { Note = "草稿删除" });
+
+            Snackbar.Add($"草稿「{checkNumber}」已删除", Severity.Success);
+            _drawerOpen = false;
+            _selectedRecord = null;
+            await LoadRecords();
+        }
+        finally
+        {
+            _deletingDraft = false;
         }
     }
 

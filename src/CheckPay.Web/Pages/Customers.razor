@@ -38,7 +38,7 @@
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
                    StartIcon="@Icons.Material.Filled.Add"
                    OnClick="StartAddNew"
-                   Disabled="@(_addingNew || _editingId.HasValue || _importing)">
+                   Disabled="@(_addingNew || _importing)">
             新增客户
         </MudButton>
     </MudStack>
@@ -49,148 +49,85 @@
         <MudTh>客户账号</MudTh>
         <MudTh>客户名称</MudTh>
         <MudTh>手机号</MudTh>
-        <MudTh>关联公司</MudTh>
         <MudTh>关联银行</MudTh>
-        <MudTh>期望地址</MudTh>
+        <MudTh>客户地址</MudTh>
         <MudTh>状态</MudTh>
         <MudTh>授权</MudTh>
         <MudTh>操作</MudTh>
     </HeaderContent>
     <RowTemplate>
-        @if (_editingId == context.Id)
-        {
-            @* 内联编辑行 *@
-            <MudTd DataLabel="客户账号">
-                <MudText Color="Color.Secondary">@context.CustomerCode</MudText>
-            </MudTd>
-            <MudTd DataLabel="客户名称">
-                <MudStack Spacing="1">
-                    <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                  Style="min-width:200px" />
-                    <MudTextField @bind-Value="_editExpectedBank" Label="关联银行" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                    <MudTextField @bind-Value="_editOcrCompanyName" Label="票面公司名称（OCR 公司/持有人）" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                    <MudTextField @bind-Value="_editExpectedAddress" Label="期望账户地址" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
-                </MudStack>
-            </MudTd>
-            <MudTd DataLabel="手机号">
-                <MudTextField @bind-Value="_editMobilePhone" Label="手机号" Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Style="min-width:140px" />
-            </MudTd>
-            <MudTd DataLabel="关联公司">
-                <MudTextField @bind-Value="_editCompaniesRaw" Label="关联公司名称（每行一条）" Variant="Variant.Outlined"
-                              Margin="Margin.Dense" Lines="4" Style="min-width:220px" />
-            </MudTd>
-            <MudTd DataLabel="关联银行"><MudText Typo="Typo.caption" Color="Color.Secondary">见名称列</MudText></MudTd>
-            <MudTd DataLabel="期望地址"><MudText Typo="Typo.caption" Color="Color.Secondary">见名称列</MudText></MudTd>
-            <MudTd DataLabel="状态">
-                <MudSelect @bind-Value="_editIsActive" Variant="Variant.Outlined" Margin="Margin.Dense"
-                           Style="min-width:100px">
-                    <MudSelectItem Value="true">活跃</MudSelectItem>
-                    <MudSelectItem Value="false">停用</MudSelectItem>
-                </MudSelect>
-            </MudTd>
-            <MudTd DataLabel="授权">
-                @if (context.IsAuthorized)
-                {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Success">已授权</MudChip>
-                }
-                else
-                {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                             Disabled="_addingNew"
-                             OnClick="@(async () => await ConfirmAuthorizeAsync(context))"
-                             title="点击设为已授权">
-                        未授权
-                    </MudChip>
-                }
-            </MudTd>
-            <MudTd DataLabel="操作">
-                <MudStack Row="true" Spacing="1">
-                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
-                               OnClick="@(() => SaveEdit(context))">保存</MudButton>
-                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelEdit">取消</MudButton>
-                </MudStack>
-            </MudTd>
-        }
-        else
-        {
-            @* 只读行 *@
-            <MudTd DataLabel="客户账号">@context.CustomerCode</MudTd>
-            <MudTd DataLabel="客户名称">@context.CustomerName</MudTd>
-            <MudTd DataLabel="手机号">@(string.IsNullOrWhiteSpace(context.MobilePhone) ? "—" : context.MobilePhone)</MudTd>
-            <MudTd DataLabel="关联公司">
-                <MudText Typo="Typo.caption" Style="word-break:break-word">@DisplayCompanyNamesColumn(context)</MudText>
-            </MudTd>
-            <MudTd DataLabel="关联银行">@(context.ExpectedBankName ?? "—")</MudTd>
-            <MudTd DataLabel="期望地址">
-                <MudText Typo="Typo.caption" Style="word-break:break-word">@(context.ExpectedAccountAddress ?? "—")</MudText>
-            </MudTd>
-            <MudTd DataLabel="状态">
-                <MudChip T="string" Size="Size.Small"
-                         Color="@(context.IsActive ? Color.Success : Color.Default)">
-                    @(context.IsActive ? "活跃" : "停用")
+        <MudTd DataLabel="客户账号">@context.CustomerCode</MudTd>
+        <MudTd DataLabel="客户名称">@context.CustomerName</MudTd>
+        <MudTd DataLabel="手机号">@(string.IsNullOrWhiteSpace(context.MobilePhone) ? "—" : context.MobilePhone)</MudTd>
+        <MudTd DataLabel="关联银行">@(context.ExpectedBankName ?? "—")</MudTd>
+        <MudTd DataLabel="客户地址">
+            <MudText Typo="Typo.caption" Style="word-break:break-word">@(context.ExpectedAccountAddress ?? "—")</MudText>
+        </MudTd>
+        <MudTd DataLabel="状态">
+            <MudChip T="string" Size="Size.Small"
+                     Color="@(context.IsActive ? Color.Success : Color.Default)">
+                @(context.IsActive ? "活跃" : "停用")
+            </MudChip>
+        </MudTd>
+        <MudTd DataLabel="授权">
+            @if (context.IsAuthorized)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Success">已授权</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                         Disabled="_addingNew"
+                         OnClick="@(async () => await ConfirmAuthorizeAsync(context))"
+                         title="点击设为已授权">
+                    未授权
                 </MudChip>
-            </MudTd>
-            <MudTd DataLabel="授权">
-                @if (context.IsAuthorized)
+            }
+        </MudTd>
+        <MudTd DataLabel="操作">
+            <MudStack Row="true" Spacing="1">
+                <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                           Disabled="_addingNew"
+                           OnClick="@(() => OpenEditDialogAsync(context))">编辑</MudButton>
+                @if (!context.IsAuthorized)
                 {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Success">已授权</MudChip>
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="_addingNew"
+                               StartIcon="@Icons.Material.Filled.VerifiedUser"
+                               OnClick="@(async () => await ConfirmAuthorizeAsync(context))">确认授权</MudButton>
+                }
+                <AuthorizeView Roles="Admin" Context="_">
+                    <Authorized>
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                                   Disabled="_addingNew"
+                                   StartIcon="@Icons.Material.Filled.DeleteOutline"
+                                   OnClick="@(async () => await ConfirmDeleteCustomerAsync(context))"
+                                   title="无关联支票与扣款时可删除">
+                            删除
+                        </MudButton>
+                    </Authorized>
+                </AuthorizeView>
+                @if (context.IsActive)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                               Disabled="_addingNew"
+                               OnClick="@(() => ToggleActive(context))">停用</MudButton>
                 }
                 else
                 {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                             Disabled="@(_editingId.HasValue || _addingNew)"
-                             OnClick="@(async () => await ConfirmAuthorizeAsync(context))"
-                             title="点击设为已授权">
-                        未授权
-                    </MudChip>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                               Disabled="_addingNew"
+                               OnClick="@(() => ToggleActive(context))">启用</MudButton>
                 }
-            </MudTd>
-            <MudTd DataLabel="操作">
-                <MudStack Row="true" Spacing="1">
-                    <MudButton Size="Size.Small" Variant="Variant.Outlined"
-                               Disabled="@(_editingId.HasValue || _addingNew)"
-                               OnClick="@(() => StartEdit(context))">编辑</MudButton>
-                    @if (!context.IsAuthorized)
-                    {
-                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
-                                   Disabled="@(_editingId.HasValue || _addingNew)"
-                                   StartIcon="@Icons.Material.Filled.VerifiedUser"
-                                   OnClick="@(async () => await ConfirmAuthorizeAsync(context))">确认授权</MudButton>
-                    }
-                    <AuthorizeView Roles="Admin" Context="_">
-                        <Authorized>
-                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
-                                       Disabled="@(_editingId.HasValue || _addingNew)"
-                                       StartIcon="@Icons.Material.Filled.DeleteOutline"
-                                       OnClick="@(async () => await ConfirmDeleteCustomerAsync(context))"
-                                       title="无关联支票与扣款时可删除">
-                                删除
-                            </MudButton>
-                        </Authorized>
-                    </AuthorizeView>
-                    @if (context.IsActive)
-                    {
-                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
-                                   Disabled="@(_editingId.HasValue || _addingNew)"
-                                   OnClick="@(() => ToggleActive(context))">停用</MudButton>
-                    }
-                    else
-                    {
-                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
-                                   Disabled="@(_editingId.HasValue || _addingNew)"
-                                   OnClick="@(() => ToggleActive(context))">启用</MudButton>
-                    }
-                </MudStack>
-            </MudTd>
-        }
+            </MudStack>
+        </MudTd>
     </RowTemplate>
 
     @* 新增行——在 FooterContent slot 内条件渲染 *@
     <FooterContent>
         @if (_addingNew)
         {
-            <MudTd colspan="9">
+            <MudTd colspan="8">
                 <MudGrid Class="pa-2" AlignItems="AlignItems.Center">
                     <MudItem xs="12" md="3">
                         <MudTextField @bind-Value="_newCode" Label="客户账号" Variant="Variant.Outlined"
@@ -203,7 +140,7 @@
                             <MudTextField @bind-Value="_newMobilePhone" Label="手机号（必填）" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             <MudTextField @bind-Value="_newExpectedBank" Label="关联银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             <MudTextField @bind-Value="_newOcrCompanyName" Label="票面公司名称（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                            <MudTextField @bind-Value="_newExpectedAddress" Label="期望地址（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+                            <MudTextField @bind-Value="_newExpectedAddress" Label="客户地址（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
                         </MudStack>
                     </MudItem>
                     <MudItem xs="12" md="3">
@@ -233,16 +170,6 @@
     private List<Customer> _customers = new();
     private bool _loading = true;
     private bool _importing;
-
-    // 内联编辑状态
-    private Guid? _editingId;
-    private string _editName = "";
-    private string _editExpectedBank = "";
-    private string _editOcrCompanyName = "";
-    private string _editExpectedAddress = "";
-    private string _editCompaniesRaw = "";
-    private string _editMobilePhone = "";
-    private bool _editIsActive;
 
     // 新增行状态
     private bool _addingNew;
@@ -386,7 +313,6 @@
 
         await DbContext.SaveChangesAsync();
         Snackbar.Add($"导入完成：新增 {inserted} 条，更新 {updated} 条", Severity.Success);
-        CancelEdit();
         CancelNew();
         await LoadData();
     }
@@ -406,25 +332,6 @@
         }
     }
 
-    /// <summary>列表「关联公司」列：优先展示多名称表；无登记时回退票面 OCR 公司/持有人（与已删列信息不重复展示）。</summary>
-    private static string DisplayCompanyNamesColumn(Customer c)
-    {
-        var lines = c.CompanyNames
-            .OrderBy(x => x.CompanyName)
-            .Select(x => x.CompanyName)
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .ToList();
-        if (lines.Count > 0)
-            return string.Join("；", lines);
-
-        var a = c.ExpectedCompanyName;
-        var b = c.ExpectedAccountHolderName;
-        if (string.IsNullOrWhiteSpace(a) && string.IsNullOrWhiteSpace(b)) return "—";
-        if (string.IsNullOrWhiteSpace(a)) return b!;
-        if (string.IsNullOrWhiteSpace(b)) return a!;
-        return string.Equals(a, b, StringComparison.Ordinal) ? a! : $"{a} / {b}";
-    }
-
     private async Task LoadData()
     {
         _loading = true;
@@ -436,79 +343,22 @@
         _loading = false;
     }
 
-    // 开始编辑某行
-    private void StartEdit(Customer c)
+    private async Task OpenEditDialogAsync(Customer c)
     {
-        _editingId = c.Id;
-        _editName = c.CustomerName;
-        _editExpectedBank = c.ExpectedBankName ?? "";
-        _editOcrCompanyName = c.ExpectedCompanyName ?? c.ExpectedAccountHolderName ?? "";
-        _editExpectedAddress = c.ExpectedAccountAddress ?? "";
-        _editIsActive = c.IsActive;
-        _editCompaniesRaw = string.Join(Environment.NewLine,
-            c.CompanyNames.OrderBy(x => x.CompanyName).Select(x => x.CompanyName));
-        _editMobilePhone = c.MobilePhone ?? "";
-    }
-
-    private void CancelEdit()
-    {
-        _editingId = null;
-        _editName = "";
-        _editExpectedBank = "";
-        _editOcrCompanyName = "";
-        _editExpectedAddress = "";
-        _editCompaniesRaw = "";
-        _editMobilePhone = "";
-    }
-
-    private static List<string> ParseCompanyLines(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return new List<string>();
-        return raw
-            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(s => s.Trim())
-            .Where(s => s.Length > 0)
-            .GroupBy(CustomerCompanyNameRules.NormalizeKey)
-            .Select(g => g.First())
-            .ToList();
-    }
-
-    private async Task SaveEdit(Customer c)
-    {
-        if (string.IsNullOrWhiteSpace(_editName)) return;
-        if (string.IsNullOrWhiteSpace(_editMobilePhone))
+        var parameters = new DialogParameters<CustomerEditDialog>
         {
-            Snackbar.Add("手机号不能为空", Severity.Warning);
-            return;
-        }
-
-        c.CustomerName = _editName.Trim();
-        c.MobilePhone = _editMobilePhone.Trim();
-        c.ExpectedBankName = string.IsNullOrWhiteSpace(_editExpectedBank) ? null : _editExpectedBank.Trim();
-        var ocrName = string.IsNullOrWhiteSpace(_editOcrCompanyName) ? null : _editOcrCompanyName.Trim();
-        c.ExpectedAccountHolderName = ocrName;
-        c.ExpectedCompanyName = ocrName;
-        c.ExpectedAccountAddress = string.IsNullOrWhiteSpace(_editExpectedAddress) ? null : _editExpectedAddress.Trim();
-        c.IsActive = _editIsActive;
-        c.UpdatedAt = DateTime.UtcNow;
-
-        var lines = ParseCompanyLines(_editCompaniesRaw);
-        var trackedNames = await DbContext.CustomerCompanyNames.Where(x => x.CustomerId == c.Id).ToListAsync();
-        DbContext.CustomerCompanyNames.RemoveRange(trackedNames);
-        foreach (var name in lines)
+            { x => x.CustomerId, c.Id }
+        };
+        var options = new DialogOptions
         {
-            DbContext.CustomerCompanyNames.Add(new CustomerCompanyName
-            {
-                CustomerId = c.Id,
-                CompanyName = name
-            });
-        }
-
-        await DbContext.SaveChangesAsync();
-
-        Snackbar.Add($"客户 {c.CustomerCode} 已保存", Severity.Success);
-        CancelEdit();
-        await LoadData();
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
+        };
+        var dialog = await DialogService.ShowAsync<CustomerEditDialog>($"编辑客户 · {c.CustomerCode}", parameters, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+            await LoadData();
     }
 
     private async Task ConfirmDeleteCustomerAsync(Customer c)
@@ -658,7 +508,7 @@
         DbContext.Customers.Add(customer);
         await DbContext.SaveChangesAsync();
 
-        foreach (var name in ParseCompanyLines(_newCompaniesRaw))
+        foreach (var name in CustomerCsvImportExport.ParseCompanyNamesCell(_newCompaniesRaw))
         {
             DbContext.CustomerCompanyNames.Add(new CustomerCompanyName
             {

@@ -19,7 +19,7 @@ public sealed record CustomerCsvImportRow(
 public static class CustomerCsvImportExport
 {
     public const string Header =
-        "客户账号,客户名称,手机号,关联银行,票面公司名称,期望地址,关联公司,活跃,已授权";
+        "客户账号,客户名称,手机号,关联银行,票面公司名称,客户地址,关联公司,活跃,已授权";
 
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
@@ -248,7 +248,7 @@ public static class CustomerCsvImportExport
         var phoneI = Find("手机号", "MobilePhone", "手机", "电话", "Phone");
         var bankI = Find("关联银行", "ExpectedBankName", "Bank");
         var ocrI = Find("票面公司名称", "OcrCompanyName", "ExpectedCompanyName");
-        var addrI = Find("期望地址", "ExpectedAccountAddress", "Address");
+        var addrI = Find("客户地址", "期望地址", "ExpectedAccountAddress", "Address");
         var compI = Find("关联公司", "CompanyNames", "Companies");
         var actI = Find("活跃", "IsActive", "Active");
         var authI = Find("已授权", "IsAuthorized", "Authorized");

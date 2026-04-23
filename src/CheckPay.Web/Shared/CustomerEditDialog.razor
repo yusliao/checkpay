@@ -1,0 +1,205 @@
+@using CheckPay.Application.Common
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Class="mb-4" />
+        }
+        else if (_loadError != null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true">@_loadError</MudAlert>
+        }
+        else
+        {
+            <MudStack Spacing="2">
+                <MudTextField Value="@_customerCode" Label="客户账号" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Disabled="true" />
+                <MudTextField @bind-Value="_editName" Label="客户名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_editMobilePhone" Label="手机号" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_editExpectedBank" Label="关联银行" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_editOcrCompanyName" Label="票面公司名称（OCR 公司/持有人）" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_editExpectedAddress" Label="客户地址" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="2" />
+                <MudTextField @bind-Value="_editCompaniesRaw" Label="关联公司名称（每行一条）" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" Lines="4" />
+                <MudSelect @bind-Value="_editIsActive" Label="状态" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelectItem Value="true">活跃</MudSelectItem>
+                    <MudSelectItem Value="false">停用</MudSelectItem>
+                </MudSelect>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">授权</MudText>
+                    @if (_isAuthorized)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success">已授权</MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">未授权</MudChip>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">（请在列表中点击「确认授权」）</MudText>
+                    }
+                </MudStack>
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CancelAsync" Disabled="_saving">取消</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" Disabled="@(_loading || _loadError != null || _saving)">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            保存
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public Guid CustomerId { get; set; }
+
+    private Guid _loadedCustomerId;
+    private bool _loadingCustomer;
+
+    private bool _loading = true;
+    private string? _loadError;
+    private bool _saving;
+
+    private string _customerCode = "";
+    private string _editName = "";
+    private string _editExpectedBank = "";
+    private string _editOcrCompanyName = "";
+    private string _editExpectedAddress = "";
+    private string _editCompaniesRaw = "";
+    private string _editMobilePhone = "";
+    private bool _editIsActive;
+    private bool _isAuthorized;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (CustomerId == Guid.Empty || CustomerId == _loadedCustomerId || _loadingCustomer)
+            return;
+        _loadingCustomer = true;
+        try
+        {
+            await LoadAsync();
+        }
+        finally
+        {
+            _loadingCustomer = false;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var c = await DbContext.Customers
+                .AsNoTracking()
+                .Include(x => x.CompanyNames)
+                .FirstOrDefaultAsync(x => x.Id == CustomerId && x.DeletedAt == null);
+
+            if (c == null)
+            {
+                _loadError = "客户不存在或已删除";
+                return;
+            }
+
+            _customerCode = c.CustomerCode;
+            _editName = c.CustomerName;
+            _editExpectedBank = c.ExpectedBankName ?? "";
+            _editOcrCompanyName = c.ExpectedCompanyName ?? c.ExpectedAccountHolderName ?? "";
+            _editExpectedAddress = c.ExpectedAccountAddress ?? "";
+            _editIsActive = c.IsActive;
+            _isAuthorized = c.IsAuthorized;
+            _editMobilePhone = c.MobilePhone ?? "";
+            _editCompaniesRaw = string.Join(Environment.NewLine,
+                c.CompanyNames.OrderBy(x => x.CompanyName).Select(x => x.CompanyName));
+            _loadedCustomerId = CustomerId;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task CancelAsync()
+    {
+        MudDialog.Cancel();
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_editName))
+        {
+            Snackbar.Add("客户名称不能为空", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_editMobilePhone))
+        {
+            Snackbar.Add("手机号不能为空", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var c = await DbContext.Customers
+                .FirstOrDefaultAsync(x => x.Id == CustomerId && x.DeletedAt == null);
+
+            if (c == null)
+            {
+                Snackbar.Add("客户不存在或已删除", Severity.Error);
+                MudDialog.Cancel();
+                return;
+            }
+
+            c.CustomerName = _editName.Trim();
+            c.MobilePhone = _editMobilePhone.Trim();
+            c.ExpectedBankName = string.IsNullOrWhiteSpace(_editExpectedBank) ? null : _editExpectedBank.Trim();
+            var ocrName = string.IsNullOrWhiteSpace(_editOcrCompanyName) ? null : _editOcrCompanyName.Trim();
+            c.ExpectedAccountHolderName = ocrName;
+            c.ExpectedCompanyName = ocrName;
+            c.ExpectedAccountAddress = string.IsNullOrWhiteSpace(_editExpectedAddress) ? null : _editExpectedAddress.Trim();
+            c.IsActive = _editIsActive;
+            c.UpdatedAt = DateTime.UtcNow;
+
+            var lines = CustomerCsvImportExport.ParseCompanyNamesCell(_editCompaniesRaw);
+            var trackedNames = await DbContext.CustomerCompanyNames.Where(x => x.CustomerId == c.Id).ToListAsync();
+            DbContext.CustomerCompanyNames.RemoveRange(trackedNames);
+            foreach (var name in lines)
+            {
+                DbContext.CustomerCompanyNames.Add(new CustomerCompanyName
+                {
+                    CustomerId = c.Id,
+                    CompanyName = name
+                });
+            }
+
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add($"客户 {c.CustomerCode} 已保存", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("保存失败：数据已被他人修改，请关闭对话框后刷新页面再试。", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

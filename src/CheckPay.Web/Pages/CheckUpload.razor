@@ -258,8 +258,17 @@ else
                                       Style="@GetFieldStyle("accountHolderName")" HelperText="@GetFieldHint("accountHolderName")" />
                         <MudTextField @bind-Value="_accountAddress" Label="Account Address" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
-                        <MudTextField @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")" />
+                        <MudSelect T="string" @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined"
+                                   Class="mb-2" Clearable="true"
+                                   Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")">
+                            <MudSelectItem T="string" Value="@("")">（请选择）</MudSelectItem>
+                            <MudSelectItem T="string" Value="@CheckAccountTypeCatalog.BusinessChecking">
+                                @CheckAccountTypeCatalog.BusinessChecking
+                            </MudSelectItem>
+                            <MudSelectItem T="string" Value="@CheckAccountTypeCatalog.Savings">
+                                @CheckAccountTypeCatalog.Savings
+                            </MudSelectItem>
+                        </MudSelect>
                         <MudSelect T="string" @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined"
                                    Class="mb-2" Clearable="true"
                                    Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")">
@@ -627,7 +636,13 @@ else
             _customerCode = acctForCustomer;
         PrefillStr("BankName", ref _bankName);
         PrefillStr("AccountAddress", ref _accountAddress);
-        PrefillStr("AccountType", ref _accountType);
+        var acctTypeRaw = ExtractString(root, "AccountType");
+        if (!string.IsNullOrEmpty(acctTypeRaw) && (force || string.IsNullOrEmpty(_accountType)))
+        {
+            var mapped = CheckAccountTypeCatalog.MatchSalesSelectable(acctTypeRaw);
+            if (mapped != null)
+                _accountType = mapped;
+        }
         var rawPayTo = ExtractString(root, "PayToOrderOf");
         if (!string.IsNullOrEmpty(rawPayTo) && (force || string.IsNullOrEmpty(_payToOrderOf)))
             _payToOrderOf = PayToOrderOfCatalog.MatchCanonical(rawPayTo) ?? "";

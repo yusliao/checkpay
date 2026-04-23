@@ -154,8 +154,17 @@ else
                               Style="@GetFieldStyle("accountHolderName")" HelperText="@GetFieldHint("accountHolderName")" />
                 <MudTextField @bind-Value="_accountAddress" Label="Account Address" Variant="Variant.Outlined" Class="mb-2"
                               Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
-                <MudTextField @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined" Class="mb-2"
-                              Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")" />
+                <MudSelect T="string" @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined"
+                           Class="mb-2" Clearable="true"
+                           Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")">
+                    <MudSelectItem T="string" Value="@("")">（请选择）</MudSelectItem>
+                    <MudSelectItem T="string" Value="@CheckAccountTypeCatalog.BusinessChecking">
+                        @CheckAccountTypeCatalog.BusinessChecking
+                    </MudSelectItem>
+                    <MudSelectItem T="string" Value="@CheckAccountTypeCatalog.Savings">
+                        @CheckAccountTypeCatalog.Savings
+                    </MudSelectItem>
+                </MudSelect>
                 <MudTextField @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined" Class="mb-2"
                               Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")" />
                 <MudTextField @bind-Value="_forMemo" Label="For / Memo" Variant="Variant.Outlined" Class="mb-2"
@@ -333,7 +342,9 @@ else
             _customerCode = acctForCustomer;
         Pull("BankName", ref _bankName);
         Pull("AccountAddress", ref _accountAddress);
-        Pull("AccountType", ref _accountType);
+        var acctTypeV = ExtractString(root, "AccountType");
+        if (!string.IsNullOrEmpty(acctTypeV))
+            _accountType = CheckAccountTypeCatalog.MatchSalesSelectable(acctTypeV) ?? "";
         Pull("PayToOrderOf", ref _payToOrderOf);
         Pull("ForMemo", ref _forMemo);
         Pull("MicrLineRaw", ref _micrLineRaw);
@@ -390,7 +401,9 @@ else
             _customerCode = acctForCustomer2;
         Pull2("BankName", ref _bankName);
         Pull2("AccountAddress", ref _accountAddress);
-        Pull2("AccountType", ref _accountType);
+        var acctTypeV2 = ExtractString(root, "AccountType");
+        if (!string.IsNullOrEmpty(acctTypeV2))
+            _accountType = CheckAccountTypeCatalog.MatchSalesSelectable(acctTypeV2) ?? "";
         Pull2("PayToOrderOf", ref _payToOrderOf);
         Pull2("ForMemo", ref _forMemo);
         Pull2("MicrLineRaw", ref _micrLineRaw);

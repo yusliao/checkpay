@@ -1,0 +1,113 @@
+@using CheckPay.Application.Common
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudTextField @bind-Value="_newCode" Label="客户账号" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Placeholder="与支票 OCR 账号一致" />
+            <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_newMobilePhone" Label="手机号（必填）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_newExpectedBank" Label="关联银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_newOcrCompanyName" Label="票面公司名称（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_newExpectedAddress" Label="客户地址（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+            <MudTextField @bind-Value="_newCompaniesRaw" Label="关联公司名称（每行一条，可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="4" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary">保存后授权状态默认为「未授权」，需在列表中确认后变为已授权。</MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CancelAsync" Disabled="_saving">取消</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" Disabled="_saving">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            保存
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private bool _saving;
+    private string _newCode = "";
+    private string _newName = "";
+    private string _newMobilePhone = "";
+    private string _newExpectedBank = "";
+    private string _newOcrCompanyName = "";
+    private string _newExpectedAddress = "";
+    private string _newCompaniesRaw = "";
+
+    private Task CancelAsync()
+    {
+        MudDialog.Cancel();
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName))
+        {
+            Snackbar.Add("请填写客户账号与客户名称", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_newMobilePhone))
+        {
+            Snackbar.Add("手机号不能为空", Severity.Warning);
+            return;
+        }
+
+        var code = _newCode.Trim();
+        var exists = await DbContext.Customers.AnyAsync(c => c.CustomerCode == code);
+        if (exists)
+        {
+            Snackbar.Add($"客户账号 {code} 已存在", Severity.Error);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var ocrName = string.IsNullOrWhiteSpace(_newOcrCompanyName) ? null : _newOcrCompanyName.Trim();
+
+            var customer = new Customer
+            {
+                CustomerCode = code,
+                CustomerName = _newName.Trim(),
+                MobilePhone = _newMobilePhone.Trim(),
+                ExpectedBankName = string.IsNullOrWhiteSpace(_newExpectedBank) ? null : _newExpectedBank.Trim(),
+                ExpectedAccountHolderName = ocrName,
+                ExpectedCompanyName = ocrName,
+                ExpectedAccountAddress = string.IsNullOrWhiteSpace(_newExpectedAddress) ? null : _newExpectedAddress.Trim(),
+                IsActive = true,
+                IsAuthorized = false
+            };
+            DbContext.Customers.Add(customer);
+            await DbContext.SaveChangesAsync();
+
+            foreach (var name in CustomerCsvImportExport.ParseCompanyNamesCell(_newCompaniesRaw))
+            {
+                DbContext.CustomerCompanyNames.Add(new CustomerCompanyName
+                {
+                    CustomerId = customer.Id,
+                    CompanyName = name
+                });
+            }
+
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add($"客户 {customer.CustomerCode} 已新增", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

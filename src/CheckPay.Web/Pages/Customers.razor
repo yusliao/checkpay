@@ -37,8 +37,8 @@
         </MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
                    StartIcon="@Icons.Material.Filled.Add"
-                   OnClick="StartAddNew"
-                   Disabled="@(_addingNew || _importing)">
+                   OnClick="OpenAddDialogAsync"
+                   Disabled="@_importing">
             新增客户
         </MudButton>
     </MudStack>
@@ -77,7 +77,6 @@
             else
             {
                 <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                         Disabled="_addingNew"
                          OnClick="@(async () => await ConfirmAuthorizeAsync(context))"
                          title="点击设为已授权">
                     未授权
@@ -87,19 +86,16 @@
         <MudTd DataLabel="操作">
             <MudStack Row="true" Spacing="1">
                 <MudButton Size="Size.Small" Variant="Variant.Outlined"
-                           Disabled="_addingNew"
                            OnClick="@(() => OpenEditDialogAsync(context))">编辑</MudButton>
                 @if (!context.IsAuthorized)
                 {
                     <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
-                               Disabled="_addingNew"
                                StartIcon="@Icons.Material.Filled.VerifiedUser"
                                OnClick="@(async () => await ConfirmAuthorizeAsync(context))">确认授权</MudButton>
                 }
                 <AuthorizeView Roles="Admin" Context="_">
                     <Authorized>
                         <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
-                                   Disabled="_addingNew"
                                    StartIcon="@Icons.Material.Filled.DeleteOutline"
                                    OnClick="@(async () => await ConfirmDeleteCustomerAsync(context))"
                                    title="无关联支票与扣款时可删除">
@@ -110,76 +106,22 @@
                 @if (context.IsActive)
                 {
                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
-                               Disabled="_addingNew"
                                OnClick="@(() => ToggleActive(context))">停用</MudButton>
                 }
                 else
                 {
                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
-                               Disabled="_addingNew"
                                OnClick="@(() => ToggleActive(context))">启用</MudButton>
                 }
             </MudStack>
         </MudTd>
     </RowTemplate>
-
-    @* 新增行——在 FooterContent slot 内条件渲染 *@
-    <FooterContent>
-        @if (_addingNew)
-        {
-            <MudTd colspan="8">
-                <MudGrid Class="pa-2" AlignItems="AlignItems.Center">
-                    <MudItem xs="12" md="3">
-                        <MudTextField @bind-Value="_newCode" Label="客户账号" Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" Placeholder="与支票 OCR账号一致" />
-                    </MudItem>
-                    <MudItem xs="12" md="3">
-                        <MudStack Spacing="1">
-                            <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined"
-                                          Margin="Margin.Dense" />
-                            <MudTextField @bind-Value="_newMobilePhone" Label="手机号（必填）" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                            <MudTextField @bind-Value="_newExpectedBank" Label="关联银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                            <MudTextField @bind-Value="_newOcrCompanyName" Label="票面公司名称（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                            <MudTextField @bind-Value="_newExpectedAddress" Label="客户地址（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
-                        </MudStack>
-                    </MudItem>
-                    <MudItem xs="12" md="3">
-                        <MudTextField @bind-Value="_newCompaniesRaw" Label="关联公司名称（每行一条，可选）" Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" Lines="4" />
-                    </MudItem>
-                    <MudItem xs="12" md="3">
-                        <MudStack Spacing="1">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">保存后授权状态默认为「未授权」，需确认后变为已授权。</MudText>
-                            <MudStack Row="true" Spacing="1">
-                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
-                                           OnClick="SaveNew"
-                                           Disabled="@(string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName) || string.IsNullOrWhiteSpace(_newMobilePhone))">
-                                    保存
-                                </MudButton>
-                                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelNew">取消</MudButton>
-                            </MudStack>
-                        </MudStack>
-                    </MudItem>
-                </MudGrid>
-            </MudTd>
-        }
-    </FooterContent>
 </MudTable>
 
 @code {
     private List<Customer> _customers = new();
     private bool _loading = true;
     private bool _importing;
-
-    // 新增行状态
-    private bool _addingNew;
-    private string _newCode = "";
-    private string _newName = "";
-    private string _newMobilePhone = "";
-    private string _newExpectedBank = "";
-    private string _newOcrCompanyName = "";
-    private string _newExpectedAddress = "";
-    private string _newCompaniesRaw = "";
 
     protected override async Task OnInitializedAsync() => await LoadData();
 
@@ -313,7 +255,6 @@
 
         await DbContext.SaveChangesAsync();
         Snackbar.Add($"导入完成：新增 {inserted} 条，更新 {updated} 条", Severity.Success);
-        CancelNew();
         await LoadData();
     }
 
@@ -341,6 +282,20 @@
             .OrderBy(c => c.CustomerCode)
             .ToListAsync();
         _loading = false;
+    }
+
+    private async Task OpenAddDialogAsync()
+    {
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
+        };
+        var dialog = await DialogService.ShowAsync<CustomerAddDialog>("新增客户", new DialogParameters(), options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+            await LoadData();
     }
 
     private async Task OpenEditDialogAsync(Customer c)
@@ -449,78 +404,4 @@
         await LoadData();
     }
 
-    // 新增行
-    private void StartAddNew()
-    {
-        _addingNew = true;
-        _newCode = "";
-        _newName = "";
-        _newMobilePhone = "";
-        _newExpectedBank = "";
-        _newOcrCompanyName = "";
-        _newExpectedAddress = "";
-        _newCompaniesRaw = "";
-    }
-
-    private void CancelNew()
-    {
-        _addingNew = false;
-        _newCode = "";
-        _newName = "";
-        _newMobilePhone = "";
-        _newExpectedBank = "";
-        _newOcrCompanyName = "";
-        _newExpectedAddress = "";
-        _newCompaniesRaw = "";
-    }
-
-    private async Task SaveNew()
-    {
-        if (string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName)) return;
-        if (string.IsNullOrWhiteSpace(_newMobilePhone))
-        {
-            Snackbar.Add("手机号不能为空", Severity.Warning);
-            return;
-        }
-
-        var code = _newCode.Trim();
-        var exists = await DbContext.Customers.AnyAsync(c => c.CustomerCode == code);
-        if (exists)
-        {
-            Snackbar.Add($"客户账号 {code} 已存在", Severity.Error);
-            return;
-        }
-
-        var ocrName = string.IsNullOrWhiteSpace(_newOcrCompanyName) ? null : _newOcrCompanyName.Trim();
-
-        var customer = new Customer
-        {
-            CustomerCode = code,
-            CustomerName = _newName.Trim(),
-            MobilePhone = _newMobilePhone.Trim(),
-            ExpectedBankName = string.IsNullOrWhiteSpace(_newExpectedBank) ? null : _newExpectedBank.Trim(),
-            ExpectedAccountHolderName = ocrName,
-            ExpectedCompanyName = ocrName,
-            ExpectedAccountAddress = string.IsNullOrWhiteSpace(_newExpectedAddress) ? null : _newExpectedAddress.Trim(),
-            IsActive = true,
-            IsAuthorized = false
-        };
-        DbContext.Customers.Add(customer);
-        await DbContext.SaveChangesAsync();
-
-        foreach (var name in CustomerCsvImportExport.ParseCompanyNamesCell(_newCompaniesRaw))
-        {
-            DbContext.CustomerCompanyNames.Add(new CustomerCompanyName
-            {
-                CustomerId = customer.Id,
-                CompanyName = name
-            });
-        }
-
-        await DbContext.SaveChangesAsync();
-
-        Snackbar.Add($"客户 {customer.CustomerCode} 已新增", Severity.Success);
-        CancelNew();
-        await LoadData();
-    }
 }

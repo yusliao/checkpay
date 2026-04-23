@@ -11,6 +11,7 @@ public class CustomerTests
 
         Assert.Equal(string.Empty, customer.CustomerCode);
         Assert.Equal(string.Empty, customer.CustomerName);
+        Assert.Equal(string.Empty, customer.MobilePhone);
         Assert.True(customer.IsActive);
         Assert.False(customer.IsAuthorized);
     }
@@ -22,11 +23,13 @@ public class CustomerTests
         {
             CustomerCode = "C001",
             CustomerName = "Test Customer",
+            MobilePhone = "13800138000",
             IsActive = false
         };
 
         Assert.Equal("C001", customer.CustomerCode);
         Assert.Equal("Test Customer", customer.CustomerName);
+        Assert.Equal("13800138000", customer.MobilePhone);
         Assert.False(customer.IsActive);
     }
 }

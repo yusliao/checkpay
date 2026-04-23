@@ -53,6 +53,9 @@ public class CheckRecord : BaseEntity
     /// <summary>美财标记扣款成功的时间（UTC）</summary>
     public DateTime? AchDebitSucceededAt { get; set; }
 
+    /// <summary>美财撤销「ACH 扣款成功」标记的时间（UTC）；用于大陆财务提示「银行侧扣款成功已被撤回」。</summary>
+    public DateTime? AchDebitSuccessRevokedAt { get; set; }
+
     // 反向导航：关联的扣款记录
     public DebitRecord? DebitRecord { get; set; }
 }

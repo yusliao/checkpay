@@ -48,6 +48,7 @@
     <HeaderContent>
         <MudTh>客户账号</MudTh>
         <MudTh>客户名称</MudTh>
+        <MudTh>手机号</MudTh>
         <MudTh>关联公司</MudTh>
         <MudTh>关联银行</MudTh>
         <MudTh>期望地址</MudTh>
@@ -70,6 +71,10 @@
                     <MudTextField @bind-Value="_editOcrCompanyName" Label="票面公司名称（OCR 公司/持有人）" Variant="Variant.Outlined" Margin="Margin.Dense" />
                     <MudTextField @bind-Value="_editExpectedAddress" Label="期望账户地址" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
                 </MudStack>
+            </MudTd>
+            <MudTd DataLabel="手机号">
+                <MudTextField @bind-Value="_editMobilePhone" Label="手机号" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="min-width:140px" />
             </MudTd>
             <MudTd DataLabel="关联公司">
                 <MudTextField @bind-Value="_editCompaniesRaw" Label="关联公司名称（每行一条）" Variant="Variant.Outlined"
@@ -112,6 +117,7 @@
             @* 只读行 *@
             <MudTd DataLabel="客户账号">@context.CustomerCode</MudTd>
             <MudTd DataLabel="客户名称">@context.CustomerName</MudTd>
+            <MudTd DataLabel="手机号">@(string.IsNullOrWhiteSpace(context.MobilePhone) ? "—" : context.MobilePhone)</MudTd>
             <MudTd DataLabel="关联公司">
                 <MudText Typo="Typo.caption" Style="word-break:break-word">@DisplayCompanyNamesColumn(context)</MudText>
             </MudTd>
@@ -184,7 +190,7 @@
     <FooterContent>
         @if (_addingNew)
         {
-            <MudTd colspan="8">
+            <MudTd colspan="9">
                 <MudGrid Class="pa-2" AlignItems="AlignItems.Center">
                     <MudItem xs="12" md="3">
                         <MudTextField @bind-Value="_newCode" Label="客户账号" Variant="Variant.Outlined"
@@ -194,6 +200,7 @@
                         <MudStack Spacing="1">
                             <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined"
                                           Margin="Margin.Dense" />
+                            <MudTextField @bind-Value="_newMobilePhone" Label="手机号（必填）" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             <MudTextField @bind-Value="_newExpectedBank" Label="关联银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             <MudTextField @bind-Value="_newOcrCompanyName" Label="票面公司名称（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             <MudTextField @bind-Value="_newExpectedAddress" Label="期望地址（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
@@ -209,7 +216,7 @@
                             <MudStack Row="true" Spacing="1">
                                 <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
                                            OnClick="SaveNew"
-                                           Disabled="@(string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName))">
+                                           Disabled="@(string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName) || string.IsNullOrWhiteSpace(_newMobilePhone))">
                                     保存
                                 </MudButton>
                                 <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelNew">取消</MudButton>
@@ -234,12 +241,14 @@
     private string _editOcrCompanyName = "";
     private string _editExpectedAddress = "";
     private string _editCompaniesRaw = "";
+    private string _editMobilePhone = "";
     private bool _editIsActive;
 
     // 新增行状态
     private bool _addingNew;
     private string _newCode = "";
     private string _newName = "";
+    private string _newMobilePhone = "";
     private string _newExpectedBank = "";
     private string _newOcrCompanyName = "";
     private string _newExpectedAddress = "";
@@ -345,6 +354,7 @@
                 {
                     CustomerCode = r.CustomerCode,
                     CustomerName = r.CustomerName,
+                    MobilePhone = r.MobilePhone.Trim(),
                     ExpectedBankName = r.ExpectedBankName,
                     ExpectedAccountHolderName = ocr,
                     ExpectedCompanyName = ocr,
@@ -360,6 +370,7 @@
             else
             {
                 c.CustomerName = r.CustomerName;
+                c.MobilePhone = r.MobilePhone.Trim();
                 c.ExpectedBankName = r.ExpectedBankName;
                 var ocr2 = r.OcrCompanyName;
                 c.ExpectedAccountHolderName = ocr2;
@@ -436,6 +447,7 @@
         _editIsActive = c.IsActive;
         _editCompaniesRaw = string.Join(Environment.NewLine,
             c.CompanyNames.OrderBy(x => x.CompanyName).Select(x => x.CompanyName));
+        _editMobilePhone = c.MobilePhone ?? "";
     }
 
     private void CancelEdit()
@@ -446,6 +458,7 @@
         _editOcrCompanyName = "";
         _editExpectedAddress = "";
         _editCompaniesRaw = "";
+        _editMobilePhone = "";
     }
 
     private static List<string> ParseCompanyLines(string? raw)
@@ -463,8 +476,14 @@
     private async Task SaveEdit(Customer c)
     {
         if (string.IsNullOrWhiteSpace(_editName)) return;
+        if (string.IsNullOrWhiteSpace(_editMobilePhone))
+        {
+            Snackbar.Add("手机号不能为空", Severity.Warning);
+            return;
+        }
 
         c.CustomerName = _editName.Trim();
+        c.MobilePhone = _editMobilePhone.Trim();
         c.ExpectedBankName = string.IsNullOrWhiteSpace(_editExpectedBank) ? null : _editExpectedBank.Trim();
         var ocrName = string.IsNullOrWhiteSpace(_editOcrCompanyName) ? null : _editOcrCompanyName.Trim();
         c.ExpectedAccountHolderName = ocrName;
@@ -586,6 +605,7 @@
         _addingNew = true;
         _newCode = "";
         _newName = "";
+        _newMobilePhone = "";
         _newExpectedBank = "";
         _newOcrCompanyName = "";
         _newExpectedAddress = "";
@@ -597,6 +617,7 @@
         _addingNew = false;
         _newCode = "";
         _newName = "";
+        _newMobilePhone = "";
         _newExpectedBank = "";
         _newOcrCompanyName = "";
         _newExpectedAddress = "";
@@ -606,6 +627,11 @@
     private async Task SaveNew()
     {
         if (string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName)) return;
+        if (string.IsNullOrWhiteSpace(_newMobilePhone))
+        {
+            Snackbar.Add("手机号不能为空", Severity.Warning);
+            return;
+        }
 
         var code = _newCode.Trim();
         var exists = await DbContext.Customers.AnyAsync(c => c.CustomerCode == code);
@@ -621,6 +647,7 @@
         {
             CustomerCode = code,
             CustomerName = _newName.Trim(),
+            MobilePhone = _newMobilePhone.Trim(),
             ExpectedBankName = string.IsNullOrWhiteSpace(_newExpectedBank) ? null : _newExpectedBank.Trim(),
             ExpectedAccountHolderName = ocrName,
             ExpectedCompanyName = ocrName,

@@ -42,6 +42,7 @@ public class CheckRecordConfiguration : IEntityTypeConfiguration<CheckRecord>
         builder.Property(e => e.CustomerMasterMismatchWarning).HasColumnName("customer_master_mismatch_warning").IsRequired();
         builder.Property(e => e.AchDebitSucceeded).HasColumnName("ach_debit_succeeded").IsRequired();
         builder.Property(e => e.AchDebitSucceededAt).HasColumnName("ach_debit_succeeded_at");
+        builder.Property(e => e.AchDebitSuccessRevokedAt).HasColumnName("ach_debit_success_revoked_at");
         builder.Property(e => e.RowVersion)
             .HasColumnName("xmin")
             .HasColumnType("xid")

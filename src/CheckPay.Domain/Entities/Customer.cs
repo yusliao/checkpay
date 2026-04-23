@@ -8,6 +8,10 @@ public class Customer : BaseEntity
     public string CustomerCode { get; set; } = string.Empty;
 
     public string CustomerName { get; set; } = string.Empty;
+
+    /// <summary>客户手机号（业务必填）。同一手机号可对应多个客户账号（1 对多）；每个客户账号下可有多个关联公司名称（1 对多）。</summary>
+    public string MobilePhone { get; set; } = string.Empty;
+
     public bool IsActive { get; set; } = true;
 
     /// <summary>false=未授权（如 OCR 自动建档）；true=已在客户管理中确认授权。</summary>

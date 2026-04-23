@@ -139,7 +139,18 @@
                         <tr>
                             <td><MudText Typo="Typo.body2">Pay to</MudText></td>
                             <td><MudChip T="string" Size="Size.Small" Color="@ChipColor(_ocrPayTo)">@(_ocrPayTo ?? "未识别")</MudChip></td>
-                            <td><MudTextField @bind-Value="_correctPayTo" Variant="Variant.Outlined" Margin="Margin.Dense" /></td>
+                            <td>
+                                <MudSelect T="string" @bind-Value="_correctPayTo" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                           Dense="true" Clearable="true">
+                                    <MudSelectItem T="string" Value="@("")">（请选择）</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@PayToOrderOfCatalog.CheungKongAllianceFood">
+                                        @PayToOrderOfCatalog.CheungKongAllianceFood
+                                    </MudSelectItem>
+                                    <MudSelectItem T="string" Value="@PayToOrderOfCatalog.MaxwellExcelFood">
+                                        @PayToOrderOfCatalog.MaxwellExcelFood
+                                    </MudSelectItem>
+                                </MudSelect>
+                            </td>
                         </tr>
                         <tr>
                             <td><MudText Typo="Typo.body2">公司名称</MudText></td>
@@ -268,7 +279,8 @@ else
     private string? _notes;
 
     private string? _ocrRtn, _ocrAcct, _ocrBank, _ocrHolder, _ocrAddr, _ocrType, _ocrPayTo, _ocrCompanyName, _ocrFor, _ocrMicr, _ocrChkMicr, _ocrMicrNote;
-    private string? _correctRtn, _correctAcct, _correctBank, _correctHolder, _correctAddr, _correctType, _correctPayTo, _correctCompanyName, _correctFor, _correctMicr, _correctChkMicr, _correctMicrNote;
+    private string? _correctRtn, _correctAcct, _correctBank, _correctHolder, _correctAddr, _correctType, _correctCompanyName, _correctFor, _correctMicr, _correctChkMicr, _correctMicrNote;
+    private string _correctPayTo = "";
 
     private List<OcrTrainingSample> _samples = new();
 
@@ -354,7 +366,7 @@ else
             _correctHolder ??= _ocrHolder;
             _correctAddr ??= _ocrAddr;
             _correctType ??= _ocrType;
-            _correctPayTo ??= _ocrPayTo;
+            _correctPayTo = PayToOrderOfCatalog.MatchCanonical(_ocrPayTo) ?? "";
             _correctCompanyName ??= _ocrCompanyName;
             _correctFor ??= _ocrFor;
             _correctMicr ??= _ocrMicr;
@@ -483,7 +495,8 @@ else
         _correctDate = null;
         _notes = null;
         _ocrRtn = _ocrAcct = _ocrBank = _ocrHolder = _ocrAddr = _ocrType = _ocrPayTo = _ocrCompanyName = _ocrFor = _ocrMicr = _ocrChkMicr = _ocrMicrNote = null;
-        _correctRtn = _correctAcct = _correctBank = _correctHolder = _correctAddr = _correctType = _correctPayTo = _correctCompanyName = _correctFor = _correctMicr = _correctChkMicr = _correctMicrNote = null;
+        _correctRtn = _correctAcct = _correctBank = _correctHolder = _correctAddr = _correctType = _correctCompanyName = _correctFor = _correctMicr = _correctChkMicr = _correctMicrNote = null;
+        _correctPayTo = "";
     }
 
     private void ResetAll()

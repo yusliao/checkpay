@@ -106,13 +106,14 @@
 
             // 生成 CSV
             var csv = new System.Text.StringBuilder();
-            csv.AppendLine("支票号,客户编号,客户名称,支票金额,支票日期,扣款金额,扣款日期,银行流水号,状态,备注");
+            csv.AppendLine("支票号,客户编号,客户名称,客户手机号,支票金额,支票日期,扣款金额,扣款日期,银行流水号,状态,备注");
             foreach (var r in records)
             {
                 csv.AppendLine(string.Join(",",
                     CsvEscape(r.CheckNumber),
                     CsvEscape(r.Customer?.CustomerCode ?? ""),
                     CsvEscape(r.Customer?.CustomerName ?? ""),
+                    CsvEscape(r.Customer?.MobilePhone ?? ""),
                     r.CheckAmount.ToString("N2"),
                     r.CheckDate.ToString("yyyy-MM-dd"),
                     r.DebitRecord?.DebitAmount.ToString("N2") ?? "",

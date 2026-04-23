@@ -12,6 +12,20 @@
 <MudText Typo="Typo.h3" GutterBottom="true">Dashboard</MudText>
 <MudText Class="mb-4">欢迎使用 CheckPay 收款系统</MudText>
 
+<AuthorizeView Roles="CNFinance,Admin">
+    <Authorized>
+        @if (_achSuccessRevokedPendingCount > 0)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4" Variant="Variant.Filled"
+                      ContentAlignment="HorizontalAlignment.Start">
+                待核查队列中有 <strong>@_achSuccessRevokedPendingCount</strong> 条已由美财撤回「ACH 扣款成功」标记，请到
+                <MudLink Href="/reviews" Typo="Typo.body2">待核查列表</MudLink>
+                核对实际到账后再确认。
+            </MudAlert>
+        }
+    </Authorized>
+</AuthorizeView>
+
 @* 统计卡片 - 可点击跳转 *@
 <MudGrid>
     <MudItem xs="12" sm="6" md="3">
@@ -110,6 +124,7 @@
     private int _questionedCount;
     private int _unmatchedCount;
     private int _todayCount;
+    private int _achSuccessRevokedPendingCount;
 
     private Timer? _refreshTimer;
 
@@ -133,6 +148,8 @@
         // 与异常列表一致：未关联支票的扣款（含「曾匹配但支票已删」的孤儿行）
         _unmatchedCount      = await DbContext.DebitRecords.CountAsync(d => d.CheckRecordId == null);
         _todayCount          = await DbContext.CheckRecords.CountAsync(c => c.CreatedAt.Date == DateTime.UtcNow.Date);
+        _achSuccessRevokedPendingCount = await DbContext.CheckRecords.CountAsync(c =>
+            c.Status == CheckStatus.PendingReview && c.AchDebitSuccessRevokedAt != null);
     }
 
     public void Dispose() => _refreshTimer?.Dispose();

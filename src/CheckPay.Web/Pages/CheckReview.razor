@@ -173,7 +173,14 @@ else
                                Required="true"
                                Variant="Variant.Outlined"
                                Class="mb-2"
-                               Placeholder="与支票账号一致，支持新建" />
+                               Placeholder="与支票账号一致，支持新建"
+                               OnBlur="@OnCustomerAccountBlur" />
+                <MudTextField @bind-Value="_customerPhone"
+                               Label="客户手机号"
+                               Required="true"
+                               Variant="Variant.Outlined"
+                               Class="mb-2"
+                               MaxLength="30" />
 
                 @if (ShowCustomerAuthorizationHint())
                 {
@@ -188,7 +195,7 @@ else
                     if (match != null)
                     {
                         <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">
-                            匹配客户：@match.CustomerName
+                            匹配客户：@match.CustomerName · 手机 @CustomerDisplay.MobileOrDash(match.MobilePhone)
                         </MudAlert>
                     }
                     else
@@ -240,6 +247,7 @@ else
     private decimal _amount;
     private DateTime? _checkDate;
     private string _customerCode = string.Empty;
+    private string _customerPhone = string.Empty;
     private string _notes = string.Empty;
     private string _routingNumber = "";
     private string _accountNumber = "";
@@ -298,6 +306,7 @@ else
             _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
             _companyName = "";
             _customerCode = "";
+            _customerPhone = "";
         }
 
         _confidenceScores = ExtractConfidenceScoresFrom(confScores);
@@ -332,6 +341,19 @@ else
         ApplyOcrMergedHolderCompany(root, force);
 
         _prefilledFromOcr = true;
+        SyncCustomerPhoneFromMasterIfNeeded();
+    }
+
+    private void OnCustomerAccountBlur(FocusEventArgs _)
+        => SyncCustomerPhoneFromMasterIfNeeded();
+
+    private void SyncCustomerPhoneFromMasterIfNeeded()
+    {
+        if (string.IsNullOrWhiteSpace(_customerCode) || !string.IsNullOrWhiteSpace(_customerPhone)) return;
+        var code = _customerCode.Trim();
+        var c = _customers.FirstOrDefault(x => x.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
+        if (c != null && !string.IsNullOrWhiteSpace(c.MobilePhone))
+            _customerPhone = c.MobilePhone;
     }
 
     /// <summary>滑块切换引擎时重新填充表单</summary>
@@ -550,6 +572,7 @@ else
         _amount = 0m;
         _checkDate = null;
         _customerCode = string.Empty;
+        _customerPhone = string.Empty;
         _notes = string.Empty;
         _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
         _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
@@ -639,6 +662,8 @@ else
             return "请选择支票日期";
         if (string.IsNullOrWhiteSpace(_customerCode))
             return "请输入客户账号";
+        if (string.IsNullOrWhiteSpace(_customerPhone))
+            return "请输入客户手机号";
         if (submitAsFinal)
         {
             if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
@@ -707,7 +732,18 @@ else
             .Include(c => c.CompanyNames)
             .FirstOrDefaultAsync(c => c.CustomerCode == code);
         if (existing != null)
+        {
+            var phone = _customerPhone.Trim();
+            if (!string.Equals(existing.MobilePhone, phone, StringComparison.Ordinal))
+            {
+                existing.MobilePhone = phone;
+                existing.UpdatedAt = DateTime.UtcNow;
+                var mem = _customers.FirstOrDefault(x => x.Id == existing.Id);
+                if (mem != null) mem.MobilePhone = phone;
+            }
+
             return existing;
+        }
 
         var ocrCompany = OcrCheckCustomerFields.MergeHolderCompanyDisplayName(_companyName, _accountHolderName, _payToOrderOf);
         var ocrCompanyTrim = string.IsNullOrWhiteSpace(ocrCompany) ? null : ocrCompany.Trim();
@@ -717,6 +753,7 @@ else
         {
             CustomerCode = code,
             CustomerName = displayName,
+            MobilePhone = _customerPhone.Trim(),
             ExpectedBankName = NullIfEmpty(_bankName),
             ExpectedAccountHolderName = ocrCompanyTrim,
             ExpectedCompanyName = ocrCompanyTrim,

@@ -152,7 +152,7 @@ else
                                Label="客户" Required="true" Class="mb-2">
                         @foreach (var c in _customers)
                         {
-                            <MudSelectItem Value="@c.Id">@c.CustomerName</MudSelectItem>
+                            <MudSelectItem Value="@c.Id">@c.CustomerName · @CustomerDisplay.MobileOrDash(c.MobilePhone)</MudSelectItem>
                         }
                     </MudSelect>
 
@@ -192,7 +192,7 @@ else
                     @if (_matchedCheck != null)
                     {
                         <MudAlert Severity="Severity.Success" Dense="true" Class="mb-2">
-                            已匹配：@_matchedCheck.Customer?.CustomerName — ＄@_matchedCheck.CheckAmount.ToString("N2")
+                            已匹配：@_matchedCheck.Customer?.CustomerName（手机 @CustomerDisplay.MobileOrDash(_matchedCheck.Customer?.MobilePhone)）— ＄@_matchedCheck.CheckAmount.ToString("N2")
                         </MudAlert>
                         @* 对应支票详情，方便财务核对 *@
                         <MudPaper Class="pa-3 mb-3" Style="background:#f1f8e9;border-left:4px solid #4caf50">
@@ -205,6 +205,10 @@ else
                                     <tr>
                                         <td><MudText Typo="Typo.caption" Color="Color.Secondary">客户</MudText></td>
                                         <td><MudText Typo="Typo.body2">@_matchedCheck.Customer?.CustomerName</MudText></td>
+                                    </tr>
+                                    <tr>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">客户手机号</MudText></td>
+                                        <td><MudText Typo="Typo.body2">@CustomerDisplay.MobileOrDash(_matchedCheck.Customer?.MobilePhone)</MudText></td>
                                     </tr>
                                     <tr>
                                         <td><MudText Typo="Typo.caption" Color="Color.Secondary">支票号</MudText></td>

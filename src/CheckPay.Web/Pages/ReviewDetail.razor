@@ -1,5 +1,6 @@
 @page "/reviews/{id:guid}"
 @attribute [Authorize(Roles = "CNFinance,Admin")]
+@using CheckPay.Application.Common
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
@@ -23,6 +24,14 @@ else if (_checkRecord == null)
 }
 else
 {
+    @if (_checkRecord.AchDebitSuccessRevokedAt != null)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-4" Variant="Variant.Filled">
+            <strong>扣款成功已撤回：</strong>美国财务已于
+            @_checkRecord.AchDebitSuccessRevokedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            取消本单的「ACH 扣款成功」标记（可能为银行后续拒付或冲正）。请核对银行实际到账与扣款扫描件后再确认核查结论。
+        </MudAlert>
+    }
     <MudGrid>
         @* 左：支票图片 *@
         <MudItem xs="12" md="6">
@@ -55,6 +64,8 @@ else
                     <tbody>
                         <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">客户</MudText></td>
                             <td>@_checkRecord.Customer?.CustomerName</td></tr>
+                        <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">客户手机号</MudText></td>
+                            <td>@CustomerDisplay.MobileOrDash(_checkRecord.Customer?.MobilePhone)</td></tr>
                         <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">支票号</MudText></td>
                             <td><strong>@_checkRecord.CheckNumber</strong></td></tr>
                         <tr><td><MudText Typo="Typo.caption" Color="Color.Secondary">金额</MudText></td>

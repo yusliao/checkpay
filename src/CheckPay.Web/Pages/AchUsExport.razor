@@ -1,20 +1,22 @@
 @page "/reports/ach-us"
 @attribute [Authorize(Roles = "USFinance,Admin")]
 @using System.Text
+@using CheckPay.Application.Common
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
-@using Microsoft.AspNetCore.Components.Authorization
+@using CheckPay.Domain.Enums
 @using Microsoft.EntityFrameworkCore
 @inject IApplicationDbContext DbContext
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
-@inject AuthenticationStateProvider AuthState
+@inject IDialogService DialogService
+@inject IAuditLogService AuditLog
 
 <PageTitle>ACH 支票导出（美国财务） - CheckPay</PageTitle>
 
 <MudText Typo="Typo.h4" GutterBottom="true">ACH 支票导出（美国财务）</MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-    只读列表，按上传日期筛选；可下载 CSV 供银行界面粘贴。管理员可标记 ACH 扣款成功。
+    只读列表，按上传日期筛选；可下载 CSV 供银行界面粘贴。美财/管理员可标记 ACH 扣款成功；待核查状态下可撤销成功标记（银行拒付/冲正）或撤销支票与扣款的关联。
 </MudText>
 
 <MudPaper Class="pa-4 mb-4">
@@ -37,36 +39,52 @@
     <HeaderContent>
         <MudTh>上传日期</MudTh>
         <MudTh>客户编号</MudTh>
+        <MudTh>手机号</MudTh>
         <MudTh>支票日期</MudTh>
         <MudTh>Bank</MudTh>
         <MudTh>RTN</MudTh>
         <MudTh>Account</MudTh>
         <MudTh>金额</MudTh>
         <MudTh>扣款成功</MudTh>
-        @if (_isAdmin)
-        {
-            <MudTh>操作</MudTh>
-        }
+        <MudTh>操作</MudTh>
     </HeaderContent>
     <RowTemplate>
         <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
         <MudTd>@context.Customer.CustomerCode</MudTd>
+        <MudTd>@CustomerDisplay.MobileOrDash(context.Customer.MobilePhone)</MudTd>
         <MudTd>@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
         <MudTd>@(context.BankName ?? "—")</MudTd>
         <MudTd>@(context.RoutingNumber ?? "—")</MudTd>
         <MudTd>@(context.AccountNumber ?? "—")</MudTd>
         <MudTd>@context.CheckAmount.ToString("N2")</MudTd>
         <MudTd>@(context.AchDebitSucceeded ? "Y" : "N")</MudTd>
-        @if (_isAdmin)
-        {
-            <MudTd>
+        <MudTd>
+            <MudStack Row="true" Spacing="1" Class="flex-wrap">
                 @if (!context.AchDebitSucceeded)
                 {
                     <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Success"
                                OnClick="@(() => MarkDebitSuccess(context))">标为成功</MudButton>
                 }
-            </MudTd>
-        }
+                @if (AchDebitSuccessMarkRevocation.CanRevokeSuccessMark(context))
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                               StartIcon="@Icons.Material.Filled.MoneyOff"
+                               Disabled="@(_revokingAchSuccessId == context.Id || _revokingAssociationId == context.Id)"
+                               OnClick="@(() => RevokeAchSuccessMarkAsync(context))">
+                        撤销成功
+                    </MudButton>
+                }
+                @if (PendingReviewDebitRevocation.CanRevoke(context))
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Warning"
+                               StartIcon="@Icons.Material.Filled.LinkOff"
+                               Disabled="@(_revokingAssociationId == context.Id || _revokingAchSuccessId == context.Id)"
+                               OnClick="@(() => RevokeDebitAssociationAsync(context))">
+                        撤销关联
+                    </MudButton>
+                }
+            </MudStack>
+        </MudTd>
     </RowTemplate>
 </MudTable>
 
@@ -77,14 +95,10 @@
     private List<CheckRecord> _failedRows = new();
     private bool _loading;
     private bool _exporting;
-    private bool _isAdmin;
+    private Guid? _revokingAssociationId;
+    private Guid? _revokingAchSuccessId;
 
-    protected override async Task OnInitializedAsync()
-    {
-        var auth = await AuthState.GetAuthenticationStateAsync();
-        _isAdmin = auth.User.IsInRole("Admin");
-        await LoadAsync();
-    }
+    protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task LoadAsync()
     {
@@ -96,6 +110,7 @@
         _rows = await DbContext.CheckRecords
             .AsNoTracking()
             .Include(c => c.Customer)
+            .Include(c => c.DebitRecord)
             .Where(c => c.CreatedAt >= start && c.CreatedAt <= end)
             .OrderByDescending(c => c.CreatedAt)
             .ToListAsync();
@@ -110,10 +125,117 @@
         if (tracked == null) return;
         tracked.AchDebitSucceeded = true;
         tracked.AchDebitSucceededAt = DateTime.UtcNow;
+        tracked.AchDebitSuccessRevokedAt = null;
         tracked.UpdatedAt = DateTime.UtcNow;
         await DbContext.SaveChangesAsync();
         Snackbar.Add("已标记扣款成功", Severity.Success);
         await LoadAsync();
+    }
+
+    private async Task RevokeAchSuccessMarkAsync(CheckRecord row)
+    {
+        if (_revokingAchSuccessId.HasValue || _revokingAssociationId.HasValue) return;
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small };
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: "撤销扣款成功",
+            message: $"支票 {row.CheckNumber}：取消「ACH 扣款成功」标记（银行拒付/冲正）。支票仍为待核查，不解除扣款关联。大陆财务将看到撤回提醒。确定继续？",
+            yesText: "撤销成功标记",
+            cancelText: "取消",
+            options: options);
+        if (confirmed != true) return;
+
+        var id = row.Id;
+        _revokingAchSuccessId = id;
+        try
+        {
+            AchSuccessMarkRevokeResult result;
+            try
+            {
+                result = await AchDebitSuccessMarkRevocation.TryRevokeAsync(DbContext, id);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+                await LoadAsync();
+                return;
+            }
+
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "无法撤销", Severity.Warning);
+                await LoadAsync();
+                return;
+            }
+
+            var s = result.Snapshot!;
+            await AuditLog.LogAsync(AuditAction.Update, "CheckRecord", id,
+                new { s.AchDebitSucceeded, s.AchDebitSucceededAt },
+                new { AchDebitSucceeded = false, AchDebitSucceededAt = (DateTime?)null, AchDebitSuccessRevoked = true });
+
+            Snackbar.Add("已撤销扣款成功标记", Severity.Success);
+            await LoadAsync();
+        }
+        finally
+        {
+            _revokingAchSuccessId = null;
+        }
+    }
+
+    private async Task RevokeDebitAssociationAsync(CheckRecord row)
+    {
+        if (_revokingAssociationId.HasValue || _revokingAchSuccessId.HasValue) return;
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small };
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: "撤销扣款关联",
+            message: $"支票 {row.CheckNumber}：将解除与当前银行扣款记录的关联，支票回到「待扣款」，扣款进入异常列表。确定继续？",
+            yesText: "撤销",
+            cancelText: "取消",
+            options: options);
+        if (confirmed != true) return;
+
+        var id = row.Id;
+        _revokingAssociationId = id;
+        try
+        {
+            RevokeDebitAssociationResult result;
+            try
+            {
+                result = await PendingReviewDebitRevocation.TryRevokeAsync(DbContext, id);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+                await LoadAsync();
+                return;
+            }
+
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "无法撤销", Severity.Warning);
+                await LoadAsync();
+                return;
+            }
+
+            var s = result.Snapshot!;
+            await AuditLog.LogAsync(AuditAction.Update, "CheckRecord", id,
+                new { Status = s.CheckStatus, s.AchDebitSucceeded, LinkedDebitId = s.DebitId },
+                new
+                {
+                    Status = CheckStatus.PendingDebit,
+                    AchDebitSucceeded = false,
+                    RevokedDebitId = s.DebitId,
+                    DebitNowUnmatched = true
+                });
+
+            Snackbar.Add("已撤销扣款关联", Severity.Success);
+            await LoadAsync();
+        }
+        finally
+        {
+            _revokingAssociationId = null;
+        }
     }
 
     private async Task ExportCsvAsync() => await ExportRowsAsync(_rows, "ach_us_all");
@@ -126,12 +248,13 @@
         try
         {
             var sb = new StringBuilder();
-            sb.AppendLine("UploadDate,CustomerCode,CheckDate,BankName,RoutingNumber,AccountNumber,AccountType,AccountHolderName,AccountAddress,CheckNumber,Amount,Note,SubmittedAtUtc,AchDebitSucceeded,InvoiceNumbers,PaymentPeriod,CompanyName,CustomerCompanyNewRelationshipWarning");
+            sb.AppendLine("UploadDate,CustomerCode,MobilePhone,CheckDate,BankName,RoutingNumber,AccountNumber,AccountType,AccountHolderName,AccountAddress,CheckNumber,Amount,Note,SubmittedAtUtc,AchDebitSucceeded,InvoiceNumbers,PaymentPeriod,CompanyName,CustomerCompanyNewRelationshipWarning");
             foreach (var c in rows)
             {
                 sb.AppendLine(string.Join(',',
                     Csv(c.CreatedAt.ToUniversalTime().ToString("yyyy-MM-dd")),
                     Csv(c.Customer.CustomerCode),
+                    Csv(c.Customer.MobilePhone),
                     Csv(c.CheckDate.ToString("yyyy-MM-dd")),
                     Csv(c.BankName),
                     Csv(c.RoutingNumber),

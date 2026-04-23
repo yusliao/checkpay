@@ -15,6 +15,7 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
 
         builder.Property(e => e.CustomerCode).HasColumnName("customer_code").HasMaxLength(50).IsRequired();
         builder.Property(e => e.CustomerName).HasColumnName("customer_name").HasMaxLength(200).IsRequired();
+        builder.Property(e => e.MobilePhone).HasColumnName("mobile_phone").HasMaxLength(30).IsRequired();
         builder.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
         // 必须 ValueGeneratedNever：否则 IsAuthorized=false 可能与 CLR/模型默认值对齐而被 INSERT 省略，
         // 旧库 is_authorized 列若仍为 DB DEFAULT true，新行会错误显示为已授权。

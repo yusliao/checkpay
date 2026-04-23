@@ -1,12 +1,18 @@
 @page "/records"
 @attribute [Authorize]
+@using CheckPay.Application.Common
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.WebUtilities
+@using System.Linq
 @inject IApplicationDbContext DbContext
 @inject NavigationManager Navigation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IAuditLogService AuditLog
 
 <PageTitle>收款记录 - CheckPay</PageTitle>
 
@@ -45,6 +51,7 @@
     <HeaderContent>
         <MudTh>支票号</MudTh>
         <MudTh>客户</MudTh>
+        <MudTh>手机号</MudTh>
         <MudTh>RTN(后4)</MudTh>
         <MudTh>提交</MudTh>
         <MudTh>支票金额</MudTh>
@@ -55,6 +62,7 @@
     <RowTemplate>
         <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
         <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+        <MudTd DataLabel="手机号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
         <MudTd DataLabel="RTN">@MaskRtn(context.RoutingNumber)</MudTd>
         <MudTd DataLabel="提交">
             @if (context.SubmittedAt.HasValue)
@@ -85,7 +93,7 @@
         </MudTd>
     </RowTemplate>
     <FooterContent>
-        <MudTd colspan="8">
+        <MudTd colspan="9">
             <MudText Typo="Typo.caption">共 @_records.Count 条记录</MudText>
         </MudTd>
     </FooterContent>
@@ -107,6 +115,11 @@
             <MudListItem T="string">
                 <MudText Typo="Typo.caption" Color="Color.Secondary">客户</MudText>
                 <MudText>@_selectedRecord.Customer?.CustomerName</MudText>
+            </MudListItem>
+            <MudDivider />
+            <MudListItem T="string">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">客户手机号</MudText>
+                <MudText>@CustomerDisplay.MobileOrDash(_selectedRecord.Customer?.MobilePhone)</MudText>
             </MudListItem>
             <MudDivider />
             <MudListItem T="string">
@@ -160,6 +173,16 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary">ACH 扣款成功</MudText>
                 <MudText>@(_selectedRecord.AchDebitSucceeded ? $"是 ({_selectedRecord.AchDebitSucceededAt:yyyy-MM-dd})" : "否")</MudText>
             </MudListItem>
+            @if (_selectedRecord.AchDebitSuccessRevokedAt != null)
+            {
+                <MudDivider />
+                <MudListItem T="string">
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="ma-0">
+                        美财已于 @_selectedRecord.AchDebitSuccessRevokedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                        撤回「ACH 扣款成功」标记（可能为银行后续拒付/冲正）。请大陆财务核对该笔实际到账情况后再确认核查结论。
+                    </MudAlert>
+                </MudListItem>
+            }
             <MudDivider />
             @if (_selectedRecord.CustomerMasterMismatchWarning)
             {
@@ -198,6 +221,30 @@
             </MudPaper>
         }
 
+        @* 草稿：补全 ACH 并正式提交（与上传页「提交入库」校验一致） *@
+        @if (_selectedRecord.SubmittedAt == null)
+        {
+            <AuthorizeView Roles="Sales,Admin">
+                <Authorized>
+                    <MudPaper Class="ma-4 pa-3" Elevation="0" Outlined="true">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">草稿 — 提交入库</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2" Style="display:block">
+                            保存草稿时未要求填写完整 ACH；请补全后提交，规则与上传页「提交入库」相同。
+                        </MudText>
+                        <MudTextField @bind-Value="_draftRouting" Label="Routing Number (9 位数字)" Variant="Variant.Outlined"
+                                      Class="mb-2" MaxLength="9" Margin="Margin.Dense" />
+                        <MudTextField @bind-Value="_draftAccount" Label="Account Number" Variant="Variant.Outlined"
+                                      Class="mb-2" Margin="Margin.Dense" />
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                                   Disabled="@_submittingDraft"
+                                   OnClick="SubmitDraftAsync">
+                            @(_submittingDraft ? "提交中…" : "提交入库")
+                        </MudButton>
+                    </MudPaper>
+                </Authorized>
+            </AuthorizeView>
+        }
+
         @* 状态变更按钮（待核查时显示） *@
         @if (_selectedRecord.Status == CheckStatus.PendingReview)
         {
@@ -207,6 +254,38 @@
                     去核查
                 </MudButton>
             </MudStack>
+            <AuthorizeView Roles="USFinance,Admin" Context="authCtx">
+                <Authorized>
+                    @if (AchDebitSuccessMarkRevocation.CanRevokeSuccessMark(_selectedRecord))
+                    {
+                        <MudStack Class="mx-4 mb-2">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" FullWidth="true"
+                                       StartIcon="@Icons.Material.Filled.MoneyOff"
+                                       Disabled="@(_revokingAchSuccess || _revokingDebit)"
+                                       OnClick="RevokeAchSuccessForSelectedAsync">
+                                @(_revokingAchSuccess ? "处理中…" : "撤销扣款成功")
+                            </MudButton>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                银行已扣款后又失败/冲正时使用：仅取消「ACH 扣款成功」标记，不解除与扣款扫描记录的关联；大陆财务将看到撤回提醒。
+                            </MudText>
+                        </MudStack>
+                    }
+                    @if (PendingReviewDebitRevocation.CanRevoke(_selectedRecord.Status, _selectedRecord.DebitRecord))
+                    {
+                        <MudStack Class="mx-4 mb-4">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Warning" FullWidth="true"
+                                       StartIcon="@Icons.Material.Filled.LinkOff"
+                                       Disabled="@(_revokingDebit || _revokingAchSuccess)"
+                                       OnClick="RevokeDebitForSelectedAsync">
+                                @(_revokingDebit ? "处理中…" : "撤销扣款关联")
+                            </MudButton>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                解除与当前银行扣款记录的关联，支票回到「待扣款」，扣款进入异常列表；并清除 ACH 成功及撤回标记。
+                            </MudText>
+                        </MudStack>
+                    }
+                </Authorized>
+            </AuthorizeView>
         }
     }
 </MudDrawer>
@@ -216,6 +295,11 @@
     private bool _loading = true;
     private bool _drawerOpen;
     private CheckRecord? _selectedRecord;
+    private bool _revokingDebit;
+    private bool _revokingAchSuccess;
+    private bool _submittingDraft;
+    private string _draftRouting = "";
+    private string _draftAccount = "";
 
     // 筛选条件
     private CheckStatus? _filterStatus;
@@ -271,7 +355,213 @@
     private void OnRowClick(TableRowClickEventArgs<CheckRecord> args)
     {
         _selectedRecord = args.Item;
+        InitDraftEditFields();
         _drawerOpen = true;
+    }
+
+    private void InitDraftEditFields()
+    {
+        if (_selectedRecord == null || _selectedRecord.SubmittedAt != null)
+        {
+            _draftRouting = "";
+            _draftAccount = "";
+            return;
+        }
+
+        _draftRouting = _selectedRecord.RoutingNumber ?? "";
+        _draftAccount = _selectedRecord.AccountNumber ?? "";
+    }
+
+    private static string? ValidateDraftAchForSubmit(string routing, string account)
+    {
+        var r = routing.Trim();
+        if (r.Length != 9 || !r.All(char.IsDigit))
+            return "Routing Number 须为 9 位数字";
+        if (string.IsNullOrWhiteSpace(account))
+            return "请填写 Account Number";
+        return null;
+    }
+
+    private async Task SubmitDraftAsync()
+    {
+        if (_selectedRecord == null || _submittingDraft || _selectedRecord.SubmittedAt != null) return;
+
+        var achErr = ValidateDraftAchForSubmit(_draftRouting, _draftAccount);
+        if (!string.IsNullOrEmpty(achErr))
+        {
+            Snackbar.Add(achErr, Severity.Warning);
+            return;
+        }
+
+        var checkId = _selectedRecord.Id;
+        _submittingDraft = true;
+        try
+        {
+            var tracked = await DbContext.CheckRecords.FirstOrDefaultAsync(c => c.Id == checkId);
+            if (tracked == null)
+            {
+                Snackbar.Add("记录不存在", Severity.Error);
+                await LoadRecords();
+                _drawerOpen = false;
+                return;
+            }
+
+            if (tracked.SubmittedAt != null)
+            {
+                Snackbar.Add("该记录已提交", Severity.Info);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            tracked.RoutingNumber = _draftRouting.Trim();
+            tracked.AccountNumber = _draftAccount.Trim();
+            tracked.SubmittedAt = DateTime.UtcNow;
+            tracked.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                await DbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            Snackbar.Add("草稿已正式提交入库", Severity.Success);
+            await LoadRecords();
+            _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+            InitDraftEditFields();
+        }
+        finally
+        {
+            _submittingDraft = false;
+        }
+    }
+
+    private async Task RevokeAchSuccessForSelectedAsync()
+    {
+        if (_selectedRecord == null || _revokingAchSuccess || _revokingDebit) return;
+
+        var checkId = _selectedRecord.Id;
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small };
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: "撤销扣款成功",
+            message: "将取消本单的「ACH 扣款成功」标记（适用于银行后续拒付或冲正）。支票仍保持待核查，与扣款记录的关联不变。大陆财务将看到「扣款成功已撤回」提醒。确定继续？",
+            yesText: "撤销成功标记",
+            cancelText: "取消",
+            options: options);
+        if (confirmed != true) return;
+
+        _revokingAchSuccess = true;
+        try
+        {
+            AchSuccessMarkRevokeResult result;
+            try
+            {
+                result = await AchDebitSuccessMarkRevocation.TryRevokeAsync(DbContext, checkId);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "无法撤销", Severity.Warning);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            var s = result.Snapshot!;
+            await AuditLog.LogAsync(AuditAction.Update, "CheckRecord", checkId,
+                new { s.AchDebitSucceeded, s.AchDebitSucceededAt },
+                new { AchDebitSucceeded = false, AchDebitSucceededAt = (DateTime?)null, AchDebitSuccessRevoked = true });
+
+            Snackbar.Add("已撤销扣款成功标记", Severity.Success);
+            await LoadRecords();
+            _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+            InitDraftEditFields();
+        }
+        finally
+        {
+            _revokingAchSuccess = false;
+        }
+    }
+
+    private async Task RevokeDebitForSelectedAsync()
+    {
+        if (_selectedRecord == null || _revokingDebit) return;
+
+        var checkId = _selectedRecord.Id;
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small };
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: "撤销扣款关联",
+            message: "将解除本条支票与当前银行扣款记录的关联，支票回到「待扣款」，扣款进入异常列表待重新关联；ACH 成功及撤回标记将一并清除。确定继续？",
+            yesText: "撤销",
+            cancelText: "取消",
+            options: options);
+        if (confirmed != true) return;
+
+        _revokingDebit = true;
+        try
+        {
+            RevokeDebitAssociationResult result;
+            try
+            {
+                result = await PendingReviewDebitRevocation.TryRevokeAsync(DbContext, checkId);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "无法撤销", Severity.Warning);
+                await LoadRecords();
+                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+                InitDraftEditFields();
+                return;
+            }
+
+            var s = result.Snapshot!;
+            await AuditLog.LogAsync(AuditAction.Update, "CheckRecord", checkId,
+                new { Status = s.CheckStatus, s.AchDebitSucceeded, LinkedDebitId = s.DebitId },
+                new
+                {
+                    Status = CheckStatus.PendingDebit,
+                    AchDebitSucceeded = false,
+                    RevokedDebitId = s.DebitId,
+                    DebitNowUnmatched = true
+                });
+
+            Snackbar.Add("已撤销扣款关联", Severity.Success);
+            await LoadRecords();
+            _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
+            InitDraftEditFields();
+            if (_selectedRecord == null)
+                _drawerOpen = false;
+        }
+        finally
+        {
+            _revokingDebit = false;
+        }
     }
 
     private Color GetStatusColor(CheckStatus status) => status switch

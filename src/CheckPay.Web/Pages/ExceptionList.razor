@@ -1,5 +1,6 @@
 @page "/exceptions"
 @attribute [Authorize]
+@using CheckPay.Application.Common
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
@@ -23,6 +24,7 @@
             <HeaderContent>
                 <MudTh>支票号</MudTh>
                 <MudTh>客户</MudTh>
+                <MudTh>手机号</MudTh>
                 <MudTh>扣款金额</MudTh>
                 <MudTh>扣款日期</MudTh>
                 <MudTh>银行流水号</MudTh>
@@ -32,6 +34,7 @@
             <RowTemplate>
                 <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
                 <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+                <MudTd DataLabel="手机号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
                 <MudTd DataLabel="扣款金额">@context.DebitAmount.ToString("C")</MudTd>
                 <MudTd DataLabel="扣款日期">@context.DebitDate.ToString("yyyy-MM-dd")</MudTd>
                 <MudTd DataLabel="银行流水号">@context.BankReference</MudTd>
@@ -73,6 +76,7 @@
         <MudTable Items="@_questionedChecks" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
             <HeaderContent>
                 <MudTh>客户</MudTh>
+                <MudTh>手机号</MudTh>
                 <MudTh>支票号</MudTh>
                 <MudTh>支票金额</MudTh>
                 <MudTh>扣款金额</MudTh>
@@ -81,6 +85,7 @@
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+                <MudTd DataLabel="手机号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
                 <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
                 <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
                 <MudTd DataLabel="扣款金额">
@@ -121,7 +126,7 @@
 
         @* 搜索框 *@
         <MudTextField @bind-Value="_searchKeyword"
-                      Label="搜索支票记录（支票号或客户名）"
+                      Label="搜索支票记录（支票号、客户名或手机号）"
                       Adornment="Adornment.End"
                       AdornmentIcon="@Icons.Material.Filled.Search"
                       Immediate="true"
@@ -135,6 +140,7 @@
                 <HeaderContent>
                     <MudTh>支票号</MudTh>
                     <MudTh>客户</MudTh>
+                    <MudTh>手机号</MudTh>
                     <MudTh>金额</MudTh>
                     <MudTh>日期</MudTh>
                     <MudTh>选择</MudTh>
@@ -142,6 +148,7 @@
                 <RowTemplate>
                     <MudTd>@context.CheckNumber</MudTd>
                     <MudTd>@context.Customer?.CustomerName</MudTd>
+                    <MudTd>@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
                     <MudTd>@context.CheckAmount.ToString("C")</MudTd>
                     <MudTd>@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
                     <MudTd>
@@ -239,7 +246,9 @@
         var kw = _searchKeyword.Trim();
         _searchResults = await DbContext.CheckRecords
             .Include(c => c.Customer)
-            .Where(c => c.CheckNumber.Contains(kw) || c.Customer.CustomerName.Contains(kw))
+            .Where(c => c.CheckNumber.Contains(kw)
+                || c.Customer.CustomerName.Contains(kw)
+                || c.Customer.MobilePhone.Contains(kw))
             .Take(10)
             .ToListAsync();
     }

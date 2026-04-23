@@ -1,5 +1,6 @@
 @page "/admin/check-records"
 @attribute [Authorize(Roles = "Admin")]
+@using CheckPay.Application.Common
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
@@ -41,6 +42,7 @@
     <HeaderContent>
         <MudTh>支票号</MudTh>
         <MudTh>客户</MudTh>
+        <MudTh>手机号</MudTh>
         <MudTh>支票金额</MudTh>
         <MudTh>日期</MudTh>
         <MudTh>状态</MudTh>
@@ -55,7 +57,11 @@
             </MudTd>
             <MudTd DataLabel="客户">
                 <MudTextField @bind-Value="_editCustomerCode" Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Style="min-width:120px" Placeholder="客户编号" />
+                              Style="min-width:120px" Placeholder="客户账号" />
+            </MudTd>
+            <MudTd DataLabel="手机号">
+                <MudTextField @bind-Value="_editCustomerPhone" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="min-width:140px" Label="手机号" />
             </MudTd>
             <MudTd DataLabel="支票金额">
                 <MudNumericField @bind-Value="_editAmount" Label="金额" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -90,6 +96,7 @@
                          Underline="Underline.None">@context.CheckNumber</MudLink>
             </MudTd>
             <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+            <MudTd DataLabel="手机号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
             <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
             <MudTd DataLabel="日期">@context.CheckDate.ToShortDateString()</MudTd>
             <MudTd DataLabel="状态">
@@ -123,7 +130,7 @@
         }
     </RowTemplate>
     <FooterContent>
-        <MudTd colspan="6">
+        <MudTd colspan="7">
             <MudText Typo="Typo.caption">共 @_filteredRecords.Count 条记录（筛选后）</MudText>
         </MudTd>
     </FooterContent>
@@ -142,6 +149,7 @@
     // 内联编辑状态
     private Guid? _editingId;
     private string _editCustomerCode = string.Empty;
+    private string _editCustomerPhone = string.Empty;
     private decimal _editAmount;
     private DateTime? _editDate;
     private CheckStatus _editStatus;
@@ -190,6 +198,7 @@
     {
         _editingId = record.Id;
         _editCustomerCode = record.Customer?.CustomerCode ?? string.Empty;
+        _editCustomerPhone = record.Customer?.MobilePhone ?? string.Empty;
         _editAmount = record.CheckAmount;
         _editDate = record.CheckDate;
         _editStatus = record.Status;
@@ -199,6 +208,7 @@
     {
         _editingId = null;
         _editCustomerCode = string.Empty;
+        _editCustomerPhone = string.Empty;
         _editAmount = 0m;
         _editDate = null;
         _editStatus = CheckStatus.PendingDebit;
@@ -209,6 +219,12 @@
         if (string.IsNullOrWhiteSpace(_editCustomerCode))
         {
             Snackbar.Add("客户编号不能为空", Severity.Error);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_editCustomerPhone))
+        {
+            Snackbar.Add("客户手机号不能为空", Severity.Error);
             return;
         }
 
@@ -235,6 +251,7 @@
             {
                 CustomerCode = _editCustomerCode.Trim(),
                 CustomerName = _editCustomerCode.Trim(),
+                MobilePhone = _editCustomerPhone.Trim(),
                 IsActive = true,
                 IsAuthorized = false,
                 CreatedAt = DateTime.UtcNow,
@@ -242,6 +259,15 @@
             };
             DbContext.Customers.Add(customer);
             await DbContext.SaveChangesAsync();
+        }
+        else
+        {
+            var p = _editCustomerPhone.Trim();
+            if (!string.Equals(customer.MobilePhone, p, StringComparison.Ordinal))
+            {
+                customer.MobilePhone = p;
+                customer.UpdatedAt = DateTime.UtcNow;
+            }
         }
 
         tracked.CustomerId = customer.Id;

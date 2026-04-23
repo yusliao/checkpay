@@ -7,6 +7,7 @@ public sealed record CustomerCsvImportRow(
     int LineNumber,
     string CustomerCode,
     string CustomerName,
+    string MobilePhone,
     string? ExpectedBankName,
     string? OcrCompanyName,
     string? ExpectedAccountAddress,
@@ -18,7 +19,7 @@ public sealed record CustomerCsvImportRow(
 public static class CustomerCsvImportExport
 {
     public const string Header =
-        "客户账号,客户名称,关联银行,票面公司名称,期望地址,关联公司,活跃,已授权";
+        "客户账号,客户名称,手机号,关联银行,票面公司名称,期望地址,关联公司,活跃,已授权";
 
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
@@ -39,6 +40,7 @@ public static class CustomerCsvImportExport
         sb.AppendLine(string.Join(",",
             CsvEscape("示例账号001"),
             CsvEscape("示例客户有限公司"),
+            CsvEscape("13800138000"),
             CsvEscape("示例银行"),
             CsvEscape("票面公司名"),
             CsvEscape("地址一行"),
@@ -57,6 +59,7 @@ public static class CustomerCsvImportExport
         return string.Join(",",
             CsvEscape(c.CustomerCode),
             CsvEscape(c.CustomerName),
+            CsvEscape(c.MobilePhone ?? ""),
             CsvEscape(c.ExpectedBankName ?? ""),
             CsvEscape(ocr),
             CsvEscape(c.ExpectedAccountAddress ?? ""),
@@ -155,6 +158,13 @@ public static class CustomerCsvImportExport
                 continue;
             }
 
+            var phone = Cell(idx.Phone);
+            if (string.IsNullOrWhiteSpace(phone))
+            {
+                errors.Add($"第 {lineNo} 行（{code}）：手机号不能为空");
+                continue;
+            }
+
             var bank = NullIfEmpty(Cell(idx.Bank));
             var ocr = NullIfEmpty(Cell(idx.Ocr));
             var addr = NullIfEmpty(Cell(idx.Addr));
@@ -170,6 +180,7 @@ public static class CustomerCsvImportExport
                 lineNo,
                 code,
                 name.Trim(),
+                phone.Trim(),
                 bank,
                 ocr,
                 addr,
@@ -193,6 +204,7 @@ public static class CustomerCsvImportExport
     private readonly struct ColumnIndex(
         int code,
         int name,
+        int phone,
         int bank,
         int ocr,
         int addr,
@@ -202,6 +214,7 @@ public static class CustomerCsvImportExport
     {
         public int Code { get; } = code;
         public int Name { get; } = name;
+        public int Phone { get; } = phone;
         public int Bank { get; } = bank;
         public int Ocr { get; } = ocr;
         public int Addr { get; } = addr;
@@ -232,6 +245,7 @@ public static class CustomerCsvImportExport
 
         var codeI = Find("客户账号", "CustomerCode");
         var nameI = Find("客户名称", "CustomerName");
+        var phoneI = Find("手机号", "MobilePhone", "手机", "电话", "Phone");
         var bankI = Find("关联银行", "ExpectedBankName", "Bank");
         var ocrI = Find("票面公司名称", "OcrCompanyName", "ExpectedCompanyName");
         var addrI = Find("期望地址", "ExpectedAccountAddress", "Address");
@@ -239,17 +253,18 @@ public static class CustomerCsvImportExport
         var actI = Find("活跃", "IsActive", "Active");
         var authI = Find("已授权", "IsAuthorized", "Authorized");
 
-        if (codeI is null || nameI is null || bankI is null || ocrI is null || addrI is null
+        if (codeI is null || nameI is null || phoneI is null || bankI is null || ocrI is null || addrI is null
             || compI is null || actI is null || authI is null)
         {
             error =
-                "表头须包含列：" + Header + "（可使用英文别名如 CustomerCode, CustomerName 等）。";
+                "表头须包含列：" + Header + "（可使用英文别名如 CustomerCode, CustomerName, MobilePhone 等）。";
             return false;
         }
 
         idx = new ColumnIndex(
             codeI.Value,
             nameI.Value,
+            phoneI.Value,
             bankI.Value,
             ocrI.Value,
             addrI.Value,

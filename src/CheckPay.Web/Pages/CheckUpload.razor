@@ -260,8 +260,17 @@ else
                                       Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
                         <MudTextField @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")" />
-                        <MudTextField @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")" />
+                        <MudSelect T="string" @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined"
+                                   Class="mb-2" Clearable="true"
+                                   Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")">
+                            <MudSelectItem T="string" Value="@("")">（请选择）</MudSelectItem>
+                            <MudSelectItem T="string" Value="@PayToOrderOfCatalog.CheungKongAllianceFood">
+                                @PayToOrderOfCatalog.CheungKongAllianceFood
+                            </MudSelectItem>
+                            <MudSelectItem T="string" Value="@PayToOrderOfCatalog.MaxwellExcelFood">
+                                @PayToOrderOfCatalog.MaxwellExcelFood
+                            </MudSelectItem>
+                        </MudSelect>
                         <MudTextField @bind-Value="_forMemo" Label="For / Memo" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("forMemo")" HelperText="@GetFieldHint("forMemo")" />
                         <MudTextField @bind-Value="_micrLineRaw" Label="MICR line (raw)" Variant="Variant.Outlined" Class="mb-2"
@@ -272,13 +281,21 @@ else
                         <MudTextField @bind-Value="_companyName" Label="公司名称（付款/开票主体）" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")" />
 
-                        @* 客户账号 (customer_code =支票账号) *@
+                        @* 客户账号 (customer_code =支票账号)；手机号与客户账号 1 对多（同一手机可对应多个账号） *@
                         <MudTextField @bind-Value="_customerCode"
                                       Label="客户账号"
                                       Required="true"
                                       Variant="Variant.Outlined"
                                       Class="mb-2"
-                                      Placeholder="与支票账号一致，支持新建" />
+                                      Placeholder="与支票账号一致，支持新建"
+                                      OnBlur="@OnCustomerAccountBlur" />
+                        <MudTextField @bind-Value="_customerPhone"
+                                      Label="客户手机号"
+                                      Required="true"
+                                      Variant="Variant.Outlined"
+                                      Class="mb-2"
+                                      Placeholder="必填，可与主数据不一致时更新主数据"
+                                      MaxLength="30" />
 
                         @if (ShowCustomerAuthorizationHint())
                         {
@@ -293,7 +310,7 @@ else
                             if (match != null)
                             {
                                 <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">
-                                    匹配客户：@match.CustomerName
+                                    匹配客户：@match.CustomerName · 手机 @CustomerDisplay.MobileOrDash(match.MobilePhone)
                                 </MudAlert>
                             }
                             else
@@ -388,6 +405,7 @@ else
     private decimal _amount;
     private DateTime? _checkDate;
     private string _customerCode = "";
+    private string _customerPhone = "";
     private string _notes = "";
     private string _routingNumber = "";
     private string _accountNumber = "";
@@ -406,7 +424,7 @@ else
 
     private bool _saving;
     private bool _retryingOcr;
-    private double _ocrEngineSlider = 0; // 0=混元，1=Azure
+    private double _ocrEngineSlider = 1; // 0=混元，1=Azure（默认优先 Azure）
     private OcrResult? _ocrResult; // 当前 OCR 结果
     private string _ocrCopyPanelText = "";
 
@@ -561,17 +579,24 @@ else
         }
     }
 
+    /// <summary>按滑块优先取 Azure 或混元 JSON；首选无结果时回退另一引擎。</summary>
+    private JsonDocument? GetPreferredOcrDocument(QueueItem item) =>
+        _ocrEngineSlider == 1
+            ? item.AzureRawResult ?? item.RawResult
+            : item.RawResult ?? item.AzureRawResult;
+
+    private Dictionary<string, double> GetPreferredConfidenceScores(QueueItem item) =>
+        _ocrEngineSlider == 1
+            ? (item.AzureRawResult != null ? item.AzureConfidenceScores : item.ConfidenceScores)
+            : (item.RawResult != null ? item.ConfidenceScores : item.AzureConfidenceScores);
+
     /// <summary>将识别结果预填到当前表单</summary>
     private void PrefillForm(QueueItem item, bool force = false)
     {
-        // 根据滑块选择引擎：0=混元，1=Azure
-        var useAzure = _ocrEngineSlider == 1;
-        var rawResult = useAzure ? item.AzureRawResult : item.RawResult;
-        var confScores = useAzure ? item.AzureConfidenceScores : item.ConfidenceScores;
-
+        var rawResult = GetPreferredOcrDocument(item);
         if (rawResult == null) return;
 
-        _confidenceScores = confScores;
+        _confidenceScores = GetPreferredConfidenceScores(item);
         var root = rawResult.RootElement;
 
         // 始终预填识别到的值，置信度只影响视觉颜色/提示，不阻止填值
@@ -603,15 +628,18 @@ else
         PrefillStr("BankName", ref _bankName);
         PrefillStr("AccountAddress", ref _accountAddress);
         PrefillStr("AccountType", ref _accountType);
-        PrefillStr("PayToOrderOf", ref _payToOrderOf);
+        var rawPayTo = ExtractString(root, "PayToOrderOf");
+        if (!string.IsNullOrEmpty(rawPayTo) && (force || string.IsNullOrEmpty(_payToOrderOf)))
+            _payToOrderOf = PayToOrderOfCatalog.MatchCanonical(rawPayTo) ?? "";
         PrefillStr("ForMemo", ref _forMemo);
         PrefillStr("MicrLineRaw", ref _micrLineRaw);
         PrefillStr("CheckNumberMicr", ref _checkNumberMicr);
 
+        var payToForMerge = string.IsNullOrEmpty(_payToOrderOf) ? rawPayTo : _payToOrderOf;
         var mergedHolderCompany = OcrCheckCustomerFields.MergeHolderCompanyDisplayName(
             ExtractString(root, "CompanyName"),
             ExtractString(root, "AccountHolderName"),
-            ExtractString(root, "PayToOrderOf"));
+            payToForMerge);
         if (!string.IsNullOrEmpty(mergedHolderCompany))
         {
             if (force)
@@ -635,6 +663,21 @@ else
                 }
             }
         }
+
+        SyncCustomerPhoneFromMasterIfNeeded();
+    }
+
+    private void OnCustomerAccountBlur(FocusEventArgs _)
+        => SyncCustomerPhoneFromMasterIfNeeded();
+
+    /// <summary>主数据中已有该账号时，若手机号未填则带出主数据手机号。</summary>
+    private void SyncCustomerPhoneFromMasterIfNeeded()
+    {
+        if (string.IsNullOrWhiteSpace(_customerCode) || !string.IsNullOrWhiteSpace(_customerPhone)) return;
+        var code = _customerCode.Trim();
+        var c = _customers.FirstOrDefault(x => x.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
+        if (c != null && !string.IsNullOrWhiteSpace(c.MobilePhone))
+            _customerPhone = c.MobilePhone;
     }
 
     /// <summary>滑块切换引擎时重新填充表单</summary>
@@ -649,7 +692,7 @@ else
     {
         if (item.Done) return;
         _current = item;
-        _ocrEngineSlider = 0; // 重置为混元
+        _ocrEngineSlider = 1; // 切换项时默认优先 Azure
         ClearForm();
 
         // 异步加载 OCR 结果用于滑块显示
@@ -683,8 +726,7 @@ else
             return;
         }
 
-        var useAzure = _ocrEngineSlider == 1;
-        var doc = useAzure ? _current.AzureRawResult : _current.RawResult;
+        var doc = GetPreferredOcrDocument(_current);
         _ocrCopyPanelText = OcrCheckCopyPanelFormatter.FromJsonDocument(doc);
     }
 
@@ -812,7 +854,10 @@ else
             await DbContext.SaveChangesAsync();
 
             _current.Done = true;
-            Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "支票草稿已保存。", Severity.Success);
+            Snackbar.Add(submitAsFinal
+                ? "支票已提交入库！"
+                : "支票草稿已保存。可稍后在「收款记录」中打开该笔，补全 Routing / Account 后点击「提交入库」。",
+                Severity.Success);
 
             _current = _uploadQueue.FirstOrDefault(q => !q.Done);
             ClearForm();
@@ -874,6 +919,8 @@ else
             return "请选择支票日期";
         if (string.IsNullOrWhiteSpace(_customerCode))
             return "请输入客户账号";
+        if (string.IsNullOrWhiteSpace(_customerPhone))
+            return "请输入客户手机号";
         if (submitAsFinal)
         {
             if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
@@ -910,8 +957,7 @@ else
     private bool CurrentOcrJsonHasAccountNumber()
     {
         if (_current == null || _current.OcrStatus != CheckOcrStatus.Completed) return false;
-        var useAzure = _ocrEngineSlider == 1;
-        var doc = useAzure ? _current.AzureRawResult : _current.RawResult;
+        var doc = GetPreferredOcrDocument(_current);
         if (doc == null) return false;
         return !string.IsNullOrWhiteSpace(ExtractString(doc.RootElement, "AccountNumber"));
     }
@@ -943,7 +989,19 @@ else
         var existing = await DbContext.Customers
             .Include(c => c.CompanyNames)
             .FirstOrDefaultAsync(c => c.CustomerCode == code);
-        if (existing != null) return existing;
+        if (existing != null)
+        {
+            var phone = _customerPhone.Trim();
+            if (!string.Equals(existing.MobilePhone, phone, StringComparison.Ordinal))
+            {
+                existing.MobilePhone = phone;
+                existing.UpdatedAt = DateTime.UtcNow;
+                var mem = _customers.FirstOrDefault(x => x.Id == existing.Id);
+                if (mem != null) mem.MobilePhone = phone;
+            }
+
+            return existing;
+        }
 
         var ocrCompany = OcrCheckCustomerFields.MergeHolderCompanyDisplayName(_companyName, _accountHolderName, _payToOrderOf);
         var ocrCompanyTrim = string.IsNullOrWhiteSpace(ocrCompany) ? null : ocrCompany.Trim();
@@ -953,6 +1011,7 @@ else
         {
             CustomerCode = code,
             CustomerName = displayName,
+            MobilePhone = _customerPhone.Trim(),
             ExpectedBankName = NullIfEmpty(_bankName),
             ExpectedAccountHolderName = ocrCompanyTrim,
             ExpectedCompanyName = ocrCompanyTrim,
@@ -978,6 +1037,7 @@ else
         _amount = 0;
         _checkDate = null;
         _customerCode = "";
+        _customerPhone = "";
         _notes = "";
         _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
         _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";

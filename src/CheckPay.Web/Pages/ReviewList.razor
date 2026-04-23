@@ -1,5 +1,6 @@
 @page "/reviews"
 @attribute [Authorize(Roles = "CNFinance,Admin")]
+@using CheckPay.Application.Common
 @using CheckPay.Application.Common.Interfaces
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
@@ -12,10 +13,20 @@
 
 <MudText Typo="Typo.h4" GutterBottom="true">待核查列表</MudText>
 
+@if (_records.Any(r => r.AchDebitSuccessRevokedAt != null))
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4" Variant="Variant.Filled">
+        当前列表中有 <strong>@_records.Count(r => r.AchDebitSuccessRevokedAt != null)</strong> 条记录已由美国财务撤回「ACH 扣款成功」标记（可能为银行拒付/冲正）。
+        请逐单核对实际到账后再做核查结论；「提醒」列可快速定位。
+    </MudAlert>
+}
+
 <MudTable Items="@_records" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="CheckRecord">
     <HeaderContent>
         <MudTh>客户</MudTh>
+        <MudTh>手机号</MudTh>
         <MudTh>支票号</MudTh>
+        <MudTh>提醒</MudTh>
         <MudTh>支票金额</MudTh>
         <MudTh>扣款金额</MudTh>
         <MudTh>差异</MudTh>
@@ -24,7 +35,20 @@
     </HeaderContent>
     <RowTemplate>
         <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
+        <MudTd DataLabel="手机号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
         <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
+        <MudTd DataLabel="提醒">
+            @if (context.AchDebitSuccessRevokedAt != null)
+            {
+                <MudTooltip Text="@($"美财于 {context.AchDebitSuccessRevokedAt:yyyy-MM-dd HH:mm} UTC 撤回扣款成功标记")">
+                    <MudChip T="string" Size="Size.Small" Color="Color.Warning">扣款成功已撤回</MudChip>
+                </MudTooltip>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+            }
+        </MudTd>
         <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
         <MudTd DataLabel="扣款金额">
             @if (context.DebitRecord != null)

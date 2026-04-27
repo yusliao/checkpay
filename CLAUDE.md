@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-27** - Azure OCR：`Azure:DocumentIntelligence:DocumentAnalysisEndpoint` / `DocumentAnalysisApiKey` 可选，专用于手写金额校验（DI prebuilt-check）；解决纯 Computer Vision Key 导致校验 401；Compose 支持 `AZURE_DOCUMENT_INTELLIGENCE_*`；`.env.example` / README 说明 Vision 与 DI 凭据可分离
 - **2026-04-27** - 新增 Azure DI 双阶段金额校验：`OcrWorker` 在金额置信度低于阈值时触发 `ValidateHandwrittenAmountAsync`；新增 `amount_validation_status/result/error_message/validated_at` 字段与迁移；页面显示“数字金额 vs 手写金额”一致性提示；新增 `Ocr:AmountValidation:*` 配置；新增复核页/上传页“手动校验手写金额”按钮并写入审计日志
 - **2026-04-27** - OCR 主路径切换为 **Azure AI Vision Read**：移除腾讯混元实现与依赖；`OcrWorker` 仅调用 Azure，结果写入 `ocr_results.raw_result`；未配置 Azure 时 OCR 任务失败并提示；双引擎 UI 已删除；`azure_*` 列保留兼容历史行；文档与 `.cursor/rules/sync-docs.mdc` 约定「改动同步更新文档」
 - **2026-04-08** - 文档收敛：删除过时「技术栈架构决策」文档；根目录与 README 以 Docker Compose + 现有实现为准；不计划 Railway 验证与 Microsoft Entra SSO（`User.EntraId` / `entra_id` 仅为字段名，非联合登录）
@@ -124,7 +125,7 @@ graph TD
 - .NET 10 SDK
 - PostgreSQL 16
 - MinIO 服务器（本地或私有部署）
-- **Azure AI Vision**（配置节 `Azure:DocumentIntelligence`：Endpoint + ApiKey），支票 OCR 与扣款/训练页 OCR 的默认引擎；未配置时 `IOcrService` 为 Mock，支票 Worker 会标记任务失败
+- **Azure AI Vision**（配置节 `Azure:DocumentIntelligence`：Endpoint + ApiKey），支票/扣款主 OCR；可选 `DocumentAnalysisEndpoint` / `DocumentAnalysisApiKey`（或 Compose `AZURE_DOCUMENT_INTELLIGENCE_*`）供手写金额校验（Document Intelligence）；未配置 Vision 凭据时 `IOcrService` 为 Mock，支票 Worker 会标记任务失败
 
 ### Docker Compose 部署（推荐）
 ```bash

@@ -76,9 +76,11 @@ services:
       Ocr__CheckAzureTrainingCorrectionMinSimilarity: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MIN_SIMILARITY:-0.80}
       Ocr__CheckAzureTrainingCorrectionSimilarityMaxFieldConfidence: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_SIMILARITY_MAX_FIELD_CONFIDENCE:-0.62}
 
-      # Azure AI Vision OCR（支票识别主引擎，留空则 OCR 失败）
+      # Azure：Vision Read（主 OCR）+ 可选 Document Intelligence（手写金额校验，与 Vision 可非同一张 Key）
       Azure__DocumentIntelligence__Endpoint: ${AZURE_VISION_ENDPOINT:-}
       Azure__DocumentIntelligence__ApiKey: ${AZURE_VISION_API_KEY:-}
+      Azure__DocumentIntelligence__DocumentAnalysisEndpoint: ${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:-}
+      Azure__DocumentIntelligence__DocumentAnalysisApiKey: ${AZURE_DOCUMENT_INTELLIGENCE_API_KEY:-}
 
     ports:
       - "${WEB_PORT:-8080}:8080"

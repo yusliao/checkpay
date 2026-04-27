@@ -34,8 +34,16 @@ public class AzureOcrService : IOcrService
         var apiKey = configuration["Azure:DocumentIntelligence:ApiKey"]
             ?? throw new InvalidOperationException("Azure AI Vision ApiKey 未配置");
 
+        // 手写金额校验走 Document Intelligence（prebuilt-check）。纯 Computer Vision 资源的 Key 无法调用 DI，会 401；
+        // 可单独配置 DocumentAnalysis*，与 Vision Read 使用不同 Azure 资源。
+        var documentAnalysisEndpoint = configuration["Azure:DocumentIntelligence:DocumentAnalysisEndpoint"];
+        var documentAnalysisApiKey = configuration["Azure:DocumentIntelligence:DocumentAnalysisApiKey"];
+        var documentEndpointUri = new Uri(string.IsNullOrWhiteSpace(documentAnalysisEndpoint) ? endpoint : documentAnalysisEndpoint);
+        var documentCredential = new AzureKeyCredential(
+            string.IsNullOrWhiteSpace(documentAnalysisApiKey) ? apiKey : documentAnalysisApiKey);
+
         _client = new ImageAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
-        _documentClient = new DocumentAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        _documentClient = new DocumentAnalysisClient(documentEndpointUri, documentCredential);
         _logger = logger;
         _blobStorageService = blobStorageService;
         _templateResolver = templateResolver;

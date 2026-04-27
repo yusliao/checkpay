@@ -54,4 +54,25 @@ public class AzureOcrServiceTests
         Assert.Throws<InvalidOperationException>(() =>
             new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!, TemplateResolver(), Corrector()));
     }
+
+    [Fact]
+    public void Constructor_ShouldSucceed_WhenDocumentAnalysisCredentialsAreOverridden()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Azure:DocumentIntelligence:Endpoint"] = "https://vision.cognitiveservices.azure.com/",
+                ["Azure:DocumentIntelligence:ApiKey"] = "vision-key",
+                ["Azure:DocumentIntelligence:DocumentAnalysisEndpoint"] = "https://doc.cognitiveservices.azure.com/",
+                ["Azure:DocumentIntelligence:DocumentAnalysisApiKey"] = "di-key"
+            })
+            .Build();
+
+        _ = new AzureOcrService(
+            configuration,
+            NullLogger<AzureOcrService>.Instance,
+            null!,
+            TemplateResolver(),
+            Corrector());
+    }
 }

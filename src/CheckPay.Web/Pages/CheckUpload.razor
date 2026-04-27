@@ -1,6 +1,7 @@
 @page "/checks/upload"
 @attribute [Authorize(Roles = "Sales,Admin")]
 @using CheckPay.Application.Common.Interfaces
+@using Microsoft.Extensions.Logging
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
 @using CheckPay.Application.Common
@@ -21,6 +22,8 @@
 @inject IOcrService OcrService
 @inject IAuditLogService AuditLog
 @inject IConfiguration Configuration
+@inject ICheckOcrTemplateResolver CheckOcrTemplateResolver
+@inject ILogger<CheckUpload> Logger
 
 <PageTitle>上传支票 - CheckPay</PageTitle>
 
@@ -928,7 +931,10 @@ else
                     _checkNumber.Trim(),
                     _amount,
                     checkDateUtc,
-                    BuildSubmittedAchExtensionData());
+                    BuildSubmittedAchExtensionData(),
+                    check.Id,
+                    CheckOcrTemplateResolver,
+                    Logger);
             }
 
             _current.Done = true;

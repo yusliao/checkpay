@@ -72,6 +72,8 @@ services:
       Ocr__PrebuiltCheck__EnrichPrimaryResult: ${OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT:-false}
       Ocr__Training__AutoSampleOnCheckSubmit: ${OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT:-true}
       Ocr__Training__AutoSampleRequireDiff: ${OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF:-true}
+      Ocr__Training__AutoSampleDedupByOcrResultId: ${OCR_TRAINING_AUTO_SAMPLE_DEDUP_BY_OCR_RESULT_ID:-true}
+      Ocr__Training__AutoSampleLogVerbosity: ${OCR_TRAINING_AUTO_SAMPLE_LOG_VERBOSITY:-Minimal}
       Ocr__CheckAzureTrainingCorrectionEnabled: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_ENABLED:-true}
       Ocr__CheckAzureTrainingCorrectionMaxScan: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MAX_SCAN:-40}
       Ocr__CheckAzureTrainingCorrectionPoolTake: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_POOL_TAKE:-80}

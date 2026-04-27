@@ -2,6 +2,7 @@
 @page "/checks/draft/{DraftId:guid}"
 @attribute [Authorize(Roles = "Sales,Admin")]
 @using CheckPay.Application.Common.Interfaces
+@using Microsoft.Extensions.Logging
 @using CheckPay.Application.Common.Models
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
@@ -19,6 +20,8 @@
 @inject IOcrService OcrService
 @inject IAuditLogService AuditLog
 @inject IConfiguration Configuration
+@inject ICheckOcrTemplateResolver CheckOcrTemplateResolver
+@inject ILogger<CheckReview> Logger
 
 <PageTitle>@(_editingCheckRecordId.HasValue ? "编辑草稿 - CheckPay" : "复核支票 - CheckPay")</PageTitle>
 
@@ -997,7 +1000,10 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
                     _checkNumber.Trim(),
                     _amount,
                     checkDateUtc,
-                    BuildSubmittedAchExtensionData());
+                    BuildSubmittedAchExtensionData(),
+                    check.Id,
+                    CheckOcrTemplateResolver,
+                    Logger);
             }
 
             Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "支票草稿已保存。", Severity.Success);
@@ -1114,7 +1120,10 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
                     _checkNumber.Trim(),
                     _amount,
                     checkDateUtc,
-                    BuildSubmittedAchExtensionData());
+                    BuildSubmittedAchExtensionData(),
+                    tracked.Id,
+                    CheckOcrTemplateResolver,
+                    Logger);
             }
 
             Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "草稿已保存。", Severity.Success);

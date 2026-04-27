@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 using Azure;
-using Azure.AI.FormRecognizer.DocumentAnalysis;
+using Azure.AI.DocumentIntelligence;
 using Azure.AI.Vision.ImageAnalysis;
 using CheckPay.Application.Common.Interfaces;
 using CheckPay.Application.Common.Models;
@@ -11,12 +11,14 @@ namespace CheckPay.Infrastructure.Services;
 
 /// <summary>
 /// Azure AI Vision OCR 服务（使用 Read API 提取文字，正则解析支票字段）
-/// 注意：Azure AI Vision 是通用 OCR，无 prebuilt-check 模型，需自行解析文字
+/// 注意：Azure AI Vision 是通用 OCR，无支票预生成模型，需自行解析文字；金额二次校验使用 DI <c>prebuilt-check.us</c>（REST 2024-11-30）。
 /// </summary>
 public class AzureOcrService : IOcrService
 {
+    private const string BankCheckModelId = "prebuilt-check.us";
+
     private readonly ImageAnalysisClient _client;
-    private readonly DocumentAnalysisClient _documentClient;
+    private readonly DocumentIntelligenceClient _documentIntelligenceClient;
     private readonly IBlobStorageService _blobStorageService;
     private readonly ICheckOcrTemplateResolver _templateResolver;
     private readonly ICheckOcrParsedSampleCorrector _parsedSampleCorrector;
@@ -34,7 +36,7 @@ public class AzureOcrService : IOcrService
         var apiKey = configuration["Azure:DocumentIntelligence:ApiKey"]
             ?? throw new InvalidOperationException("Azure AI Vision ApiKey 未配置");
 
-        // 手写金额校验走 Document Intelligence（prebuilt-check）。纯 Computer Vision 资源的 Key 无法调用 DI，会 401；
+        // 手写金额校验走 Document Intelligence v4（prebuilt-check.us）。纯 Computer Vision 资源的 Key 无法调用 DI，会 401；
         // 可单独配置 DocumentAnalysis*，与 Vision Read 使用不同 Azure 资源。
         var documentAnalysisEndpoint = configuration["Azure:DocumentIntelligence:DocumentAnalysisEndpoint"];
         var documentAnalysisApiKey = configuration["Azure:DocumentIntelligence:DocumentAnalysisApiKey"];
@@ -43,7 +45,7 @@ public class AzureOcrService : IOcrService
             string.IsNullOrWhiteSpace(documentAnalysisApiKey) ? apiKey : documentAnalysisApiKey);
 
         _client = new ImageAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
-        _documentClient = new DocumentAnalysisClient(documentEndpointUri, documentCredential);
+        _documentIntelligenceClient = new DocumentIntelligenceClient(documentEndpointUri, documentCredential);
         _logger = logger;
         _blobStorageService = blobStorageService;
         _templateResolver = templateResolver;
@@ -181,14 +183,19 @@ public class AzureOcrService : IOcrService
         await imageStream.CopyToAsync(memoryStream, cancellationToken);
         memoryStream.Position = 0;
 
-        AnalyzeDocumentOperation operation = await _documentClient.AnalyzeDocumentAsync(
+        _logger.LogInformation(
+            "Document Intelligence 手写金额校验: ModelId={ModelId}, Bytes={Bytes}",
+            BankCheckModelId,
+            memoryStream.Length);
+
+        Operation<AnalyzeResult> operation = await _documentIntelligenceClient.AnalyzeDocumentAsync(
             WaitUntil.Completed,
-            "prebuilt-check",
-            memoryStream,
-            cancellationToken: cancellationToken);
+            BankCheckModelId,
+            BinaryData.FromStream(memoryStream),
+            cancellationToken);
 
         var result = operation.Value;
-        var (legalRaw, legalAmount, confidence, reason) = ExtractLegalAmount(result);
+        var (legalRaw, legalAmount, confidence, reason) = ExtractLegalAmountFromDiV4(result);
         if (legalAmount is null)
         {
             return new AmountValidationResult(
@@ -212,15 +219,22 @@ public class AzureOcrService : IOcrService
             consistent ? "手写金额与数字金额一致" : "手写金额与数字金额不一致");
     }
 
-    private static (string? rawText, decimal? amount, double confidence, string? reason) ExtractLegalAmount(AnalyzeResult result)
+    private static (string? rawText, decimal? amount, double confidence, string? reason) ExtractLegalAmountFromDiV4(AnalyzeResult result)
     {
-        if (result.Documents.Count == 0)
+        if (result.Documents is null || result.Documents.Count == 0)
             return (null, null, 0.0, "Document Intelligence 未返回文档结构");
 
         var doc = result.Documents[0];
+        // v4 prebuilt-check.us：WordAmount / NumberAmount；旧版 prebuilt-check 字段名仍尝试兼容
         var candidateKeys = new[]
         {
-            "AmountInWords", "AmountWritten", "LegalAmount", "Amount", "PayToTheOrderOf"
+            "WordAmount",
+            "AmountInWords",
+            "AmountWritten",
+            "LegalAmount",
+            "Amount",
+            "PayToTheOrderOf",
+            "NumberAmount"
         };
 
         foreach (var key in candidateKeys)
@@ -229,10 +243,8 @@ public class AzureOcrService : IOcrService
                 continue;
 
             var confidence = Convert.ToDouble(field.Confidence ?? 0f);
-            if (TryGetAmountFromField(field, out var amount, out var raw))
-            {
+            if (TryGetAmountFromDiV4Field(field, out var amount, out var raw))
                 return (raw, amount, confidence, null);
-            }
         }
 
         var line = result.Content?
@@ -245,28 +257,35 @@ public class AzureOcrService : IOcrService
         return (line, null, 0.1, "未找到可解析的手写金额字段");
     }
 
-    private static bool TryGetAmountFromField(DocumentField field, out decimal amount, out string raw)
+    private static bool TryGetAmountFromDiV4Field(DocumentField field, out decimal amount, out string raw)
     {
         raw = field.Content ?? string.Empty;
         amount = 0m;
 
-        if (field.FieldType == DocumentFieldType.Currency)
+        if (field.FieldType == DocumentFieldType.Currency && field.ValueCurrency is { } currency)
         {
-            amount = Convert.ToDecimal(field.Value.AsCurrency().Amount);
-            raw = field.Content ?? amount.ToString("N2");
+            amount = Convert.ToDecimal(currency.Amount);
+            raw = string.IsNullOrWhiteSpace(field.Content) ? amount.ToString("N2") : field.Content;
             return amount > 0;
         }
 
-        if (field.FieldType == DocumentFieldType.Double)
+        if (field.FieldType == DocumentFieldType.Double && field.ValueDouble is { } dbl)
         {
-            amount = Convert.ToDecimal(field.Value.AsDouble());
-            raw = field.Content ?? amount.ToString("N2");
+            amount = Convert.ToDecimal(dbl);
+            raw = string.IsNullOrWhiteSpace(field.Content) ? amount.ToString("N2") : field.Content;
             return amount > 0;
         }
 
-        if (field.FieldType == DocumentFieldType.String)
+        if (field.FieldType == DocumentFieldType.Int64 && field.ValueInt64 is { } int64)
         {
-            var text = field.Value.AsString();
+            amount = int64;
+            raw = string.IsNullOrWhiteSpace(field.Content) ? amount.ToString("N2") : field.Content;
+            return amount > 0;
+        }
+
+        if (field.FieldType == DocumentFieldType.String && !string.IsNullOrEmpty(field.ValueString))
+        {
+            var text = field.ValueString;
             raw = text;
             if (TryParseAmountFromWords(text, out var parsed))
             {

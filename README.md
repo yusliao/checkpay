@@ -41,7 +41,7 @@ cd checkpay
 docker compose up -d
 ```
 
-在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence**（`prebuilt-check`）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**（纯 Computer Vision 的 Key 不能调用 DI）。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
+在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence** 美国支票模型 **`prebuilt-check.us`**（v4）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**；资源与 SDK 不匹配旧模型名时会出现 **404 ModelNotFound**。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
 
 ## 本地开发
 

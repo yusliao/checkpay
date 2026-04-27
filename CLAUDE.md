@@ -2,6 +2,8 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-27** - 支票上传/复核 **仅「提交入库」** 成功后可选自动写入 `ocr_training_samples`（`Notes=auto:check-final-submit`；`OcrRawResponse` 与标注页一致的复制面板格式）；草稿保存不写；配置 **`Ocr:Training:AutoSampleOnCheckSubmit`** / **`Ocr:Training:AutoSampleRequireDiff`**；Compose / `.env.example` 增加 `OCR_TRAINING_*`；`CheckAchExtensionData.EqualsForTraining` 供纠偏与样本差异共用
+- **2026-04-27** - 支票 OCR 策略增强：MICR 启发式增加 **ABA 路由校验位**、底部三连数字行、尾部滑动窗；`OcrResultDto` 增加 **`Diagnostics`**（及 `Iban`/`Bic` 欧洲提示字段）；日志输出 `CheckOcrDiagnostics`；可选 **`Ocr:PrebuiltCheck:EnrichPrimaryResult`** 在同图再调 **prebuilt-check.us** 与 Vision Read 融合；文档 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)；Compose / `.env.example` 增加 `OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT`
 - **2026-04-27** - 手写金额校验：改用 `Azure.AI.DocumentIntelligence` 调用 **prebuilt-check.us**（v4 API 2024-11-30）；移除对已弃用模型名 `prebuilt-check` 的 `Azure.AI.FormRecognizer` 依赖，修复新 DI 资源上 **ModelNotFound / 404**；字段解析兼容 `WordAmount` / `NumberAmount`
 - **2026-04-27** - Azure OCR：`Azure:DocumentIntelligence:DocumentAnalysisEndpoint` / `DocumentAnalysisApiKey` 可选，专用于手写金额校验（DI）；解决纯 Computer Vision Key 导致校验 401；Compose 支持 `AZURE_DOCUMENT_INTELLIGENCE_*`；`.env.example` / README 说明 Vision 与 DI 凭据可分离
 - **2026-04-27** - 新增 Azure DI 双阶段金额校验：`OcrWorker` 在金额置信度低于阈值时触发 `ValidateHandwrittenAmountAsync`；新增 `amount_validation_status/result/error_message/validated_at` 字段与迁移；页面显示“数字金额 vs 手写金额”一致性提示；新增 `Ocr:AmountValidation:*` 配置；新增复核页/上传页“手动校验手写金额”按钮并写入审计日志

@@ -32,7 +32,13 @@ public record OcrResultDto(
     /// <summary>票面公司名称 / 付款主体（常与 Pay to the order of 一致，可空）。</summary>
     string? CompanyName = null,
     /// <summary>通用 OCR 引擎抽取的全文（如 Azure Read），供训练页展示。</summary>
-    string? ExtractedText = null);
+    string? ExtractedText = null,
+    /// <summary>欧洲票据：通过 mod-97 校验的 IBAN（无则 null）。</summary>
+    string? Iban = null,
+    /// <summary>欧洲票据：BIC/SWIFT 形似串（无则 null）。</summary>
+    string? Bic = null,
+    /// <summary>单次识别诊断键值（区分 Read 漏字 vs 解析/区域问题），写入 raw_result JSON。</summary>
+    IReadOnlyDictionary<string, string>? Diagnostics = null);
 
 /// <summary>
 /// 扣款凭证 OCR 识别结果，所有字段可空（识别失败时为 null，由财务手动填写）

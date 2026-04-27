@@ -69,6 +69,9 @@ services:
       Ocr__AmountValidation__Enabled: ${OCR_AMOUNT_VALIDATION_ENABLED:-true}
       Ocr__AmountValidation__TriggerConfidenceThreshold: ${OCR_AMOUNT_VALIDATION_TRIGGER_CONFIDENCE_THRESHOLD:-0.85}
       Ocr__AmountValidation__FailOpen: ${OCR_AMOUNT_VALIDATION_FAIL_OPEN:-true}
+      Ocr__PrebuiltCheck__EnrichPrimaryResult: ${OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT:-false}
+      Ocr__Training__AutoSampleOnCheckSubmit: ${OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT:-true}
+      Ocr__Training__AutoSampleRequireDiff: ${OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF:-true}
       Ocr__CheckAzureTrainingCorrectionEnabled: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_ENABLED:-true}
       Ocr__CheckAzureTrainingCorrectionMaxScan: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MAX_SCAN:-40}
       Ocr__CheckAzureTrainingCorrectionPoolTake: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_POOL_TAKE:-80}

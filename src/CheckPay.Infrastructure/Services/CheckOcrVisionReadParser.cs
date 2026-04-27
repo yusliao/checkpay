@@ -3,9 +3,26 @@ using CheckPay.Application.Common.Models;
 
 namespace CheckPay.Infrastructure.Services;
 
+/// <summary>MICR 启发式解析结果（含 ABA 校验与路由选择策略，供诊断与日志）。</summary>
+internal readonly record struct MicrHeuristicParseResult(
+    string? RoutingNumber,
+    string? AccountNumber,
+    string? MicrLineRaw,
+    double RoutingConfidence,
+    double AccountConfidence,
+    double MicrLineConfidence,
+    bool? RoutingAbaChecksumValid,
+    string RoutingSelectionMode);
+
 /// <summary>Azure Vision Read 支票/扣款全文的后处理解析（几何加权 + 启发式）。</summary>
 internal static class CheckOcrVisionReadParser
 {
+    private static readonly Regex MicrTripleDigitsRegex = new(
+        @"(\d{9})\s+(\d{8,17})\s+(\d{4,6})\s*$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TailDigitRunsRegex = new(@"\d{4,}", RegexOptions.Compiled);
+
     // MICR 行格式：⑆路由号⑆ ⑈账号⑈ 支票号（或简化版数字序列）
     private static readonly Regex MicrCheckNumberRegex = new(
         @"(?:⑆[0-9⑆⑈ ]+⑈[0-9⑆⑈ ]+\s+|[⑆⑈])([0-9]{4,6})\s*$",
@@ -206,43 +223,115 @@ internal static class CheckOcrVisionReadParser
         return (null, 0.1);
     }
 
-    public static (string? routing, string? account, string? micrLine, double rtConf, double acConf, double micConf)
-        ParseMicrHeuristic(string text)
+    public static MicrHeuristicParseResult ParseMicrHeuristic(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return (null, null, null, 0.1, 0.1, 0.1);
+            return new MicrHeuristicParseResult(null, null, null, 0.1, 0.1, 0.1, null, "empty");
 
         var tailStart = Math.Max(0, text.Length - 400);
         var tail = text[tailStart..];
-        var digitsRuns = Regex.Matches(tail, @"\d{4,}")
-            .Cast<Match>()
-            .Select(m => m.Value)
-            .ToList();
 
-        string? routing = null;
-        string? account = null;
-        foreach (var run in digitsRuns.Where(r => r.Length == 9))
+        // 1) 底部行常见「路由 账号 支票号」三连数字（E13B 常被读成空格分隔）
+        var lines = tail.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        for (var li = lines.Length - 1; li >= 0; li--)
         {
-            routing = run;
+            var line = lines[li].Trim();
+            if (line.Length < 22)
+                continue;
+
+            var m = MicrTripleDigitsRegex.Match(line);
+            if (!m.Success)
+                continue;
+
+            var rt = m.Groups[1].Value;
+            if (!AbaRoutingNumberValidator.IsValid(rt))
+                continue;
+
+            var ac = m.Groups[2].Value;
+            var micrLine = $"{rt} {ac} {m.Groups[3].Value}".Trim();
+            return new MicrHeuristicParseResult(rt, ac, micrLine, 0.82, 0.74, 0.78, true, "triple_line");
+        }
+
+        // 2) 尾部纯数字序列上滑动窗口：优先通过 ABA 校验的 9 位，且取最靠右（更接近 MICR 物理位置）
+        var digitTail = new string(tail.Where(char.IsDigit).ToArray());
+        var abaWindows = new List<(string Routing, int Start)>();
+        for (var i = 0; i + 9 <= digitTail.Length; i++)
+        {
+            var slice = digitTail.Substring(i, 9);
+            if (AbaRoutingNumberValidator.IsValid(slice))
+                abaWindows.Add((slice, i));
+        }
+
+        if (abaWindows.Count > 0)
+        {
+            var best = abaWindows.MaxBy(x => x.Start);
+            var routing = best.Routing;
+            var digitsRuns = TailDigitRunsRegex.Matches(tail).Cast<Match>().Select(x => x.Value).ToList();
+            string? account = null;
+            foreach (var run in digitsRuns.OrderByDescending(r => r.Length))
+            {
+                if (string.Equals(run, routing, StringComparison.Ordinal))
+                    continue;
+                if (run.Length >= 8)
+                {
+                    account = run;
+                    break;
+                }
+            }
+
+            var micrLine = string.Join(" ", digitsRuns.TakeLast(5));
+            return new MicrHeuristicParseResult(
+                routing,
+                account,
+                micrLine.Length > 0 ? micrLine : null,
+                0.72,
+                account != null ? 0.52 : 0.28,
+                micrLine.Length > 0 ? 0.62 : 0.22,
+                true,
+                "aba_sliding_window");
+        }
+
+        // 3) 退化：原「首个 9 位数字串 + 最长 ≥8 位」逻辑（可能未通过 ABA）
+        var legacyRuns = TailDigitRunsRegex.Matches(tail).Cast<Match>().Select(x => x.Value).ToList();
+        string? legacyRouting = null;
+        foreach (var run in legacyRuns.Where(r => r.Length == 9))
+        {
+            legacyRouting = run;
             break;
         }
 
-        foreach (var run in digitsRuns.OrderByDescending(r => r.Length))
+        string? legacyAccount = null;
+        foreach (var run in legacyRuns.OrderByDescending(r => r.Length))
         {
-            if (run == routing)
+            if (string.Equals(run, legacyRouting, StringComparison.Ordinal))
                 continue;
             if (run.Length >= 8)
             {
-                account = run;
+                legacyAccount = run;
                 break;
             }
         }
 
-        var micrLine = string.Join(" ", digitsRuns.TakeLast(5));
-        var rtConf = routing != null ? 0.42 : 0.1;
-        var acConf = account != null ? 0.38 : 0.1;
-        var micConf = micrLine.Length > 0 ? 0.35 : 0.1;
-        return (routing, account, micrLine.Length > 0 ? micrLine : null, rtConf, acConf, micConf);
+        var legacyMicr = string.Join(" ", legacyRuns.TakeLast(5));
+        var abaOk = legacyRouting != null && AbaRoutingNumberValidator.IsValid(legacyRouting);
+        return new MicrHeuristicParseResult(
+            legacyRouting,
+            legacyAccount,
+            legacyMicr.Length > 0 ? legacyMicr : null,
+            legacyRouting != null ? abaOk ? 0.58 : 0.42 : 0.1,
+            legacyAccount != null ? 0.38 : 0.1,
+            legacyMicr.Length > 0 ? 0.35 : 0.1,
+            legacyRouting == null ? null : abaOk,
+            "digit_runs_legacy");
+    }
+
+    /// <summary>尾部窗口内 <c>\d{4,}</c> 匹配个数，用于诊断 MICR 区是否被 Read 切成多段。</summary>
+    public static int CountTailDigitRuns(string text, int tailMaxChars = 400)
+    {
+        if (string.IsNullOrEmpty(text))
+            return 0;
+        var tail = text.Length <= tailMaxChars ? text : text[^tailMaxChars..];
+        return TailDigitRunsRegex.Matches(tail).Count;
     }
 
     public static (string? line, double confidence) ParsePayToOrderLine(string text)

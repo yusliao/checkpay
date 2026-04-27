@@ -7,7 +7,7 @@
 - **前端**: Blazor Server + MudBlazor
 - **后端**: ASP.NET Core 10 + EF Core 10
 - **数据库**: PostgreSQL 16
-- **OCR**: Azure 双阶段识别（主链路 Vision Read + 条件触发的 Document Intelligence 金额校验）；配置节沿用 `Azure:DocumentIntelligence`；支票 Worker 将主识别写入 `ocr_results.raw_result`，金额校验写入 `amount_validation_*`
+- **OCR**: Azure Vision Read 主识别；可选 `Ocr:PrebuiltCheck:EnrichPrimaryResult=true` 再调 **prebuilt-check.us** 与 Read 融合；金额低于置信度阈值时触发 DI 手写金额校验；配置节沿用 `Azure:DocumentIntelligence`；结果写入 `ocr_results.raw_result`（含 `Diagnostics` 诊断键值），金额校验写入 `amount_validation_*`。支票 **提交入库**（非草稿）可按 `Ocr:Training:AutoSampleOnCheckSubmit` 自动写入训练样本表。排查见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
 - **存储**: MinIO（S3 兼容，Docker Compose 默认）
 - **部署**: Docker Compose（推荐，应用 + PostgreSQL + MinIO）
 
@@ -41,7 +41,7 @@ cd checkpay
 docker compose up -d
 ```
 
-在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence** 美国支票模型 **`prebuilt-check.us`**（v4）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**；资源与 SDK 不匹配旧模型名时会出现 **404 ModelNotFound**。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
+在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence** 美国支票模型 **`prebuilt-check.us`**（v4）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**；资源与 SDK 不匹配旧模型名时会出现 **404 ModelNotFound**。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。可选 **`OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT=true`**（对应 `Ocr:PrebuiltCheck:EnrichPrimaryResult`）在每张支票上多一次 DI 调用以提升路由/银行名等结构化字段，详见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)。**`OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT`** / **`OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF`** 控制支票入库后是否自动落库 OCR 训练样本、以及是否与 OCR 完全一致仍写入。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
 
 ## 本地开发
 

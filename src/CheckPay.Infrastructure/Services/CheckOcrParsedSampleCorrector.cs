@@ -175,7 +175,10 @@ public sealed class CheckOcrParsedSampleCorrector(
             CheckNumberMicr: pick(cAch?.CheckNumberMicr, current.CheckNumberMicr),
             MicrFieldOrderNote: pick(cAch?.MicrFieldOrderNote, current.MicrFieldOrderNote),
             CompanyName: pick(cAch?.CompanyName, current.CompanyName),
-            ExtractedText: current.ExtractedText);
+            ExtractedText: current.ExtractedText,
+            Iban: current.Iban,
+            Bic: current.Bic,
+            Diagnostics: current.Diagnostics);
     }
 
     private static (OcrResultDto merged, List<string> appliedFields) TryMergeFromSampleSimilarity(
@@ -225,7 +228,7 @@ public sealed class CheckOcrParsedSampleCorrector(
         var allowAch = achGate <= maxFieldConfidence + 0.08
                        && oAch != null
                        && cAch != null
-                       && !CheckOcrTrainingSampleDiff.AchEquals(oAch, cAch);
+                       && !CheckAchExtensionData.EqualsForTraining(oAch, cAch);
 
         string? pick(string? correct, string? fallback) =>
             !string.IsNullOrWhiteSpace(correct) ? correct.Trim() : fallback;
@@ -312,7 +315,10 @@ public sealed class CheckOcrParsedSampleCorrector(
             CheckNumberMicr: checkNumberMicr,
             MicrFieldOrderNote: micrFieldOrderNote,
             CompanyName: companyName,
-            ExtractedText: current.ExtractedText), appliedFields);
+            ExtractedText: current.ExtractedText,
+            Iban: current.Iban,
+            Bic: current.Bic,
+            Diagnostics: current.Diagnostics), appliedFields);
     }
 
     private static bool SampleHasCheckNumberDiff(OcrTrainingSample s) =>

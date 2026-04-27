@@ -8,6 +8,7 @@
 @using CheckPay.Worker.Services
 @using CheckPay.Web.Common
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Configuration
 @using Microsoft.JSInterop
 @using System.Text.Json
 @implements IDisposable
@@ -19,6 +20,7 @@
 @inject OcrWorker OcrWorker
 @inject IOcrService OcrService
 @inject IAuditLogService AuditLog
+@inject IConfiguration Configuration
 
 <PageTitle>上传支票 - CheckPay</PageTitle>
 
@@ -880,14 +882,18 @@ else
             var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
             var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
 
+            var capturedImageUrl = _current.ImageUrl;
+            var capturedOcrResultId = _current.OcrResultId;
+            var checkDateUtc = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
+
             var check = new CheckRecord
             {
                 CheckNumber = _checkNumber,
                 CheckAmount = _amount,
-                CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc),
+                CheckDate = checkDateUtc,
                 Customer = customer,
-                ImageUrl = _current.ImageUrl,
-                OcrResultId = _current.OcrResultId,
+                ImageUrl = capturedImageUrl,
+                OcrResultId = capturedOcrResultId,
                 Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
                 Status = CheckStatus.PendingDebit,
                 RowVersion = 0,
@@ -911,6 +917,19 @@ else
 
             DbContext.CheckRecords.Add(check);
             await DbContext.SaveChangesAsync();
+
+            if (submitAsFinal)
+            {
+                await CheckSubmitOcrTrainingSamplePageHelper.TryAppendAfterCheckFinalSubmitAsync(
+                    DbContext,
+                    Configuration,
+                    capturedImageUrl,
+                    capturedOcrResultId,
+                    _checkNumber.Trim(),
+                    _amount,
+                    checkDateUtc,
+                    BuildSubmittedAchExtensionData());
+            }
 
             _current.Done = true;
             Snackbar.Add(submitAsFinal
@@ -987,6 +1006,21 @@ else
         _current = _uploadQueue.FirstOrDefault(q => !q.Done && q != _current);
         ClearForm();
     }
+
+    private CheckAchExtensionData BuildSubmittedAchExtensionData() =>
+        new(
+            NullIfEmpty(_routingNumber),
+            NullIfEmpty(_accountNumber),
+            NullIfEmpty(_bankName),
+            NullIfEmpty(_accountHolderName),
+            NullIfEmpty(_accountAddress),
+            NullIfEmpty(_accountType),
+            NullIfEmpty(_payToOrderOf),
+            NullIfEmpty(_forMemo),
+            NullIfEmpty(_micrLineRaw),
+            NullIfEmpty(_checkNumberMicr),
+            null,
+            NullIfEmpty(_companyName));
 
     private async Task<string?> ValidateFormAsync(bool submitAsFinal)
     {

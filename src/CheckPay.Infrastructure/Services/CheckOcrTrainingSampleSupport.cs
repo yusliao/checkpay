@@ -26,22 +26,8 @@ internal static class CheckOcrTrainingSampleDiff
         if (oAch == null || cAch == null)
             return true;
 
-        return !AchEquals(oAch, cAch);
+        return !CheckAchExtensionData.EqualsForTraining(oAch, cAch);
     }
-
-    internal static bool AchEquals(CheckAchExtensionData a, CheckAchExtensionData b) =>
-        string.Equals(Norm(a.RoutingNumber), Norm(b.RoutingNumber), StringComparison.Ordinal)
-        && string.Equals(Norm(a.AccountNumber), Norm(b.AccountNumber), StringComparison.Ordinal)
-        && string.Equals(Norm(a.BankName), Norm(b.BankName), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Norm(a.AccountHolderName), Norm(b.AccountHolderName), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Norm(a.AccountAddress), Norm(b.AccountAddress), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Norm(a.AccountType), Norm(b.AccountType), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Norm(a.PayToOrderOf), Norm(b.PayToOrderOf), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Norm(a.CompanyName), Norm(b.CompanyName), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Norm(a.ForMemo), Norm(b.ForMemo), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Norm(a.MicrLineRaw), Norm(b.MicrLineRaw), StringComparison.Ordinal)
-        && string.Equals(Norm(a.CheckNumberMicr), Norm(b.CheckNumberMicr), StringComparison.Ordinal)
-        && string.Equals(Norm(a.MicrFieldOrderNote), Norm(b.MicrFieldOrderNote), StringComparison.OrdinalIgnoreCase);
 
     public static string? Norm(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
 

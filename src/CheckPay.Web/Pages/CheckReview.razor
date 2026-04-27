@@ -2,12 +2,14 @@
 @page "/checks/draft/{DraftId:guid}"
 @attribute [Authorize(Roles = "Sales,Admin")]
 @using CheckPay.Application.Common.Interfaces
+@using CheckPay.Application.Common.Models
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
 @using CheckPay.Application.Common
 @using CheckPay.Worker.Services
 @using CheckPay.Web.Common
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Configuration
 @using System.Linq
 @using System.Text.Json
 @inject IApplicationDbContext DbContext
@@ -16,6 +18,7 @@
 @inject OcrWorker OcrWorker
 @inject IOcrService OcrService
 @inject IAuditLogService AuditLog
+@inject IConfiguration Configuration
 
 <PageTitle>@(_editingCheckRecordId.HasValue ? "编辑草稿 - CheckPay" : "复核支票 - CheckPay")</PageTitle>
 
@@ -983,6 +986,20 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         try
         {
             await DbContext.SaveChangesAsync();
+            if (submitAsFinal)
+            {
+                var checkDateUtc = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
+                await CheckSubmitOcrTrainingSamplePageHelper.TryAppendAfterCheckFinalSubmitAsync(
+                    DbContext,
+                    Configuration,
+                    _ocrResult.ImageUrl,
+                    _ocrResult.Id,
+                    _checkNumber.Trim(),
+                    _amount,
+                    checkDateUtc,
+                    BuildSubmittedAchExtensionData());
+            }
+
             Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "支票草稿已保存。", Severity.Success);
             Navigation.NavigateTo("/records");
         }
@@ -1086,6 +1103,20 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
             tracked.UpdatedAt = DateTime.UtcNow;
 
             await DbContext.SaveChangesAsync();
+            if (submitAsFinal)
+            {
+                var checkDateUtc = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
+                await CheckSubmitOcrTrainingSamplePageHelper.TryAppendAfterCheckFinalSubmitAsync(
+                    DbContext,
+                    Configuration,
+                    tracked.ImageUrl ?? string.Empty,
+                    tracked.OcrResultId,
+                    _checkNumber.Trim(),
+                    _amount,
+                    checkDateUtc,
+                    BuildSubmittedAchExtensionData());
+            }
+
             Snackbar.Add(submitAsFinal ? "支票已提交入库！" : "草稿已保存。", Severity.Success);
             Navigation.NavigateTo("/records");
         }
@@ -1094,6 +1125,21 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
             Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
         }
     }
+
+    private CheckAchExtensionData BuildSubmittedAchExtensionData() =>
+        new(
+            NullIfEmpty(_routingNumber),
+            NullIfEmpty(_accountNumber),
+            NullIfEmpty(_bankName),
+            NullIfEmpty(_accountHolderName),
+            NullIfEmpty(_accountAddress),
+            NullIfEmpty(_accountType),
+            NullIfEmpty(_payToOrderOf),
+            NullIfEmpty(_forMemo),
+            NullIfEmpty(_micrLineRaw),
+            NullIfEmpty(_checkNumberMicr),
+            null,
+            NullIfEmpty(_companyName));
 
     private async Task<string?> ValidateFormAsync(bool submitAsFinal)
     {

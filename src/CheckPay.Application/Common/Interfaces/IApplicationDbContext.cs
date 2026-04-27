@@ -13,6 +13,7 @@ public interface IApplicationDbContext
     DbSet<User> Users { get; }
     DbSet<AuditLog> AuditLogs { get; }
     DbSet<OcrTrainingSample> OcrTrainingSamples { get; }
+    DbSet<OcrCheckTemplate> OcrCheckTemplates { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

@@ -16,6 +16,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<OcrTrainingSample> OcrTrainingSamples => Set<OcrTrainingSample>();
+    public DbSet<OcrCheckTemplate> OcrCheckTemplates => Set<OcrCheckTemplate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

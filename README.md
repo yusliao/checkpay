@@ -7,19 +7,19 @@
 - **前端**: Blazor Server + MudBlazor
 - **后端**: ASP.NET Core 10 + EF Core 10
 - **数据库**: PostgreSQL 16
-- **OCR**: 腾讯混元视觉模型（hunyuan-vision）为主；可选 Azure Document Intelligence
+- **OCR**: Azure 双阶段识别（主链路 Vision Read + 条件触发的 Document Intelligence 金额校验）；配置节沿用 `Azure:DocumentIntelligence`；支票 Worker 将主识别写入 `ocr_results.raw_result`，金额校验写入 `amount_validation_*`
 - **存储**: MinIO（S3 兼容，Docker Compose 默认）
 - **部署**: Docker Compose（推荐，应用 + PostgreSQL + MinIO）
 
 ## 项目状态
 
-核心流程（支票采集、扣款导入、核查、导出、用户与客户管理、OCR 训练样本等）已在仓库实现。**设计与文档可能滞后，以 `src/` 与 EF 迁移为准。**
+核心流程（支票采集、扣款导入、核查、导出、用户与客户管理、OCR 训练样本等）已在仓库实现。**设计与文档可能滞后，以 `src/` 与 EF 迁移为准；约定见 [AGENTS.md](AGENTS.md) 与 `.cursor/rules/sync-docs.mdc`。**
 
 ### 已完成（摘要）
 
 | 阶段 | 内容 |
 |------|------|
-| ✅ | Solution、EF Core、`docker-compose`、MinIO、混元 OCR、图片代理、认证（Cookie + BCrypt）、主要 Blazor 页面与 Worker 等 |
+| ✅ | Solution、EF Core、`docker-compose`、MinIO、Azure Vision OCR、图片代理、认证（Cookie + BCrypt）、主要 Blazor 页面与 Web 内嵌 OCR Worker 等 |
 
 ## 默认账号
 
@@ -41,7 +41,7 @@ cd checkpay
 docker compose up -d
 ```
 
-默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
+在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。金额二次校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
 
 ## 本地开发
 
@@ -50,10 +50,11 @@ docker compose up -d
 - .NET 10 SDK
 - PostgreSQL 16
 - MinIO（可单独 `docker run` 或复用 Compose 中的 minio 服务）
+- **Azure AI Vision**（Computer Vision）资源的 Endpoint 与 Key，用于支票/扣款 OCR
 
 ### 运行步骤
 
-1. 克隆仓库并配置 `src/CheckPay.Web/appsettings.Development.json`（已在 .gitignore 中）：
+1. 克隆仓库并配置 `src/CheckPay.Web/appsettings.Development.json`（建议敏感信息用 User Secrets，勿提交密钥）：
 
 ```json
 {
@@ -67,15 +68,10 @@ docker compose up -d
     "BucketName": "checkpay-files",
     "UseSSL": false
   },
-  "Hunyuan": {
-    "SecretId": "your-secret-id",
-    "SecretKey": "your-secret-key",
-    "Region": "ap-guangzhou"
-  },
   "Azure": {
     "DocumentIntelligence": {
-      "Endpoint": "",
-      "ApiKey": ""
+      "Endpoint": "https://your-resource.cognitiveservices.azure.com/",
+      "ApiKey": "your-api-key"
     }
   }
 }
@@ -87,11 +83,10 @@ docker compose up -d
 dotnet ef database update --project src/CheckPay.Infrastructure --startup-project src/CheckPay.Web
 ```
 
-3. 启动 Web（需要 OCR 队列处理时再开 Worker）：
+3. 启动 Web（**支票 OCR 队列在 Web 进程内的 `OcrWorker` HostedService 中运行**，无需为 OCR 单独启动 `CheckPay.Worker` 控制台项目）：
 
 ```bash
 dotnet run --project src/CheckPay.Web
-dotnet run --project src/CheckPay.Worker
 ```
 
 更多说明见 [CLAUDE.md](CLAUDE.md)。
@@ -100,7 +95,7 @@ dotnet run --project src/CheckPay.Worker
 
 ### 流程一：支票采集（美国财务）
 1. 上传支票图片 → MinIO
-2. OCR（腾讯混元为主）
+2. OCR（Azure Vision Read 主识别；当金额置信度低于阈值时触发 DI 手写金额校验；复核页/上传页支持“手动校验手写金额”并记录审计）
 3. 复核表单（置信度颜色：绿 ≥85% / 橙 60–85% / 红 <60%）
 4. 确认入库 → 状态：待扣款
 

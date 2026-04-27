@@ -4,6 +4,10 @@ public interface IOcrService
 {
     Task<OcrResultDto> ProcessCheckImageAsync(string imageUrl, CancellationToken cancellationToken = default);
     Task<DebitOcrResultDto> ProcessDebitImageAsync(string imageUrl, CancellationToken cancellationToken = default);
+    Task<AmountValidationResult> ValidateHandwrittenAmountAsync(
+        string imageUrl,
+        decimal numericAmount,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -27,7 +31,7 @@ public record OcrResultDto(
     string? MicrFieldOrderNote = null,
     /// <summary>票面公司名称 / 付款主体（常与 Pay to the order of 一致，可空）。</summary>
     string? CompanyName = null,
-    /// <summary>通用 OCR 引擎抽取的全文（如 Azure Read），供训练页展示；混元等可为空。</summary>
+    /// <summary>通用 OCR 引擎抽取的全文（如 Azure Read），供训练页展示。</summary>
     string? ExtractedText = null);
 
 /// <summary>
@@ -41,3 +45,15 @@ public record DebitOcrResultDto(
     Dictionary<string, double> ConfidenceScores,
     /// <summary>通用 OCR 引擎抽取的全文（如 Azure Read），供训练页展示。</summary>
     string? RawExtractedText = null);
+
+/// <summary>
+/// 支票金额校验结果：以数字金额为基准，识别并解析英文手写金额后做一致性判断。
+/// </summary>
+public record AmountValidationResult(
+    decimal NumericAmount,
+    decimal? LegalAmountParsed,
+    string? LegalAmountRaw,
+    bool? IsConsistent,
+    double Confidence,
+    string Status,
+    string? Reason = null);

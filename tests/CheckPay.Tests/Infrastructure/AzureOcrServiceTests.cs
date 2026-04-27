@@ -1,4 +1,5 @@
 using CheckPay.Application.Common.Interfaces;
+using CheckPay.Application.Common.Models;
 using CheckPay.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,7 +14,18 @@ public class AzureOcrServiceTests
             Task.FromResult(parsed);
     }
 
+    private sealed class DefaultTemplateResolver : ICheckOcrTemplateResolver
+    {
+        public Task<OcrTemplateResolution> ResolveAsync(
+            string? routingDigits9,
+            string extractedFullText,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new OcrTemplateResolution(null, null, CheckOcrParsingProfile.Default));
+    }
+
     private static ICheckOcrParsedSampleCorrector Corrector() => new PassthroughCorrector();
+
+    private static ICheckOcrTemplateResolver TemplateResolver() => new DefaultTemplateResolver();
 
     [Fact]
     public void Constructor_ShouldThrowException_WhenEndpointMissing()
@@ -26,7 +38,7 @@ public class AzureOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(() =>
-            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!, Corrector()));
+            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!, TemplateResolver(), Corrector()));
     }
 
     [Fact]
@@ -40,6 +52,6 @@ public class AzureOcrServiceTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(() =>
-            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!, Corrector()));
+            new AzureOcrService(configuration, NullLogger<AzureOcrService>.Instance, null!, TemplateResolver(), Corrector()));
     }
 }

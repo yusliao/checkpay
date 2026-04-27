@@ -6,6 +6,7 @@
 @using CheckPay.Domain.Enums
 @using CheckPay.Application.Common
 @using CheckPay.Worker.Services
+@using CheckPay.Web.Common
 @using Microsoft.EntityFrameworkCore
 @using System.Linq
 @using System.Text.Json
@@ -13,6 +14,8 @@
 @inject ISnackbar Snackbar
 @inject NavigationManager Navigation
 @inject OcrWorker OcrWorker
+@inject IOcrService OcrService
+@inject IAuditLogService AuditLog
 
 <PageTitle>@(_editingCheckRecordId.HasValue ? "编辑草稿 - CheckPay" : "复核支票 - CheckPay")</PageTitle>
 
@@ -40,44 +43,15 @@ else if (ShowCheckEditForm())
             <MudPaper Class="pa-4">
                 <MudText Typo="Typo.h6" GutterBottom="true">识别信息</MudText>
 
-                @* OCR 引擎切换滑块 *@
-                @{
-                    var ocr = _ocrResult!;
-                    var hunyuanReady = ocr.Status == OcrStatus.Completed && ocr.RawResult != null;
-                    var azureReady   = ocr.AzureStatus == OcrStatus.Completed && ocr.AzureRawResult != null;
-                }
                 @if (_editingCheckRecordId.HasValue)
                 {
                     <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
-                        正在编辑已保存的草稿，可多次修改后保存或提交入库；切换 OCR 引擎仅影响置信度颜色，不会覆盖已填字段。
+                        正在编辑已保存的草稿，可多次修改后保存或提交入库。
                     </MudAlert>
                 }
-                @if (hunyuanReady && azureReady)
-                {
-                    <MudPaper Class="pa-3 mb-4" Style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px">
-                        <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight:600">OCR 识别引擎</MudText>
-                        <MudSlider @bind-Value="_ocrEngineSlider" Min="0" Max="1" Step="1" Vertical="false"
-                                   Color="Color.Primary" Class="mb-2"
-                                   OnValueChanged="OnOcrEngineChanged">
-                            @if (_ocrEngineSlider == 0)
-                            {
-                                <MudText Typo="Typo.caption">混元 Hunyuan</MudText>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.caption">Azure AI Vision</MudText>
-                            }
-                        </MudSlider>
-                        <MudStack Row="true" Justify="Justify.SpaceBetween">
-                            <MudText Typo="Typo.caption" Color="@(_ocrEngineSlider == 0 ? Color.Primary : Color.Default)">
-                                混元 Hunyuan
-                            </MudText>
-                            <MudText Typo="Typo.caption" Color="@(_ocrEngineSlider == 1 ? Color.Primary : Color.Default)">
-                                Azure AI Vision
-                            </MudText>
-                        </MudStack>
-                    </MudPaper>
-                }
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                    OCR：Azure AI Vision Read（支票字段由全文解析）
+                </MudText>
                 <div class="mb-2">
                     <MudTextField @bind-Value="_checkNumber"
                                   Label="支票号"
@@ -105,6 +79,31 @@ else if (ShowCheckEditForm())
                                      AdornmentColor="@GetAdornmentColor("amount")"
                                      AdornmentIcon="@GetAdornmentIcon("amount")" />
                 </div>
+                @if (TryBuildAmountValidationHint(out var validationSeverity, out var validationText))
+                {
+                    <MudAlert Severity="@validationSeverity" Dense="true" Class="mb-2">
+                        @validationText
+                    </MudAlert>
+                }
+                @if (HasAmountValidationMismatch())
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true" Class="mb-2">
+                        <MudIcon Icon="@Icons.Material.Filled.ReportProblem" Class="mr-1" />
+                        @OcrAmountValidationNotes.MismatchBlockingMessage
+                    </MudAlert>
+                }
+                @if (CanShowManualAmountValidationButton())
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Color="Color.Info"
+                               Class="mb-2"
+                               StartIcon="@Icons.Material.Filled.FactCheck"
+                               OnClick="RunAmountValidationAsync"
+                               Disabled="@_amountValidationRunning">
+                        @(_amountValidationRunning ? OcrAmountValidationNotes.ManualValidatingButtonText : OcrAmountValidationNotes.ManualValidateButtonText)
+                    </MudButton>
+                }
 
                 @* 日期 - 置信度颜色 *@
                 <div class="mb-2">
@@ -213,6 +212,16 @@ else if (ShowCheckEditForm())
                 <MudButton Variant="Variant.Outlined" Color="Color.Default" Class="mr-2" OnClick="Abandon">
                     @(_editingCheckRecordId.HasValue ? "返回收款记录" : "放弃")
                 </MudButton>
+                @if (HasAmountValidationMismatch())
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Warning"
+                               Class="mr-2"
+                               StartIcon="@Icons.Material.Filled.ReportProblem"
+                               OnClick="SaveDraftWithMismatchReasonAsync">
+                        @OcrAmountValidationNotes.DraftOnMismatchButtonText
+                    </MudButton>
+                }
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" Class="mr-2" OnClick="() => SaveCheck(false)">保存草稿</MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SaveCheck(true)">提交入库</MudButton>
             </MudPaper>
@@ -249,7 +258,7 @@ else if (_ocrResult.Status == OcrStatus.Failed)
         </MudButton>
     </MudStack>
 }
-else if (_ocrResult.RawResult == null)
+else if (PrimaryCheckOcrPayload(_ocrResult) == null)
 {
     <MudAlert Severity="Severity.Warning" Class="mb-3">
         未找到 OCR 结果，请重新触发识别。
@@ -290,8 +299,7 @@ else if (_ocrResult.RawResult == null)
     private string _paymentPeriodText = "";
     private string _companyName = "";
     private Dictionary<string, double> _confidenceScores = new(StringComparer.OrdinalIgnoreCase);
-    private double _ocrEngineSlider = 0; // 0=混元，1=Azure
-
+    private bool _amountValidationRunning;
     protected override async Task OnInitializedAsync()
     {
         if (DraftId != Guid.Empty)
@@ -305,8 +313,14 @@ else if (_ocrResult.RawResult == null)
         if (_editingCheckRecordId.HasValue) return true;
         return _ocrResult != null
                && _ocrResult.Status == OcrStatus.Completed
-               && _ocrResult.RawResult != null;
+               && PrimaryCheckOcrPayload(_ocrResult) != null;
     }
+
+    /// <summary>主识别 JSON：新数据在 RawResult；旧双引擎数据可能仅在 AzureRawResult。</summary>
+    private static JsonDocument? PrimaryCheckOcrPayload(OcrResult? o) => o?.RawResult ?? o?.AzureRawResult;
+
+    private static JsonDocument? PrimaryCheckConfidenceDoc(OcrResult? o) =>
+        o?.RawResult != null ? o.ConfidenceScores : o?.AzureConfidenceScores;
 
     private async Task LoadDraftForEditAsync()
     {
@@ -401,24 +415,13 @@ else if (_ocrResult.RawResult == null)
 
     private void RefreshConfidenceFromSelectedOcrEngine()
     {
-        if (_ocrResult == null)
+        if (_ocrResult == null || PrimaryCheckOcrPayload(_ocrResult) == null)
         {
             _confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
             return;
         }
 
-        var useAzure = _ocrEngineSlider == 1;
-        var rawReady = useAzure
-            ? _ocrResult.AzureStatus == OcrStatus.Completed && _ocrResult.AzureRawResult != null
-            : _ocrResult.Status == OcrStatus.Completed && _ocrResult.RawResult != null;
-        if (!rawReady)
-        {
-            _confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-            return;
-        }
-
-        var conf = useAzure ? _ocrResult.AzureConfidenceScores : _ocrResult.ConfidenceScores;
-        _confidenceScores = ExtractConfidenceScoresFrom(conf);
+        _confidenceScores = ExtractConfidenceScoresFrom(PrimaryCheckConfidenceDoc(_ocrResult));
     }
 
     private async Task LoadOcrResultAsync()
@@ -434,7 +437,7 @@ else if (_ocrResult.RawResult == null)
             .Include(c => c.CompanyNames)
             .ToListAsync();
 
-        if (_ocrResult?.Status == OcrStatus.Completed && _ocrResult.RawResult != null)
+        if (_ocrResult?.Status == OcrStatus.Completed && PrimaryCheckOcrPayload(_ocrResult) != null)
         {
             PopulateFromStoredResult();
         }
@@ -446,10 +449,8 @@ else if (_ocrResult.RawResult == null)
     {
         if (_prefilledFromOcr && !force) return;
 
-        // 根据滑块选择引擎：0=混元，1=Azure
-        var useAzure = _ocrEngineSlider == 1;
-        var rawResult = useAzure ? _ocrResult?.AzureRawResult : _ocrResult?.RawResult;
-        var confScores = useAzure ? _ocrResult?.AzureConfidenceScores : _ocrResult?.ConfidenceScores;
+        var rawResult = PrimaryCheckOcrPayload(_ocrResult);
+        var confScores = PrimaryCheckConfidenceDoc(_ocrResult);
 
         if (rawResult == null) return;
 
@@ -509,20 +510,6 @@ else if (_ocrResult.RawResult == null)
         var c = _customers.FirstOrDefault(x => x.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
         if (c != null && !string.IsNullOrWhiteSpace(c.MobilePhone))
             _customerPhone = c.MobilePhone;
-    }
-
-    /// <summary>滑块切换引擎时重新填充表单</summary>
-    private void OnOcrEngineChanged(double value)
-    {
-        if (_editingCheckRecordId.HasValue)
-        {
-            RefreshConfidenceFromSelectedOcrEngine();
-            StateHasChanged();
-            return;
-        }
-
-        PopulateFromStoredResult(force: true);
-        StateHasChanged();
     }
 
     /// <summary>采用指定引擎的结果覆盖表单字段</summary>
@@ -688,6 +675,84 @@ else if (_ocrResult.RawResult == null)
             ? Icons.Material.Filled.Warning
             : Icons.Material.Filled.Error;
 
+    private bool TryBuildAmountValidationHint(out Severity severity, out string text)
+    {
+        severity = Severity.Normal;
+        text = string.Empty;
+        if (_ocrResult == null) return false;
+
+        if (_ocrResult.AmountValidationStatus == AmountValidationStatus.Pending)
+            return false;
+
+        if (_ocrResult.AmountValidationStatus == AmountValidationStatus.Skipped)
+        {
+            severity = Severity.Info;
+            text = _ocrResult.AmountValidationErrorMessage ?? "金额二次校验已跳过";
+            return true;
+        }
+
+        if (_ocrResult.AmountValidationStatus == AmountValidationStatus.Failed)
+        {
+            severity = Severity.Warning;
+            text = _ocrResult.AmountValidationErrorMessage ?? "金额二次校验失败，请人工复核";
+            return true;
+        }
+
+        if (_ocrResult.AmountValidationResult == null)
+            return false;
+
+        try
+        {
+            var payload = _ocrResult.AmountValidationResult.RootElement.GetRawText();
+            var result = JsonSerializer.Deserialize<AmountValidationResult>(payload);
+            if (result == null) return false;
+
+            var parsed = result.LegalAmountParsed.HasValue ? result.LegalAmountParsed.Value.ToString("N2") : "未解析";
+            if (result.IsConsistent == true)
+            {
+                severity = Severity.Success;
+                text = $"手写金额校验一致：数字金额 {_amount:N2}，手写解析 {parsed}（置信度 {result.Confidence:P0}）{BuildValidationTimeText()}";
+            }
+            else if (result.IsConsistent == false)
+            {
+                severity = Severity.Error;
+                text = $"手写金额与数字金额不一致：数字金额 {_amount:N2}，手写解析 {parsed}（置信度 {result.Confidence:P0}）{BuildValidationTimeText()}";
+            }
+            else
+            {
+                severity = Severity.Warning;
+                text = (result.Reason ?? "手写金额未能确定一致性，请人工复核") + BuildValidationTimeText();
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool CanShowManualAmountValidationButton()
+        => _ocrResult is { Status: OcrStatus.Completed } && _amount > 0m;
+
+    private string BuildValidationTimeText()
+        => _ocrResult?.AmountValidatedAt is DateTime dt ? $"（最后校验：{dt.ToLocalTime().ToString(OcrAmountValidationNotes.UiDateTimeFormat)}）" : string.Empty;
+
+    private bool HasAmountValidationMismatch()
+    {
+        if (_ocrResult?.AmountValidationResult == null) return false;
+        try
+        {
+            var payload = _ocrResult.AmountValidationResult.RootElement.GetRawText();
+            var result = JsonSerializer.Deserialize<AmountValidationResult>(payload);
+            return result?.IsConsistent == false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private void Abandon()
     {
         if (_editingCheckRecordId.HasValue)
@@ -724,6 +789,17 @@ else if (_ocrResult.RawResult == null)
             tracked.RawResult = null;
             tracked.ConfidenceScores?.Dispose();
             tracked.ConfidenceScores = null;
+            tracked.AzureRawResult?.Dispose();
+            tracked.AzureRawResult = null;
+            tracked.AzureConfidenceScores?.Dispose();
+            tracked.AzureConfidenceScores = null;
+            tracked.AzureStatus = OcrStatus.Pending;
+            tracked.AzureErrorMessage = null;
+            tracked.AmountValidationResult?.Dispose();
+            tracked.AmountValidationResult = null;
+            tracked.AmountValidationStatus = AmountValidationStatus.Pending;
+            tracked.AmountValidationErrorMessage = null;
+            tracked.AmountValidatedAt = null;
             if (!_editingCheckRecordId.HasValue)
             {
                 _prefilledFromOcr = false;
@@ -747,6 +823,76 @@ else if (_ocrResult.RawResult == null)
                 await LoadOcrResultAsync();
         }
     }
+
+    private async Task RunAmountValidationAsync()
+    {
+        if (_ocrResult == null) return;
+        if (_amount <= 0m)
+        {
+            Snackbar.Add("请先确认金额后再执行手写金额校验", Severity.Warning);
+            return;
+        }
+
+        _amountValidationRunning = true;
+        try
+        {
+            var tracked = await DbContext.OcrResults.FirstOrDefaultAsync(x => x.Id == _ocrResult.Id);
+            if (tracked == null)
+            {
+                Snackbar.Add("未找到 OCR 记录", Severity.Error);
+                return;
+            }
+
+            var oldStatus = tracked.AmountValidationStatus;
+            var oldError = tracked.AmountValidationErrorMessage;
+            var oldResult = tracked.AmountValidationResult?.RootElement.GetRawText();
+
+            var result = await OcrService.ValidateHandwrittenAmountAsync(tracked.ImageUrl, _amount);
+            tracked.AmountValidationResult?.Dispose();
+            tracked.AmountValidationResult = JsonDocument.Parse(JsonSerializer.Serialize(result));
+            tracked.AmountValidationStatus = result.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
+                ? AmountValidationStatus.Completed
+                : result.Status.Equals("skipped", StringComparison.OrdinalIgnoreCase)
+                    ? AmountValidationStatus.Skipped
+                    : AmountValidationStatus.Failed;
+            tracked.AmountValidationErrorMessage = result.Reason;
+            tracked.AmountValidatedAt = DateTime.UtcNow;
+            tracked.UpdatedAt = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            await AuditLog.LogAsync(
+                AuditAction.Update,
+                "OcrResult",
+                tracked.Id,
+                new
+                {
+                    AmountValidationStatus = oldStatus.ToString(),
+                    AmountValidationErrorMessage = oldError,
+                    AmountValidationResult = oldResult
+                },
+                new
+                {
+                    AmountValidationStatus = tracked.AmountValidationStatus.ToString(),
+                    AmountValidationErrorMessage = tracked.AmountValidationErrorMessage,
+                    AmountValidationResult = tracked.AmountValidationResult?.RootElement.GetRawText(),
+                    Trigger = "Manual"
+                });
+
+            Snackbar.Add("手写金额校验已完成", Severity.Success);
+            await LoadDraftForEditAsyncIfNeededOrReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"手写金额校验失败: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _amountValidationRunning = false;
+        }
+    }
+
+    private Task LoadDraftForEditAsyncIfNeededOrReloadAsync()
+        => _editingCheckRecordId.HasValue ? LoadDraftForEditAsync() : LoadOcrResultAsync();
 
     private void ResetRecognizedFields()
     {
@@ -846,6 +992,28 @@ else if (_ocrResult.RawResult == null)
         }
     }
 
+    private async Task SaveDraftWithMismatchReasonAsync()
+    {
+        if (!HasAmountValidationMismatch())
+        {
+            Snackbar.Add("当前不存在金额不一致，无需一键转草稿。", Severity.Info);
+            return;
+        }
+
+        AppendMismatchReasonToNotes();
+        await SaveCheck(false);
+    }
+
+    private void AppendMismatchReasonToNotes()
+    {
+        const string marker = OcrAmountValidationNotes.MismatchDraftMarker;
+        if (!string.IsNullOrWhiteSpace(_notes) && _notes.Contains(marker, StringComparison.Ordinal))
+            return;
+
+        var line = $"{marker} 时间:{DateTime.Now.ToString(OcrAmountValidationNotes.UiDateTimeFormat)}";
+        _notes = string.IsNullOrWhiteSpace(_notes) ? line : $"{_notes.Trim()}\n{line}";
+    }
+
     private async Task UpdateDraftCheckAsync(bool submitAsFinal)
     {
         var id = _editingCheckRecordId!.Value;
@@ -941,6 +1109,8 @@ else if (_ocrResult.RawResult == null)
             return "请输入客户手机号";
         if (submitAsFinal)
         {
+            if (HasAmountValidationMismatch())
+                return OcrAmountValidationNotes.MismatchSubmitBlockedReason;
             if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
                 return "提交入库时 Routing Number 须为 9 位数字";
             if (string.IsNullOrWhiteSpace(_accountNumber))
@@ -976,8 +1146,7 @@ else if (_ocrResult.RawResult == null)
     private bool CurrentOcrJsonHasAccountNumber()
     {
         if (_ocrResult == null || _ocrResult.Status != OcrStatus.Completed) return false;
-        var useAzure = _ocrEngineSlider == 1;
-        var doc = useAzure ? _ocrResult.AzureRawResult : _ocrResult.RawResult;
+        var doc = PrimaryCheckOcrPayload(_ocrResult);
         if (doc == null) return false;
         return !string.IsNullOrWhiteSpace(ExtractString(doc.RootElement, "AccountNumber"));
     }

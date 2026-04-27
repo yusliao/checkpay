@@ -30,8 +30,14 @@ public class OcrTrainingSampleConfiguration : IEntityTypeConfiguration<OcrTraini
         builder.Property(e => e.Notes).HasColumnName("notes").HasColumnType("text");
         builder.Property(e => e.OcrAchExtensionJson).HasColumnName("ocr_ach_extension_json").HasColumnType("text");
         builder.Property(e => e.CorrectAchExtensionJson).HasColumnName("correct_ach_extension_json").HasColumnType("text");
+        builder.Property(e => e.OcrCheckTemplateId).HasColumnName("ocr_check_template_id");
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+
+        builder.HasOne(e => e.OcrCheckTemplate)
+            .WithMany()
+            .HasForeignKey(e => e.OcrCheckTemplateId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasIndex(e => e.DocumentType).HasDatabaseName("ix_ocr_training_samples_document_type");
         builder.HasIndex(e => e.CreatedAt).HasDatabaseName("ix_ocr_training_samples_created_at");

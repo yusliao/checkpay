@@ -64,20 +64,19 @@ services:
       Minio__BucketName: ${MINIO_BUCKET_NAME:-checkpay-files}
       Minio__UseSSL: "false"
 
-      # 腾讯混元 OCR（主引擎，留空则使用 Mock）
-      Hunyuan__SecretId: ${HUNYUAN_SECRET_ID:-}
-      Hunyuan__SecretKey: ${HUNYUAN_SECRET_KEY:-}
-      Hunyuan__Region: ${HUNYUAN_REGION:-ap-guangzhou}
-      Ocr__Model: ${OCR_MODEL:-hunyuan-vision}
       Ocr__MaxRetries: ${OCR_MAX_RETRIES:-3}
       Ocr__RetryDelayMs: ${OCR_RETRY_DELAY_MS:-3000}
-      # 支票 OCR：从训练样本表注入混元 Prompt 的条数/总字符上限（0 条=关闭）
-      Ocr__CheckFewShotMaxSamples: ${OCR_CHECK_FEWSHOT_MAX_SAMPLES:-5}
-      Ocr__CheckFewShotMaxChars: ${OCR_CHECK_FEWSHOT_MAX_CHARS:-12000}
+      Ocr__AmountValidation__Enabled: ${OCR_AMOUNT_VALIDATION_ENABLED:-true}
+      Ocr__AmountValidation__TriggerConfidenceThreshold: ${OCR_AMOUNT_VALIDATION_TRIGGER_CONFIDENCE_THRESHOLD:-0.85}
+      Ocr__AmountValidation__FailOpen: ${OCR_AMOUNT_VALIDATION_FAIL_OPEN:-true}
       Ocr__CheckAzureTrainingCorrectionEnabled: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_ENABLED:-true}
       Ocr__CheckAzureTrainingCorrectionMaxScan: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MAX_SCAN:-40}
+      Ocr__CheckAzureTrainingCorrectionPoolTake: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_POOL_TAKE:-80}
+      Ocr__CheckAzureTrainingCorrectionMode: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MODE:-StrongOnly}
+      Ocr__CheckAzureTrainingCorrectionMinSimilarity: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MIN_SIMILARITY:-0.80}
+      Ocr__CheckAzureTrainingCorrectionSimilarityMaxFieldConfidence: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_SIMILARITY_MAX_FIELD_CONFIDENCE:-0.62}
 
-      # Azure AI Vision OCR（对比引擎，留空则跳过）
+      # Azure AI Vision OCR（支票识别主引擎，留空则 OCR 失败）
       Azure__DocumentIntelligence__Endpoint: ${AZURE_VISION_ENDPOINT:-}
       Azure__DocumentIntelligence__ApiKey: ${AZURE_VISION_API_KEY:-}
 

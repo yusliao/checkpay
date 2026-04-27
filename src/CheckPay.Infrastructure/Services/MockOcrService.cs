@@ -65,4 +65,21 @@ public class MockOcrService : IOcrService
 
         return Task.FromResult(result);
     }
+
+    public Task<AmountValidationResult> ValidateHandwrittenAmountAsync(
+        string imageUrl,
+        decimal numericAmount,
+        CancellationToken cancellationToken = default)
+    {
+        var legalAmount = Math.Round(numericAmount, 2);
+        var outcome = new AmountValidationResult(
+            NumericAmount: numericAmount,
+            LegalAmountParsed: legalAmount,
+            LegalAmountRaw: $"{legalAmount:N2} DOLLARS",
+            IsConsistent: true,
+            Confidence: 0.5,
+            Status: "completed",
+            Reason: "Mock OCR 固定返回一致");
+        return Task.FromResult(outcome);
+    }
 }

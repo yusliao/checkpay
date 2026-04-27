@@ -3,6 +3,7 @@ using System;
 using CheckPay.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CheckPay.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260427013554_AddAmountValidationToOcrResult")]
+    partial class AddAmountValidationToOcrResult
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -452,61 +455,6 @@ namespace CheckPay.Infrastructure.Migrations
                     b.ToTable("debit_records", (string)null);
                 });
 
-            modelBuilder.Entity("CheckPay.Domain.Entities.OcrCheckTemplate", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<string>("BankNameKeywords")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("bank_name_keywords");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("deleted_at");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_active");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("name");
-
-                    b.Property<string>("ParsingProfileJson")
-                        .HasColumnType("text")
-                        .HasColumnName("parsing_profile_json");
-
-                    b.Property<string>("RoutingPrefix")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("routing_prefix");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("integer")
-                        .HasColumnName("sort_order");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IsActive", "SortOrder")
-                        .HasDatabaseName("ix_ocr_check_templates_active_sort");
-
-                    b.ToTable("ocr_check_templates", (string)null);
-                });
-
             modelBuilder.Entity("CheckPay.Domain.Entities.OcrResult", b =>
                 {
                     b.Property<Guid>("Id")
@@ -673,10 +621,6 @@ namespace CheckPay.Infrastructure.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("ocr_check_number");
 
-                    b.Property<Guid?>("OcrCheckTemplateId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("ocr_check_template_id");
-
                     b.Property<DateTime?>("OcrDate")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("ocr_date");
@@ -697,8 +641,6 @@ namespace CheckPay.Infrastructure.Migrations
 
                     b.HasIndex("DocumentType")
                         .HasDatabaseName("ix_ocr_training_samples_document_type");
-
-                    b.HasIndex("OcrCheckTemplateId");
 
                     b.ToTable("ocr_training_samples", (string)null);
                 });
@@ -823,16 +765,6 @@ namespace CheckPay.Infrastructure.Migrations
                     b.Navigation("CheckRecord");
 
                     b.Navigation("Customer");
-                });
-
-            modelBuilder.Entity("CheckPay.Domain.Entities.OcrTrainingSample", b =>
-                {
-                    b.HasOne("CheckPay.Domain.Entities.OcrCheckTemplate", "OcrCheckTemplate")
-                        .WithMany()
-                        .HasForeignKey("OcrCheckTemplateId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("OcrCheckTemplate");
                 });
 
             modelBuilder.Entity("CheckPay.Domain.Entities.CheckRecord", b =>

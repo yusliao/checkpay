@@ -36,4 +36,9 @@ public class OcrTrainingSample : BaseEntity
 
     /// <summary>支票 ACH 扩展字段人工标注（JSON）</summary>
     public string? CorrectAchExtensionJson { get; set; }
+
+    /// <summary>可选：绑定的支票票型，用于样本检索加权（nullable）。</summary>
+    public Guid? OcrCheckTemplateId { get; set; }
+
+    public OcrCheckTemplate? OcrCheckTemplate { get; set; }
 }

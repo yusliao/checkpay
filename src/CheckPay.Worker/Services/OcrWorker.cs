@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Threading.Channels;
 using CheckPay.Application.Common.Interfaces;
+using CheckPay.Domain.Entities;
 using CheckPay.Domain.Enums;
 using CheckPay.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,9 @@ public class OcrWorker : BackgroundService
     private readonly Channel<Guid> _channel;
     private readonly int _maxRetries;
     private readonly int _retryDelayMs;
+    private readonly bool _amountValidationEnabled;
+    private readonly bool _amountValidationFailOpen;
+    private readonly double _amountValidationTriggerConfidenceThreshold;
 
     public OcrWorker(ILogger<OcrWorker> logger, IServiceScopeFactory scopeFactory, IConfiguration configuration)
     {
@@ -26,6 +30,12 @@ public class OcrWorker : BackgroundService
         _channel = Channel.CreateUnbounded<Guid>();
         _maxRetries = int.TryParse(configuration["Ocr:MaxRetries"], out var r) ? r : 3;
         _retryDelayMs = int.TryParse(configuration["Ocr:RetryDelayMs"], out var d) ? d : 3000;
+        _amountValidationEnabled = bool.TryParse(configuration["Ocr:AmountValidation:Enabled"], out var enabled) && enabled;
+        _amountValidationFailOpen = !bool.TryParse(configuration["Ocr:AmountValidation:FailOpen"], out var failOpen) || failOpen;
+        _amountValidationTriggerConfidenceThreshold =
+            double.TryParse(configuration["Ocr:AmountValidation:TriggerConfidenceThreshold"], out var threshold)
+                ? threshold
+                : 0.85;
     }
 
     public Task EnqueueAsync(Guid ocrResultId, CancellationToken cancellationToken = default)
@@ -39,7 +49,7 @@ public class OcrWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("OCR Worker 已启动（双引擎并行模式：混元 + Azure）");
+        _logger.LogInformation("OCR Worker 已启动（Azure AI Vision Read）");
 
         await foreach (var ocrResultId in _channel.Reader.ReadAllAsync(stoppingToken))
         {
@@ -68,10 +78,7 @@ public class OcrWorker : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
-
-        // 直接注入具体类型，两个引擎独立并行运行
-        var hunyuanService = scope.ServiceProvider.GetRequiredService<HunyuanOcrService>();
-        var azureService = scope.ServiceProvider.GetService<AzureOcrService>(); // 可选，未配置时为 null
+        var azureService = scope.ServiceProvider.GetService<AzureOcrService>();
 
         var ocrResult = await dbContext.OcrResults.FirstOrDefaultAsync(o => o.Id == ocrResultId, stoppingToken);
         if (ocrResult == null)
@@ -91,51 +98,44 @@ public class OcrWorker : BackgroundService
         ocrResult.ErrorMessage = null;
         ocrResult.UpdatedAt = DateTime.UtcNow;
 
-        // Azure 未配置时直接标记跳过，不阻塞混元
         if (azureService == null)
         {
-            ocrResult.AzureStatus = OcrStatus.Failed;
-            ocrResult.AzureErrorMessage = "未配置 Azure Document Intelligence 凭证";
-        }
-        else
-        {
-            ocrResult.AzureStatus = OcrStatus.Processing;
+            ocrResult.Status = OcrStatus.Failed;
+            ocrResult.ErrorMessage =
+                "Azure Document Intelligence（Vision Read）未配置。请设置 Azure:DocumentIntelligence:Endpoint 与 ApiKey。";
+            await dbContext.SaveChangesAsync(stoppingToken);
+            return;
         }
 
         await dbContext.SaveChangesAsync(stoppingToken);
 
-        // ── 并行调用两个引擎 ──────────────────────────────────
-        var hunyuanTask = hunyuanService.ProcessCheckImageAsync(ocrResult.ImageUrl, stoppingToken);
-        var azureTask = azureService != null
-            ? azureService.ProcessCheckImageAsync(ocrResult.ImageUrl, stoppingToken)
-            : Task.FromResult<OcrResultDto?>(null)!;
-
-        // 等待两个任务都完成（无论成功失败）
-        await Task.WhenAll(
-            hunyuanTask.ContinueWith(_ => { }, stoppingToken),
-            azureTask.ContinueWith(_ => { }, stoppingToken));
-
-        // ── 写入混元结果 ──────────────────────────────────────
-        if (hunyuanTask.IsCompletedSuccessfully)
+        try
         {
-            var result = hunyuanTask.Result;
+            var result = await azureService.ProcessCheckImageAsync(ocrResult.ImageUrl, stoppingToken);
+
             ocrResult.RawResult?.Dispose();
             ocrResult.ConfidenceScores?.Dispose();
             ocrResult.RawResult = JsonDocument.Parse(JsonSerializer.Serialize(result));
             ocrResult.ConfidenceScores = JsonDocument.Parse(JsonSerializer.Serialize(result.ConfidenceScores));
             ocrResult.Status = OcrStatus.Completed;
-        }
-        else
-        {
-            var ex = hunyuanTask.Exception?.InnerException ?? hunyuanTask.Exception;
-            _logger.LogError(ex, "混元 OCR 识别失败: {OcrResultId}", ocrResultId);
+            await RunAmountValidationAsync(azureService, result, ocrResult, stoppingToken);
 
+            ocrResult.AzureRawResult?.Dispose();
+            ocrResult.AzureRawResult = null;
+            ocrResult.AzureConfidenceScores?.Dispose();
+            ocrResult.AzureConfidenceScores = null;
+            ocrResult.AzureStatus = OcrStatus.Pending;
+            ocrResult.AzureErrorMessage = null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Azure OCR 识别失败: {OcrResultId}", ocrResultId);
             var isTransient = IsTransientException(ex);
             if (isTransient && ocrResult.RetryCount < _maxRetries)
             {
                 ocrResult.RetryCount++;
                 ocrResult.Status = OcrStatus.Pending;
-                ocrResult.ErrorMessage = $"第 {ocrResult.RetryCount} 次重试，原因: {ex?.Message}";
+                ocrResult.ErrorMessage = $"第 {ocrResult.RetryCount} 次重试，原因: {ex.Message}";
                 ocrResult.UpdatedAt = DateTime.UtcNow;
                 await dbContext.SaveChangesAsync(stoppingToken);
 
@@ -148,32 +148,64 @@ public class OcrWorker : BackgroundService
             }
 
             ocrResult.Status = OcrStatus.Failed;
-            ocrResult.ErrorMessage = ex?.Message;
-        }
-
-        // ── 写入 Azure 结果 ───────────────────────────────────
-        if (azureService != null)
-        {
-            if (azureTask.IsCompletedSuccessfully)
-            {
-                var result = azureTask.Result;
-                ocrResult.AzureRawResult?.Dispose();
-                ocrResult.AzureConfidenceScores?.Dispose();
-                ocrResult.AzureRawResult = JsonDocument.Parse(JsonSerializer.Serialize(result));
-                ocrResult.AzureConfidenceScores = JsonDocument.Parse(JsonSerializer.Serialize(result.ConfidenceScores));
-                ocrResult.AzureStatus = OcrStatus.Completed;
-            }
-            else
-            {
-                var ex = azureTask.Exception?.InnerException ?? azureTask.Exception;
-                _logger.LogError(ex, "Azure OCR 识别失败: {OcrResultId}", ocrResultId);
-                ocrResult.AzureStatus = OcrStatus.Failed;
-                ocrResult.AzureErrorMessage = ex?.Message;
-            }
+            ocrResult.ErrorMessage = ex.Message;
         }
 
         ocrResult.UpdatedAt = DateTime.UtcNow;
         await dbContext.SaveChangesAsync(stoppingToken);
+    }
+
+    private async Task RunAmountValidationAsync(
+        AzureOcrService azureService,
+        OcrResultDto ocr,
+        OcrResult entity,
+        CancellationToken cancellationToken)
+    {
+        entity.AmountValidationResult?.Dispose();
+        entity.AmountValidationResult = null;
+        entity.AmountValidationErrorMessage = null;
+        entity.AmountValidatedAt = DateTime.UtcNow;
+
+        if (!_amountValidationEnabled)
+        {
+            entity.AmountValidationStatus = AmountValidationStatus.Skipped;
+            return;
+        }
+
+        if (ocr.Amount <= 0m)
+        {
+            entity.AmountValidationStatus = AmountValidationStatus.Skipped;
+            entity.AmountValidationErrorMessage = "OCR 未识别到有效数字金额";
+            return;
+        }
+
+        var amountConfidence = ocr.ConfidenceScores.TryGetValue("Amount", out var conf) ? conf : 0.0;
+        if (amountConfidence >= _amountValidationTriggerConfidenceThreshold)
+        {
+            entity.AmountValidationStatus = AmountValidationStatus.Skipped;
+            entity.AmountValidationErrorMessage = $"金额置信度 {amountConfidence:F2} 高于阈值，跳过二次校验";
+            return;
+        }
+
+        try
+        {
+            var validation = await azureService.ValidateHandwrittenAmountAsync(entity.ImageUrl, ocr.Amount, cancellationToken);
+            entity.AmountValidationResult = JsonDocument.Parse(JsonSerializer.Serialize(validation));
+            entity.AmountValidationStatus = validation.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
+                ? AmountValidationStatus.Completed
+                : validation.Status.Equals("skipped", StringComparison.OrdinalIgnoreCase)
+                    ? AmountValidationStatus.Skipped
+                    : AmountValidationStatus.Failed;
+            entity.AmountValidationErrorMessage = validation.Reason;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "金额二次校验失败: {OcrResultId}", entity.Id);
+            entity.AmountValidationStatus = AmountValidationStatus.Failed;
+            entity.AmountValidationErrorMessage = ex.Message;
+            if (!_amountValidationFailOpen)
+                throw;
+        }
     }
 
     /// <summary>
@@ -189,7 +221,6 @@ public class OcrWorker : BackgroundService
         if (ex is InvalidOperationException ioe)
         {
             var msg = ioe.Message;
-            // 空响应或空文件可重试，MinIO 下载失败属于瞬态
             return msg.Contains("空响应") || msg.Contains("空文件") || msg.Contains("MinIO下载失败");
         }
 

@@ -23,44 +23,27 @@ public static class DependencyInjection
 
         services.AddScoped<IApplicationDbContext>(provider => provider.GetRequiredService<ApplicationDbContext>());
 
-        // OCR 服务（双引擎并行：混元 + Azure，用于比对评估）
-        // 混元：有凭证时注册具体类型，否则用 Mock 兜底
-        var hunyuanSecretId = configuration["Hunyuan:SecretId"];
-        services.AddScoped<ICheckOcrFewShotProvider, CheckOcrFewShotProvider>();
+        services.AddMemoryCache();
+
+        // OCR：Azure AI Vision Read（支票/扣款）；未配置时使用 Mock（Worker 会标记失败）
         services.AddScoped<ICheckOcrParsedSampleCorrector, CheckOcrParsedSampleCorrector>();
+        services.AddScoped<ICheckOcrTemplateResolver, CheckOcrTemplateResolver>();
 
-        if (!string.IsNullOrWhiteSpace(hunyuanSecretId))
-        {
-            services.AddScoped<HunyuanOcrService>();
-        }
-        else
-        {
-            // 开发环境无凭证时，用工厂将 MockOcrService 适配为 HunyuanOcrService 的替代
-            services.AddScoped<HunyuanOcrService>(sp =>
-                throw new InvalidOperationException("混元凭证未配置，请检查 Hunyuan:SecretId 配置"));
-            services.AddScoped<IOcrService, MockOcrService>();
-        }
-
-        // Azure：有凭证时注册具体类型（可选，未配置时 OcrWorker 跳过 Azure 引擎）
         var azureEndpoint = configuration["Azure:DocumentIntelligence:Endpoint"];
         var azureApiKey = configuration["Azure:DocumentIntelligence:ApiKey"];
         if (!string.IsNullOrWhiteSpace(azureEndpoint) && !string.IsNullOrWhiteSpace(azureApiKey)
             && !azureEndpoint.Contains("your-resource"))
         {
             services.AddScoped<AzureOcrService>();
+            services.AddScoped<IOcrService>(sp => sp.GetRequiredService<AzureOcrService>());
+        }
+        else
+        {
+            services.AddScoped<IOcrService, MockOcrService>();
         }
 
-        // IOcrService 指向混元（供非 Worker 场景使用，如 OcrTraining 页面）
-        if (!string.IsNullOrWhiteSpace(hunyuanSecretId))
-            services.AddScoped<IOcrService>(sp => sp.GetRequiredService<HunyuanOcrService>());
-
-        // 管理端 OCR 训练标注：已配置 Azure 时优先用 Vision Read，否则沿用 IOcrService
         services.AddScoped<IAdminTrainingOcrService>(sp =>
-        {
-            var azure = sp.GetService<AzureOcrService>();
-            IOcrService primary = azure ?? sp.GetRequiredService<IOcrService>();
-            return new AdminTrainingOcrService(primary);
-        });
+            new AdminTrainingOcrService(sp.GetRequiredService<IOcrService>()));
 
         // Blob存储服务：优先 MinIO > Azure > Mock
         var minioEndpoint = configuration["Minio:Endpoint"];
@@ -87,7 +70,6 @@ public static class DependencyInjection
         services.AddScoped<IAuditLogService, AuditLogService>();
 
         // 登录桥接服务：解决 Blazor Server 不能直接写 Cookie 的问题
-        services.AddMemoryCache();
         services.AddSingleton<ILoginTokenStore, LoginTokenStore>();
 
         return services;

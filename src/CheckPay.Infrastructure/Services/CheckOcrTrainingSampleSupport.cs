@@ -29,7 +29,7 @@ internal static class CheckOcrTrainingSampleDiff
         return !AchEquals(oAch, cAch);
     }
 
-    private static bool AchEquals(CheckAchExtensionData a, CheckAchExtensionData b) =>
+    internal static bool AchEquals(CheckAchExtensionData a, CheckAchExtensionData b) =>
         string.Equals(Norm(a.RoutingNumber), Norm(b.RoutingNumber), StringComparison.Ordinal)
         && string.Equals(Norm(a.AccountNumber), Norm(b.AccountNumber), StringComparison.Ordinal)
         && string.Equals(Norm(a.BankName), Norm(b.BankName), StringComparison.OrdinalIgnoreCase)

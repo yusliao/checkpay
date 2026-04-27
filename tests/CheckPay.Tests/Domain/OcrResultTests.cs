@@ -15,6 +15,9 @@ public class OcrResultTests
         Assert.Null(ocrResult.RawResult);
         Assert.Null(ocrResult.ConfidenceScores);
         Assert.Null(ocrResult.ErrorMessage);
+        Assert.Equal(AmountValidationStatus.Pending, ocrResult.AmountValidationStatus);
+        Assert.Null(ocrResult.AmountValidationResult);
+        Assert.Null(ocrResult.AmountValidationErrorMessage);
     }
 
     [Fact]

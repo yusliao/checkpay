@@ -1,7 +1,9 @@
 using System.Text.RegularExpressions;
 using Azure;
+using Azure.AI.FormRecognizer.DocumentAnalysis;
 using Azure.AI.Vision.ImageAnalysis;
 using CheckPay.Application.Common.Interfaces;
+using CheckPay.Application.Common.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -14,46 +16,17 @@ namespace CheckPay.Infrastructure.Services;
 public class AzureOcrService : IOcrService
 {
     private readonly ImageAnalysisClient _client;
+    private readonly DocumentAnalysisClient _documentClient;
     private readonly IBlobStorageService _blobStorageService;
+    private readonly ICheckOcrTemplateResolver _templateResolver;
     private readonly ICheckOcrParsedSampleCorrector _parsedSampleCorrector;
     private readonly ILogger<AzureOcrService> _logger;
-
-    // MICR 行格式：⑆路由号⑆ ⑈账号⑈ 支票号（或简化版数字序列）
-    // 美国支票 MICR 字符集：⑆ = 路由符，⑈ = 账号符，⑉ = 金额符
-    // 退而求其次：匹配底部的短数字序列（4-6位）作为支票号候选
-    private static readonly Regex MicrCheckNumberRegex = new(
-        @"(?:⑆[0-9⑆⑈ ]+⑈[0-9⑆⑈ ]+\s+|[⑆⑈])([0-9]{4,6})\s*$",
-        RegexOptions.Multiline | RegexOptions.Compiled);
-
-    // 右上角印刷支票号（通常 4-6 位，与 MICR 互相验证）
-    private static readonly Regex PrintedCheckNumberRegex = new(
-        @"(?:check\s*(?:no\.?|number|#)\s*:?\s*|^|\s)(\d{4,6})(?:\s|$)",
-        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
-
-    // 金额：$1,234.56 或 1234.56 格式
-    private static readonly Regex AmountRegex = new(
-        @"\$\s*([\d,]+\.\d{2})\b|([\d,]{1,10}\.\d{2})\b",
-        RegexOptions.Compiled);
-
-    // 日期：MM/DD/YYYY、MM-DD-YYYY、Month DD YYYY、MM/DD/YY
-    private static readonly Regex DateRegex = new(
-        @"\b(?:(?:0?[1-9]|1[0-2])[/\-](?:0?[1-9]|[12]\d|3[01])[/\-](?:\d{4}|\d{2})|" +
-        @"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    // 扣款凭证：流水号 / Trace / Reference 等标签后的 token
-    private static readonly Regex BankReferenceLabelRegex = new(
-        @"(?i)(?:ref(?:erence)?|trace(?:\s*(?:no\.?|number|#))?|confirmation|confirm(?:ation)?\s*#|trans(?:action)?(?:\s*id|#)?)\s*[:\#]?\s*([A-Z0-9][A-Z0-9\-]{3,48})",
-        RegexOptions.Multiline | RegexOptions.Compiled);
-
-    private static readonly Regex PayToOrderLineRegex = new(
-        @"(?i)pay\s+to\s+the\s+order\s+of\s*[:\s]*([^\r\n]{2,200})",
-        RegexOptions.Multiline | RegexOptions.Compiled);
 
     public AzureOcrService(
         IConfiguration configuration,
         ILogger<AzureOcrService> logger,
         IBlobStorageService blobStorageService,
+        ICheckOcrTemplateResolver templateResolver,
         ICheckOcrParsedSampleCorrector parsedSampleCorrector)
     {
         var endpoint = configuration["Azure:DocumentIntelligence:Endpoint"]
@@ -62,8 +35,10 @@ public class AzureOcrService : IOcrService
             ?? throw new InvalidOperationException("Azure AI Vision ApiKey 未配置");
 
         _client = new ImageAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        _documentClient = new DocumentAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
         _logger = logger;
         _blobStorageService = blobStorageService;
+        _templateResolver = templateResolver;
         _parsedSampleCorrector = parsedSampleCorrector;
     }
 
@@ -71,19 +46,36 @@ public class AzureOcrService : IOcrService
     {
         _logger.LogInformation("Azure Vision OCR 开始处理支票: {ImageUrl}", imageUrl);
 
-        var rawText = await GetReadTextFromImageAsync(imageUrl, cancellationToken);
+        var layout = await GetReadLayoutAsync(imageUrl, cancellationToken);
+        var rawText = layout.FullText;
         _logger.LogInformation("Azure Vision OCR 提取原始文字: {RawText}", rawText);
 
-        var (checkNumber, checkConf)  = ParseCheckNumber(rawText);
-        var (amount, amountConf)      = ParseAmount(rawText);
-        var (date, dateConf)          = ParseDate(rawText);
+        var micrHintForRouting = layout.ConcatLinesInRegion(CheckOcrParsingProfile.Default.MicrPriorRegion, "\n");
+        if (string.IsNullOrWhiteSpace(micrHintForRouting))
+            micrHintForRouting = rawText;
+
+        var routingHint = CheckOcrVisionReadParser.ParseMicrHeuristic(micrHintForRouting).routing;
+        var resolution = await _templateResolver.ResolveAsync(routingHint, rawText, cancellationToken);
+        var profile = resolution.Profile;
+
+        _logger.LogInformation(
+            "Azure Vision OCR 票型解析 TemplateId={TemplateId} TemplateName={TemplateName}",
+            resolution.TemplateId,
+            resolution.TemplateName);
+
+        var (checkNumber, checkConf) = CheckOcrVisionReadParser.ParseCheckNumber(layout, profile);
+        var (amount, amountConf) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
+        var (date, dateConf) = CheckOcrVisionReadParser.ParseDate(layout, profile);
 
         _logger.LogInformation(
             "Azure Vision OCR 解析结果 — 支票号: {CheckNumber}({ConfCN:F2}) | 金额: {Amount}({ConfAmt:F2}) | 日期: {Date}({ConfDate:F2})",
             checkNumber, checkConf, amount, amountConf, date?.ToString("yyyy-MM-dd"), dateConf);
 
-        var (routing, acct, micrLine, rtConf, acConf, micConf) = ParseMicrHeuristic(rawText);
-        var (payToLine, payToConf) = ParsePayToOrderLine(rawText);
+        var micrBlock = layout.ConcatLinesInRegion(profile.MicrPriorRegion, "\n");
+        var micrParseText = string.IsNullOrWhiteSpace(micrBlock) ? rawText : micrBlock;
+        var (routing, acct, micrLine, rtConf, acConf, micConf) =
+            CheckOcrVisionReadParser.ParseMicrHeuristic(micrParseText);
+        var (payToLine, payToConf) = CheckOcrVisionReadParser.ParsePayToOrderLine(rawText);
 
         var conf = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
         {
@@ -118,7 +110,7 @@ public class AzureOcrService : IOcrService
         return await _parsedSampleCorrector.ApplyIfMatchedAsync(dto, cancellationToken);
     }
 
-    private async Task<string> GetReadTextFromImageAsync(string imageUrl, CancellationToken cancellationToken)
+    private async Task<ReadOcrLayout> GetReadLayoutAsync(string imageUrl, CancellationToken cancellationToken)
     {
         using var imageStream = await _blobStorageService.DownloadAsync(imageUrl, cancellationToken);
         using var memoryStream = new MemoryStream();
@@ -131,46 +123,7 @@ public class AzureOcrService : IOcrService
             VisualFeatures.Read,
             cancellationToken: cancellationToken);
 
-        return ExtractRawText(analysisResult.Value);
-    }
-
-    /// <summary>从 OCR 全文尾部启发式提取 MICR：9 位路由 + 较长账号串（置信度保守）。</summary>
-    private static (string? routing, string? account, string? micrLine, double rtConf, double acConf, double micConf)
-        ParseMicrHeuristic(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return (null, null, null, 0.1, 0.1, 0.1);
-
-        var tailStart = Math.Max(0, text.Length - 400);
-        var tail = text[tailStart..];
-        var digitsRuns = System.Text.RegularExpressions.Regex.Matches(tail, @"\d{4,}")
-            .Cast<System.Text.RegularExpressions.Match>()
-            .Select(m => m.Value)
-            .ToList();
-
-        string? routing = null;
-        string? account = null;
-        foreach (var run in digitsRuns.Where(r => r.Length == 9))
-        {
-            routing = run;
-            break;
-        }
-
-        foreach (var run in digitsRuns.OrderByDescending(r => r.Length))
-        {
-            if (run == routing) continue;
-            if (run.Length >= 8)
-            {
-                account = run;
-                break;
-            }
-        }
-
-        var micrLine = string.Join(" ", digitsRuns.TakeLast(5));
-        var rtConf = routing != null ? 0.42 : 0.1;
-        var acConf = account != null ? 0.38 : 0.1;
-        var micConf = micrLine.Length > 0 ? 0.35 : 0.1;
-        return (routing, account, micrLine.Length > 0 ? micrLine : null, rtConf, acConf, micConf);
+        return AzureReadLayoutExtractor.From(analysisResult.Value);
     }
 
     /// <summary>
@@ -179,19 +132,22 @@ public class AzureOcrService : IOcrService
     public async Task<DebitOcrResultDto> ProcessDebitImageAsync(string imageUrl, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Azure Vision OCR 开始处理扣款凭证: {ImageUrl}", imageUrl);
-        var rawText = await GetReadTextFromImageAsync(imageUrl, cancellationToken);
+        var layout = await GetReadLayoutAsync(imageUrl, cancellationToken);
+        var rawText = layout.FullText;
         _logger.LogInformation("Azure Vision OCR 扣款凭证全文: {RawText}", rawText);
 
-        var (checkStr, checkConf) = ParseCheckNumber(rawText);
+        var profile = CheckOcrParsingProfile.Default;
+        var (checkStr, checkConf) = CheckOcrVisionReadParser.ParseCheckNumber(layout, profile);
         var checkNumber = string.IsNullOrWhiteSpace(checkStr) ? null : checkStr.Trim();
 
-        var (amountVal, amountConf) = ParseAmount(rawText);
+        var (amountVal, amountConf) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
         decimal? amount = amountVal > 0m ? amountVal : null;
-        if (amount is null) amountConf = 0.12;
+        if (amount is null)
+            amountConf = 0.12;
 
-        var (dateVal, dateConf) = ParseDate(rawText);
+        var (dateVal, dateConf) = CheckOcrVisionReadParser.ParseDate(layout, profile);
 
-        var (bankRef, refConf) = ParseBankReference(rawText);
+        var (bankRef, refConf) = CheckOcrVisionReadParser.ParseBankReference(rawText);
 
         var scores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
         {
@@ -204,124 +160,181 @@ public class AzureOcrService : IOcrService
         return new DebitOcrResultDto(checkNumber, amount, dateVal, bankRef, scores, RawExtractedText: rawText);
     }
 
-    // ── 文字提取 ──────────────────────────────────────────────────
-
-    private static string ExtractRawText(ImageAnalysisResult result)
+    public async Task<AmountValidationResult> ValidateHandwrittenAmountAsync(
+        string imageUrl,
+        decimal numericAmount,
+        CancellationToken cancellationToken = default)
     {
-        if (result.Read?.Blocks == null) return string.Empty;
-        return string.Join("\n", result.Read.Blocks
-            .SelectMany(b => b.Lines)
-            .Select(l => l.Text));
-    }
+        if (numericAmount <= 0m)
+            return new AmountValidationResult(numericAmount, null, null, null, 0.0, "skipped", "数字金额无效，跳过校验");
 
-    // ── 字段解析 ──────────────────────────────────────────────────
+        using var imageStream = await _blobStorageService.DownloadAsync(imageUrl, cancellationToken);
+        using var memoryStream = new MemoryStream();
+        await imageStream.CopyToAsync(memoryStream, cancellationToken);
+        memoryStream.Position = 0;
 
-    /// <summary>
-    /// 支票号解析策略：
-    /// 1. 优先匹配 MICR 行（底部磁性墨水字符）
-    /// 2. 次选右上角印刷支票号
-    /// 两者一致 → 高置信度 0.92，只找到一个 → 0.72，找不到 → 0.1
-    /// </summary>
-    private static (string checkNumber, double confidence) ParseCheckNumber(string text)
-    {
-        var micrMatch    = MicrCheckNumberRegex.Match(text);
-        var printedMatch = PrintedCheckNumberRegex.Match(text);
+        AnalyzeDocumentOperation operation = await _documentClient.AnalyzeDocumentAsync(
+            WaitUntil.Completed,
+            "prebuilt-check",
+            memoryStream,
+            cancellationToken: cancellationToken);
 
-        var micrNumber    = micrMatch.Success    ? micrMatch.Groups[1].Value.Trim()    : null;
-        var printedNumber = printedMatch.Success ? printedMatch.Groups[1].Value.Trim() : null;
-
-        if (micrNumber != null && printedNumber != null)
+        var result = operation.Value;
+        var (legalRaw, legalAmount, confidence, reason) = ExtractLegalAmount(result);
+        if (legalAmount is null)
         {
-            // 两者一致 → 高置信度
-            if (micrNumber == printedNumber)
-                return (micrNumber, 0.92);
-            // 两者不一致 → 优先 MICR，中等置信度
-            return (micrNumber, 0.55);
+            return new AmountValidationResult(
+                numericAmount,
+                null,
+                legalRaw,
+                null,
+                confidence,
+                "failed",
+                reason ?? "未识别到可解析的手写金额");
         }
 
-        if (micrNumber != null)    return (micrNumber,    0.72);
-        if (printedNumber != null) return (printedNumber, 0.62);
-        return (string.Empty, 0.1);
+        var consistent = Math.Abs(legalAmount.Value - numericAmount) <= 0.01m;
+        return new AmountValidationResult(
+            numericAmount,
+            legalAmount,
+            legalRaw,
+            consistent,
+            confidence,
+            "completed",
+            consistent ? "手写金额与数字金额一致" : "手写金额与数字金额不一致");
     }
 
-    /// <summary>
-    /// 金额解析：找最大金额（通常是支票金额），过滤掉印章/路由等小数字
-    /// </summary>
-    private static (decimal amount, double confidence) ParseAmount(string text)
+    private static (string? rawText, decimal? amount, double confidence, string? reason) ExtractLegalAmount(AnalyzeResult result)
     {
-        var matches = AmountRegex.Matches(text);
-        if (!matches.Any()) return (0m, 0.1);
+        if (result.Documents.Count == 0)
+            return (null, null, 0.0, "Document Intelligence 未返回文档结构");
 
-        var amounts = matches
-            .Select(m =>
+        var doc = result.Documents[0];
+        var candidateKeys = new[]
+        {
+            "AmountInWords", "AmountWritten", "LegalAmount", "Amount", "PayToTheOrderOf"
+        };
+
+        foreach (var key in candidateKeys)
+        {
+            if (!doc.Fields.TryGetValue(key, out var field) || field is null)
+                continue;
+
+            var confidence = Convert.ToDouble(field.Confidence ?? 0f);
+            if (TryGetAmountFromField(field, out var amount, out var raw))
             {
-                var raw = (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)
-                    .Replace(",", "");
-                return decimal.TryParse(raw, out var v) ? v : 0m;
-            })
-            .Where(v => v > 0)
-            .OrderByDescending(v => v)
-            .ToList();
-
-        if (!amounts.Any()) return (0m, 0.1);
-
-        // 找到最大值，置信度取决于候选数量（太多说明识别混乱）
-        var best = amounts[0];
-        var conf = amounts.Count == 1 ? 0.88 : amounts.Count <= 3 ? 0.72 : 0.50;
-        return (best, conf);
-    }
-
-    /// <summary>日期解析：取第一个匹配的日期格式</summary>
-    private static (DateTime? date, double confidence) ParseDate(string text)
-    {
-        var match = DateRegex.Match(text);
-        if (!match.Success) return (null, 0.1);
-
-        if (DateTime.TryParse(match.Value, out var dt))
-            return (dt, 0.82);
-
-        return (null, 0.1);
-    }
-
-    /// <summary>从支票全文启发式提取 Pay to the order of 行，作为公司名称与 Pay to 字段来源。</summary>
-    private static (string? line, double confidence) ParsePayToOrderLine(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return (null, 0.1);
-
-        var m = PayToOrderLineRegex.Match(text);
-        if (!m.Success)
-            return (null, 0.1);
-
-        var raw = m.Groups[1].Value.Trim();
-        if (raw.Length < 2)
-            return (null, 0.1);
-
-        var cut = Regex.Replace(raw, @"\s{2,}", " ");
-        return (cut, 0.48);
-    }
-
-    /// <summary>从银行扣款/ACH 回单文字中启发式提取流水号或 Trace。</summary>
-    private static (string? reference, double confidence) ParseBankReference(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return (null, 0.1);
-
-        var m = BankReferenceLabelRegex.Match(text);
-        if (m.Success)
-            return (m.Groups[1].Value.Trim(), 0.78);
-
-        var longTokens = Regex.Matches(text, @"\b[A-Z0-9]{14,}\b");
-        if (longTokens.Count > 0)
-        {
-            var best = longTokens.Cast<Match>().OrderByDescending(x => x.Length).First().Value;
-            return (best, 0.48);
+                return (raw, amount, confidence, null);
+            }
         }
 
-        var digitRuns = Regex.Matches(text, @"\d{12,22}\b");
-        if (digitRuns.Count > 0)
-            return (digitRuns[digitRuns.Count - 1].Value, 0.42);
+        var line = result.Content?
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(x => x.Contains("dollar", StringComparison.OrdinalIgnoreCase));
 
-        return (null, 0.1);
+        if (!string.IsNullOrWhiteSpace(line) && TryParseAmountFromWords(line, out var parsed))
+            return (line, parsed, 0.35, "从全文 Dollar 行启发式解析");
+
+        return (line, null, 0.1, "未找到可解析的手写金额字段");
+    }
+
+    private static bool TryGetAmountFromField(DocumentField field, out decimal amount, out string raw)
+    {
+        raw = field.Content ?? string.Empty;
+        amount = 0m;
+
+        if (field.FieldType == DocumentFieldType.Currency)
+        {
+            amount = Convert.ToDecimal(field.Value.AsCurrency().Amount);
+            raw = field.Content ?? amount.ToString("N2");
+            return amount > 0;
+        }
+
+        if (field.FieldType == DocumentFieldType.Double)
+        {
+            amount = Convert.ToDecimal(field.Value.AsDouble());
+            raw = field.Content ?? amount.ToString("N2");
+            return amount > 0;
+        }
+
+        if (field.FieldType == DocumentFieldType.String)
+        {
+            var text = field.Value.AsString();
+            raw = text;
+            if (TryParseAmountFromWords(text, out var parsed))
+            {
+                amount = parsed;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static readonly Dictionary<string, int> NumberWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["zero"] = 0, ["one"] = 1, ["two"] = 2, ["three"] = 3, ["four"] = 4,
+        ["five"] = 5, ["six"] = 6, ["seven"] = 7, ["eight"] = 8, ["nine"] = 9,
+        ["ten"] = 10, ["eleven"] = 11, ["twelve"] = 12, ["thirteen"] = 13, ["fourteen"] = 14,
+        ["fifteen"] = 15, ["sixteen"] = 16, ["seventeen"] = 17, ["eighteen"] = 18, ["nineteen"] = 19,
+        ["twenty"] = 20, ["thirty"] = 30, ["forty"] = 40, ["fifty"] = 50,
+        ["sixty"] = 60, ["seventy"] = 70, ["eighty"] = 80, ["ninety"] = 90
+    };
+
+    private static readonly Dictionary<string, int> ScaleWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["hundred"] = 100, ["thousand"] = 1_000, ["million"] = 1_000_000
+    };
+
+    internal static bool TryParseAmountFromWords(string? source, out decimal amount)
+    {
+        amount = 0m;
+        if (string.IsNullOrWhiteSpace(source))
+            return false;
+
+        var text = source.ToLowerInvariant();
+        var fracMatch = Regex.Match(text, @"(\d{1,2})\s*/\s*100");
+        var cents = fracMatch.Success ? int.Parse(fracMatch.Groups[1].Value) : 0;
+
+        text = Regex.Replace(text, @"[^a-z\s\-]", " ");
+        text = Regex.Replace(text, @"\b(and|dollars?|only)\b", " ");
+        text = Regex.Replace(text, @"\s+", " ").Trim();
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var tokens = text.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(t => t.Split('-', StringSplitOptions.RemoveEmptyEntries))
+            .ToArray();
+
+        long total = 0;
+        long current = 0;
+        foreach (var token in tokens)
+        {
+            if (NumberWords.TryGetValue(token, out var n))
+            {
+                current += n;
+                continue;
+            }
+
+            if (!ScaleWords.TryGetValue(token, out var scale))
+                continue;
+
+            if (scale == 100)
+            {
+                if (current == 0)
+                    current = 1;
+                current *= scale;
+            }
+            else
+            {
+                total += current * scale;
+                current = 0;
+            }
+        }
+
+        total += current;
+        if (total <= 0 && cents <= 0)
+            return false;
+        amount = total + cents / 100m;
+        return amount > 0m;
     }
 }

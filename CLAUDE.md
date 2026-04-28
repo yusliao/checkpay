@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-28** - 支票训练纠偏默认改为**即时生效**：`CheckAzureTrainingCorrectionClusterMinSamples` 默认 `1`、`CheckAzureTrainingCorrectionSampleMinAgeMinutes` 默认 `0`（同步 `appsettings.json` / `.env.example` / `docker-compose.yml` / README），以支持“提交入库自动样本后再次上传同票快速命中纠偏”
 - **2026-04-28** - 修复支票上传/复核“提交入库”偶发保存失败：`CheckSubmitOcrTrainingSamplePageHelper` 去重查询改为可翻译的 `EF.Functions.Like`，避免 `Notes.Contains(..., StringComparison.Ordinal)` 在 EF Core 中触发 `could not be translated`
 - **2026-04-28** - 美国财务 `ACH 支票导出`（`/reports/ach-us`）新增收款方筛选：支持二选一 **`CHEUNG KONG HOLDING INC`** / **`MAXWELL TRADING`**，查询与 CSV 导出结果保持一致；页面会记忆并恢复上次选择的收款方（`localStorage`）
 - **2026-04-28** - 自动训练样本质量门控：支票上传/复核「提交入库」自动样本仅在**低置信字段被人工改正**时写入，减少噪声样本；默认纠偏模式 `Ocr:CheckAzureTrainingCorrectionMode` 由 `StrongOnly` 调整为 `Similarity`，并新增“**自动模板簇 + 生效延迟**”门槛（`ClusterMinSamples` / `SampleMinAgeMinutes` / `RequireTemplateMatch`），提升困难样本命中率与稳定性；纠偏日志新增字段级 `before -> after` 统计（命中模式、簇信息、变更字段数/明细），并按周期输出汇总日志 `CheckOcrTrainingCorrectionSummary`（命中率、平均改正字段数、Top 字段）；补充 `CheckSubmitOcrTrainingSamplePageHelperTests`、`CheckOcrParsedSampleCorrectorTests`

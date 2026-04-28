@@ -71,11 +71,12 @@ public static class CheckSubmitOcrTrainingSamplePageHelper
         if (configuration.GetValue("Ocr:Training:AutoSampleDedupByOcrResultId", true))
         {
             var marker = $"ocrResultId={ocrResultId.Value:D}";
+            var markerLike = $"%{marker}%";
             var exists = await db.OcrTrainingSamples.AsNoTracking()
                 .AnyAsync(
                     s => s.DocumentType == "check"
                          && s.Notes != null
-                         && s.Notes.Contains(marker, StringComparison.Ordinal),
+                         && EF.Functions.Like(s.Notes, markerLike),
                     cancellationToken);
             if (exists)
             {

@@ -27,7 +27,17 @@
         <MudItem xs="6" md="3">
             <MudDatePicker @bind-Date="_to" Label="上传结束" />
         </MudItem>
-        <MudItem xs="12" md="6" Class="d-flex align-end flex-wrap" Style="gap:8px">
+        <MudItem xs="12" md="3">
+            <MudSelect T="string"
+                       Value="_selectedPayee"
+                       ValueChanged="OnPayeeChangedAsync"
+                       Label="收款方"
+                       Clearable="true">
+                <MudSelectItem Value="@CheungKongPayee">CHEUNG KONG HOLDING INC</MudSelectItem>
+                <MudSelectItem Value="@MaxwellPayee">MAXWELL TRADING</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="3" Class="d-flex align-end flex-wrap" Style="gap:8px">
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadAsync" Disabled="@_loading">查询</MudButton>
             <MudButton Variant="Variant.Outlined" OnClick="ExportCsvAsync" Disabled="@(!_rows.Any() || _exporting)">导出 CSV（全部）</MudButton>
             <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="ExportFailedDebitAsync" Disabled="@(!_failedRows.Any() || _exporting)">导出扣款未成功</MudButton>
@@ -97,8 +107,35 @@
     private bool _exporting;
     private Guid? _revokingAssociationId;
     private Guid? _revokingAchSuccessId;
+    private string? _selectedPayee;
+    private bool _restoredPayeeFromLocalStorage;
+
+    private const string CheungKongPayee = "CHEUNG KONG HOLDING INC";
+    private const string MaxwellPayee = "MAXWELL TRADING";
+    private const string PayeeStorageKey = "checkpay.achus.selectedPayee";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _restoredPayeeFromLocalStorage) return;
+        _restoredPayeeFromLocalStorage = true;
+
+        try
+        {
+            var saved = await JS.InvokeAsync<string?>("checkPayStorageGet", PayeeStorageKey);
+            if (saved == CheungKongPayee || saved == MaxwellPayee)
+            {
+                _selectedPayee = saved;
+                await LoadAsync();
+                StateHasChanged();
+            }
+        }
+        catch
+        {
+            // 忽略浏览器存储读取异常（例如禁用存储）
+        }
+    }
 
     private async Task LoadAsync()
     {
@@ -107,16 +144,50 @@
         var start = DateTime.SpecifyKind(_from.Value.Date, DateTimeKind.Utc);
         var end = DateTime.SpecifyKind(_to.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Utc);
 
-        _rows = await DbContext.CheckRecords
+        var query = DbContext.CheckRecords
             .AsNoTracking()
             .Include(c => c.Customer)
             .Include(c => c.DebitRecord)
             .Where(c => c.CreatedAt >= start && c.CreatedAt <= end)
+            .AsQueryable();
+
+        if (_selectedPayee == CheungKongPayee)
+        {
+            query = query.Where(c =>
+                c.PayToOrderOf != null &&
+                (EF.Functions.ILike(c.PayToOrderOf, "%CHEUNG KONG HOLDING INC%") ||
+                 EF.Functions.ILike(c.PayToOrderOf, "%ALLIANCE FOOD GROUP%")));
+        }
+        else if (_selectedPayee == MaxwellPayee)
+        {
+            query = query.Where(c =>
+                c.PayToOrderOf != null &&
+                (EF.Functions.ILike(c.PayToOrderOf, "%MAXWELL TRADING%") ||
+                 EF.Functions.ILike(c.PayToOrderOf, "%EXCEL FOOD SERVICES%")));
+        }
+
+        _rows = await query
             .OrderByDescending(c => c.CreatedAt)
             .ToListAsync();
 
         _failedRows = _rows.Where(c => c.SubmittedAt != null && !c.AchDebitSucceeded).ToList();
         _loading = false;
+    }
+
+    private async Task OnPayeeChangedAsync(string? payee)
+    {
+        _selectedPayee = payee;
+
+        try
+        {
+            await JS.InvokeVoidAsync("checkPayStorageSet", PayeeStorageKey, payee);
+        }
+        catch
+        {
+            // 忽略浏览器存储写入异常（例如禁用存储）
+        }
+
+        await LoadAsync();
     }
 
     private async Task MarkDebitSuccess(CheckRecord row)

@@ -39,6 +39,19 @@
             a.click();
             document.body.removeChild(a);
         };
+
+        window.checkPayStorageGet = function (key) {
+            return window.localStorage.getItem(key);
+        };
+
+        window.checkPayStorageSet = function (key, value) {
+            if (value === null || value === undefined || value === '') {
+                window.localStorage.removeItem(key);
+                return;
+            }
+
+            window.localStorage.setItem(key, value);
+        };
     </script>
 </body>
 </html>

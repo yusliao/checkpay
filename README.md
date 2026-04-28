@@ -104,6 +104,7 @@ dotnet run --project src/CheckPay.Web
 2. 左右分屏手动录入
 3. 按支票号自动匹配支票记录
 4. 成功 → 待核查；失败 → 异常列表
+5. `ACH 支票导出`（`/reports/ach-us`）支持按收款方筛选：`CHEUNG KONG HOLDING INC` / `MAXWELL TRADING`
 
 ### 流程三：核查确认（大陆财务）
 1. 待核查列表逐条核对

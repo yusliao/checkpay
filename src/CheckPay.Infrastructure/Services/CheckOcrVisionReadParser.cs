@@ -49,6 +49,61 @@ internal static class CheckOcrVisionReadParser
         @"(?i)pay\s+to\s+the\s+order\s+of\s*[:\s]*([^\r\n]{2,200})",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
+    private static readonly Regex AddressLineRegex = new(
+        @"\b\d{1,6}\s+[A-Z0-9][A-Z0-9\s\.\-#]{3,}\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex NameTokenRegex = new(
+        @"\b[A-Z][A-Za-z'\-]{1,}\b",
+        RegexOptions.Compiled);
+
+    private static readonly HashSet<string> BankNoiseTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "date", "pay", "order", "memo", "check", "routing", "account", "amount", "dollars"
+    };
+
+    private static readonly HashSet<string> AddressStreetTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "st", "street", "ave", "avenue", "rd", "road", "dr", "drive", "blvd", "boulevard",
+        "ln", "lane", "way", "court", "ct", "suite", "ste", "apt", "unit", "p.o.", "po", "box"
+    };
+
+    public static MicrHeuristicParseResult ParseMicrHeuristic(ReadOcrLayout layout, CheckOcrParsingProfile profile)
+    {
+        var regionLines = layout.Lines
+            .Where(line => profile.MicrPriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+            .OrderBy(line => line.NormTop)
+            .ToList();
+        if (regionLines.Count > 0)
+        {
+            var regionText = string.Join("\n", regionLines.Select(line => line.Text));
+            var parsedRegion = ParseMicrHeuristic(regionText);
+            if (parsedRegion.RoutingNumber is { Length: 9 } && parsedRegion.RoutingAbaChecksumValid == true)
+                return parsedRegion with { RoutingSelectionMode = $"{parsedRegion.RoutingSelectionMode}_region" };
+
+            var bottomLineText = string.Join("\n", regionLines.TakeLast(Math.Min(4, regionLines.Count)).Select(line => line.Text));
+            var parsedBottom = ParseMicrHeuristic(bottomLineText);
+            if (parsedBottom.RoutingNumber is { Length: 9 } && parsedBottom.RoutingAbaChecksumValid == true)
+                return parsedBottom with { RoutingSelectionMode = $"{parsedBottom.RoutingSelectionMode}_bottom" };
+        }
+
+        return ParseMicrHeuristic(layout.FullText);
+    }
+
+    public static MicrHeuristicParseResult ParseMicrHeuristicBottomBand(ReadOcrLayout layout, double minNormCenterY = 0.78)
+    {
+        var bottomLines = layout.Lines
+            .Where(line => line.NormCenterY >= minNormCenterY)
+            .OrderBy(line => line.NormTop)
+            .Select(line => line.Text)
+            .ToList();
+        if (bottomLines.Count == 0)
+            return new MicrHeuristicParseResult(null, null, null, 0.1, 0.1, 0.1, null, "bottom_band_empty");
+
+        var parsed = ParseMicrHeuristic(string.Join("\n", bottomLines));
+        return parsed with { RoutingSelectionMode = $"{parsed.RoutingSelectionMode}_bottom_band" };
+    }
+
     /// <summary>支票号：MICR 区 + 印刷区双通道，逻辑与旧版一致，优先使用版式区域裁剪文本。</summary>
     public static (string checkNumber, double confidence) ParseCheckNumber(ReadOcrLayout layout, CheckOcrParsingProfile profile)
     {
@@ -228,6 +283,7 @@ internal static class CheckOcrVisionReadParser
         if (string.IsNullOrWhiteSpace(text))
             return new MicrHeuristicParseResult(null, null, null, 0.1, 0.1, 0.1, null, "empty");
 
+        text = NormalizeMicrLikeText(text);
         var tailStart = Math.Max(0, text.Length - 400);
         var tail = text[tailStart..];
 
@@ -372,6 +428,154 @@ internal static class CheckOcrVisionReadParser
             return (digitRuns[digitRuns.Count - 1].Value, 0.42);
 
         return (null, 0.1);
+    }
+
+    public static (string? bankName, double confidence) ParseBankName(ReadOcrLayout layout, CheckOcrParsingProfile profile)
+    {
+        var candidates = layout.Lines
+            .Where(line => profile.BankNamePriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+            .Select(line => (line.Text, ScoreBankNameCandidate(line.Text, line.NormCenterY)))
+            .Where(x => x.Item2 > 0.3)
+            .OrderByDescending(x => x.Item2)
+            .ToList();
+
+        if (candidates.Count == 0)
+            return (null, 0.1);
+
+        return (NormalizeSpaces(candidates[0].Text), Math.Clamp(candidates[0].Item2, 0.2, 0.9));
+    }
+
+    public static (string? accountHolder, double confidence) ParseAccountHolderName(ReadOcrLayout layout, CheckOcrParsingProfile profile)
+    {
+        var candidates = layout.Lines
+            .Where(line => profile.AccountHolderPriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+            .Select(line => (line.Text, ScoreAccountHolderCandidate(line.Text, line.NormCenterY)))
+            .Where(x => x.Item2 > 0.35)
+            .OrderByDescending(x => x.Item2)
+            .ToList();
+
+        if (candidates.Count == 0)
+            return (null, 0.1);
+
+        return (NormalizeSpaces(candidates[0].Text), Math.Clamp(candidates[0].Item2, 0.2, 0.88));
+    }
+
+    public static (string? accountAddress, double confidence) ParseAccountAddress(ReadOcrLayout layout, CheckOcrParsingProfile profile)
+    {
+        var regionLines = layout.Lines
+            .Where(line => profile.AccountAddressPriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+            .OrderBy(line => line.NormTop)
+            .ToList();
+        if (regionLines.Count == 0)
+            return (null, 0.1);
+
+        var scored = regionLines
+            .Select(line => (line.Text, ScoreAddressCandidate(line.Text)))
+            .Where(x => x.Item2 > 0.38)
+            .OrderByDescending(x => x.Item2)
+            .ToList();
+        if (scored.Count == 0)
+            return (null, 0.1);
+
+        var top = scored[0].Text;
+        var topNorm = regionLines.FirstOrDefault(l => string.Equals(l.Text, top, StringComparison.Ordinal));
+        if (topNorm is null)
+            return (NormalizeSpaces(top), Math.Clamp(scored[0].Item2, 0.2, 0.84));
+
+        var block = regionLines
+            .Where(l => Math.Abs(l.NormCenterY - topNorm.NormCenterY) <= 0.12)
+            .Select(l => l.Text)
+            .Distinct()
+            .Take(3)
+            .ToList();
+        var merged = NormalizeSpaces(string.Join(", ", block));
+        return (merged, Math.Clamp(scored[0].Item2 + (block.Count > 1 ? 0.06 : 0.0), 0.22, 0.88));
+    }
+
+    private static double ScoreBankNameCandidate(string text, double normY)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0.0;
+        var normalized = NormalizeSpaces(text);
+        var lower = normalized.ToLowerInvariant();
+        var score = 0.3;
+        if (lower.Contains("bank", StringComparison.Ordinal))
+            score += 0.42;
+        if (lower.Contains("credit union", StringComparison.Ordinal))
+            score += 0.3;
+        if (lower.Contains("national", StringComparison.Ordinal) || lower.Contains("trust", StringComparison.Ordinal))
+            score += 0.08;
+        if (BankNoiseTokens.Any(lower.Contains))
+            score -= 0.2;
+        if (normalized.Length is >= 6 and <= 48)
+            score += 0.08;
+        if (normY < 0.18)
+            score += 0.06;
+        return score;
+    }
+
+    private static double ScoreAccountHolderCandidate(string text, double normY)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0.0;
+        var normalized = NormalizeSpaces(text);
+        var lower = normalized.ToLowerInvariant();
+        var score = 0.3;
+        if (lower.Contains("pay to the order", StringComparison.Ordinal) || lower.Contains("memo", StringComparison.Ordinal))
+            return 0.0;
+        var tokenCount = NameTokenRegex.Matches(normalized).Count;
+        if (tokenCount >= 2)
+            score += 0.26;
+        if (tokenCount >= 3)
+            score += 0.08;
+        if (AddressLineRegex.IsMatch(normalized))
+            score -= 0.24;
+        if (Regex.IsMatch(normalized, @"\d{3,}"))
+            score -= 0.12;
+        if (normalized.Length is >= 5 and <= 64)
+            score += 0.08;
+        if (normY is > 0.2 and < 0.58)
+            score += 0.06;
+        return score;
+    }
+
+    private static double ScoreAddressCandidate(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0.0;
+        var normalized = NormalizeSpaces(text);
+        var lower = normalized.ToLowerInvariant();
+        var score = 0.26;
+        if (AddressLineRegex.IsMatch(normalized))
+            score += 0.36;
+        if (AddressStreetTokens.Any(token => Regex.IsMatch(lower, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase)))
+            score += 0.2;
+        if (Regex.IsMatch(normalized, @"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b"))
+            score += 0.16;
+        if (lower.Contains("bank", StringComparison.Ordinal) && !Regex.IsMatch(normalized, @"\d"))
+            score -= 0.15;
+        if (normalized.Length is < 8 or > 90)
+            score -= 0.08;
+        return score;
+    }
+
+    private static string NormalizeSpaces(string text) =>
+        Regex.Replace(text.Trim(), @"\s{2,}", " ");
+
+    private static string NormalizeMicrLikeText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        return text
+            .Replace('O', '0')
+            .Replace('o', '0')
+            .Replace('I', '1')
+            .Replace('l', '1')
+            .Replace('S', '5')
+            .Replace('s', '5')
+            .Replace('B', '8')
+            .Replace('|', '1');
     }
 
     private static string TailFallback(string text, int maxChars)

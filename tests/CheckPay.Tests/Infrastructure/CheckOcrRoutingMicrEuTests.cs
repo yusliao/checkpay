@@ -1,4 +1,5 @@
 using CheckPay.Infrastructure.Services;
+using CheckPay.Application.Common.Models;
 
 namespace CheckPay.Tests.Infrastructure;
 
@@ -32,6 +33,44 @@ public class CheckOcrRoutingMicrEuTests
         Assert.Equal("021000021", r.RoutingNumber);
         Assert.Equal("aba_sliding_window", r.RoutingSelectionMode);
         Assert.True(r.RoutingAbaChecksumValid);
+    }
+
+    [Fact]
+    public void ParseMicrHeuristic_NormalizesCommonOcrConfusableChars()
+    {
+        var text = "noise\nO21OO0021 12345678901234 4829\n";
+        var r = CheckOcrVisionReadParser.ParseMicrHeuristic(text);
+        Assert.Equal("021000021", r.RoutingNumber);
+        Assert.True(r.RoutingAbaChecksumValid);
+    }
+
+    [Fact]
+    public void ParseMicrHeuristic_WithLayout_PrefersMicrRegionOverFullTextNoise()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("ref 123456789 noise", 0.22, 0.10, 0.08, 0.12, 0.05, 0.35),
+            new ReadOcrLine("021000021 12345678901234567 4829", 0.52, 0.88, 0.86, 0.90, 0.10, 0.94)
+        };
+        var layout = new ReadOcrLayout("ref 123456789 noise\n021000021 12345678901234567 4829", lines, 1000, 1000);
+        var result = CheckOcrVisionReadParser.ParseMicrHeuristic(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("021000021", result.RoutingNumber);
+        Assert.Contains("region", result.RoutingSelectionMode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseMicrHeuristicBottomBand_PicksRoutingFromBottomArea()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("noise 123456789", 0.2, 0.35, 0.33, 0.37, 0.1, 0.4),
+            new ReadOcrLine("O21OO0021 12345678901234 4829", 0.52, 0.86, 0.84, 0.88, 0.1, 0.95)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+        var result = CheckOcrVisionReadParser.ParseMicrHeuristicBottomBand(layout, 0.8);
+        Assert.Equal("021000021", result.RoutingNumber);
+        Assert.True(result.RoutingAbaChecksumValid);
+        Assert.Contains("bottom_band", result.RoutingSelectionMode, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -24,6 +24,8 @@ public class AzureOcrService : IOcrService
     private readonly ICheckOcrParsedSampleCorrector _parsedSampleCorrector;
     private readonly ILogger<AzureOcrService> _logger;
     private readonly bool _prebuiltCheckEnrichPrimary;
+    private readonly bool _micrBottomBandSecondPassEnabled;
+    private readonly double _micrBottomBandMinNormCenterY;
 
     public AzureOcrService(
         IConfiguration configuration,
@@ -55,6 +57,11 @@ public class AzureOcrService : IOcrService
             configuration["Ocr:PrebuiltCheck:EnrichPrimaryResult"],
             "true",
             StringComparison.OrdinalIgnoreCase);
+        _micrBottomBandSecondPassEnabled = !string.Equals(
+            configuration["Ocr:Micr:BottomBandSecondPassEnabled"],
+            "false",
+            StringComparison.OrdinalIgnoreCase);
+        _micrBottomBandMinNormCenterY = ParseMicrBottomBandThreshold(configuration["Ocr:Micr:BottomBandMinNormCenterY"]);
     }
 
     public async Task<OcrResultDto> ProcessCheckImageAsync(string imageUrl, CancellationToken cancellationToken = default)
@@ -70,12 +77,8 @@ public class AzureOcrService : IOcrService
         var rawText = layout.FullText;
         _logger.LogInformation("Azure Vision OCR 提取原始文字: {RawText}", rawText);
 
-        var micrHintForRouting = layout.ConcatLinesInRegion(CheckOcrParsingProfile.Default.MicrPriorRegion, "\n");
         var micrHintLinesDefault = CountLinesInRegion(layout, CheckOcrParsingProfile.Default.MicrPriorRegion);
-        if (string.IsNullOrWhiteSpace(micrHintForRouting))
-            micrHintForRouting = rawText;
-
-        var routingHint = CheckOcrVisionReadParser.ParseMicrHeuristic(micrHintForRouting).RoutingNumber;
+        var routingHint = CheckOcrVisionReadParser.ParseMicrHeuristic(layout, CheckOcrParsingProfile.Default).RoutingNumber;
         var resolution = await _templateResolver.ResolveAsync(routingHint, rawText, cancellationToken);
         var profile = resolution.Profile;
 
@@ -87,15 +90,36 @@ public class AzureOcrService : IOcrService
         var (checkNumber, checkConf) = CheckOcrVisionReadParser.ParseCheckNumber(layout, profile);
         var (amount, amountConf) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
         var (date, dateConf) = CheckOcrVisionReadParser.ParseDate(layout, profile);
+        var (parsedBankName, parsedBankConf) = CheckOcrVisionReadParser.ParseBankName(layout, profile);
+        var (parsedHolderName, parsedHolderConf) = CheckOcrVisionReadParser.ParseAccountHolderName(layout, profile);
+        var (parsedAddress, parsedAddressConf) = CheckOcrVisionReadParser.ParseAccountAddress(layout, profile);
 
         _logger.LogInformation(
             "Azure Vision OCR 解析结果 — 支票号: {CheckNumber}({ConfCN:F2}) | 金额: {Amount}({ConfAmt:F2}) | 日期: {Date}({ConfDate:F2})",
             checkNumber, checkConf, amount, amountConf, date?.ToString("yyyy-MM-dd"), dateConf);
 
-        var micrBlock = layout.ConcatLinesInRegion(profile.MicrPriorRegion, "\n");
         var micrAppliedLines = CountLinesInRegion(layout, profile.MicrPriorRegion);
-        var micrParseText = string.IsNullOrWhiteSpace(micrBlock) ? rawText : micrBlock;
-        var micr = CheckOcrVisionReadParser.ParseMicrHeuristic(micrParseText);
+        var firstPassMicr = CheckOcrVisionReadParser.ParseMicrHeuristic(layout, profile);
+        var micr = firstPassMicr;
+        var micrSecondPassApplied = false;
+        if (_micrBottomBandSecondPassEnabled
+            && (micr.RoutingNumber is not { Length: 9 } || micr.RoutingAbaChecksumValid != true))
+        {
+            var bottomBandMicr = CheckOcrVisionReadParser.ParseMicrHeuristicBottomBand(layout, _micrBottomBandMinNormCenterY);
+            if (bottomBandMicr.RoutingNumber is { Length: 9 } && bottomBandMicr.RoutingAbaChecksumValid == true)
+            {
+                micr = bottomBandMicr;
+                micrSecondPassApplied = true;
+                _logger.LogInformation(
+                    "MICR 底部条带二次解析命中: Routing {BeforeRouting} -> {AfterRouting}, Mode {BeforeMode} -> {AfterMode}, Account {BeforeAccount} -> {AfterAccount}",
+                    firstPassMicr.RoutingNumber ?? "null",
+                    micr.RoutingNumber ?? "null",
+                    firstPassMicr.RoutingSelectionMode,
+                    micr.RoutingSelectionMode,
+                    firstPassMicr.AccountNumber ?? "null",
+                    micr.AccountNumber ?? "null");
+            }
+        }
         var (payToLine, payToConf) = CheckOcrVisionReadParser.ParsePayToOrderLine(rawText);
 
         var iban = CheckOcrEuInstrumentParser.TryFindValidIban(rawText);
@@ -135,8 +159,12 @@ public class AzureOcrService : IOcrService
         var mergedAcConf = micr.AccountConfidence;
         var mergedPayTo = payToLine;
         var mergedPayToConf = payToConf;
-        string? bankName = null;
-        string? accountHolder = null;
+        string? bankName = parsedBankName;
+        var bankNameConf = parsedBankConf;
+        string? accountHolder = parsedHolderName;
+        var accountHolderConf = parsedHolderConf;
+        string? accountAddress = parsedAddress;
+        var accountAddressConf = parsedAddressConf;
 
         if (_prebuiltCheckEnrichPrimary && prebuiltStatus != "failed")
             MergePrebuiltStructuredFields(
@@ -154,7 +182,11 @@ public class AzureOcrService : IOcrService
                 ref mergedPayTo,
                 ref mergedPayToConf,
                 ref bankName,
-                ref accountHolder);
+                ref bankNameConf,
+                ref accountHolder,
+                ref accountHolderConf,
+                ref accountAddress,
+                ref accountAddressConf);
 
         var diagnostics = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -163,11 +195,23 @@ public class AzureOcrService : IOcrService
             ["micr_hint_default_region_lines"] = micrHintLinesDefault.ToString(),
             ["micr_applied_template_region_lines"] = micrAppliedLines.ToString(),
             ["micr_selection_mode"] = micr.RoutingSelectionMode,
+            ["micr_first_pass_selection_mode"] = firstPassMicr.RoutingSelectionMode,
             ["routing_aba_checksum_ok"] = micr.RoutingAbaChecksumValid?.ToString() ?? "n/a",
-            ["tail_digit_run_count"] = CheckOcrVisionReadParser.CountTailDigitRuns(micrParseText).ToString(),
+            ["routing_aba_checksum_ok_first_pass"] = firstPassMicr.RoutingAbaChecksumValid?.ToString() ?? "n/a",
+            ["routing_number_first_pass"] = firstPassMicr.RoutingNumber ?? string.Empty,
+            ["routing_number_final"] = micr.RoutingNumber ?? string.Empty,
+            ["account_number_first_pass"] = firstPassMicr.AccountNumber ?? string.Empty,
+            ["account_number_final"] = micr.AccountNumber ?? string.Empty,
+            ["tail_digit_run_count"] = CheckOcrVisionReadParser.CountTailDigitRuns(rawText).ToString(),
+            ["micr_bottom_band_second_pass_enabled"] = _micrBottomBandSecondPassEnabled.ToString(),
+            ["micr_bottom_band_second_pass_applied"] = micrSecondPassApplied.ToString(),
+            ["micr_bottom_band_min_norm_center_y"] = _micrBottomBandMinNormCenterY.ToString("F2"),
             ["prebuilt_check_primary"] = prebuiltStatus,
             ["eu_iban_present"] = (iban != null).ToString(),
-            ["eu_bic_present"] = (bic != null).ToString()
+            ["eu_bic_present"] = (bic != null).ToString(),
+            ["bank_name_source"] = bankName is null ? "none" : (diFields.BankName is not null ? "prebuilt_or_merged" : "vision_region"),
+            ["account_holder_source"] = accountHolder is null ? "none" : (diFields.PayerName is not null ? "prebuilt_or_merged" : "vision_region"),
+            ["account_address_source"] = accountAddress is null ? "none" : "vision_region"
         };
         if (resolution.TemplateId.HasValue)
             diagnostics["template_id"] = resolution.TemplateId.Value.ToString("D");
@@ -188,9 +232,9 @@ public class AzureOcrService : IOcrService
             ["Date"] = mergedDateConf,
             ["RoutingNumber"] = mergedRtConf,
             ["AccountNumber"] = mergedAcConf,
-            ["BankName"] = bankName != null ? 0.72 : 0.1,
-            ["AccountHolderName"] = accountHolder != null ? 0.68 : 0.1,
-            ["AccountAddress"] = 0.1,
+            ["BankName"] = bankName != null ? bankNameConf : 0.1,
+            ["AccountHolderName"] = accountHolder != null ? accountHolderConf : 0.1,
+            ["AccountAddress"] = accountAddress != null ? accountAddressConf : 0.1,
             ["AccountType"] = 0.1,
             ["PayToOrderOf"] = mergedPayToConf,
             ["CompanyName"] = mergedPayToConf,
@@ -212,6 +256,7 @@ public class AzureOcrService : IOcrService
             AccountNumber: mergedAcct,
             BankName: bankName,
             AccountHolderName: accountHolder,
+            AccountAddress: accountAddress,
             PayToOrderOf: mergedPayTo,
             CompanyName: mergedPayTo,
             MicrLineRaw: micr.MicrLineRaw,
@@ -231,6 +276,13 @@ public class AzureOcrService : IOcrService
         return layout.Lines.Count(l => region.Contains(l.NormCenterX, l.NormCenterY));
     }
 
+    private static double ParseMicrBottomBandThreshold(string? raw)
+    {
+        if (!double.TryParse(raw, out var v))
+            return 0.78;
+        return Math.Clamp(v, 0.6, 0.95);
+    }
+
     private static void MergePrebuiltStructuredFields(
         PrebuiltCheckStructuredFields di,
         ref string checkNumber,
@@ -246,7 +298,11 @@ public class AzureOcrService : IOcrService
         ref string? payTo,
         ref double payToConf,
         ref string? bankName,
-        ref string? accountHolder)
+        ref double bankNameConf,
+        ref string? accountHolder,
+        ref double accountHolderConf,
+        ref string? accountAddress,
+        ref double accountAddressConf)
     {
         if (di.RoutingNumber is { Length: 9 } dr && AbaRoutingNumberValidator.IsValid(dr))
         {
@@ -278,7 +334,10 @@ public class AzureOcrService : IOcrService
         }
 
         if (!string.IsNullOrWhiteSpace(di.BankName))
+        {
             bankName = di.BankName.Trim();
+            bankNameConf = Math.Clamp(Math.Max(bankNameConf, 0.72), 0.55, 0.9);
+        }
 
         if (!string.IsNullOrWhiteSpace(di.PayTo) && (string.IsNullOrWhiteSpace(payTo) || payToConf < 0.48))
         {
@@ -287,7 +346,16 @@ public class AzureOcrService : IOcrService
         }
 
         if (!string.IsNullOrWhiteSpace(di.PayerName))
+        {
             accountHolder = di.PayerName.Trim();
+            accountHolderConf = Math.Clamp(Math.Max(accountHolderConf, 0.68), 0.52, 0.88);
+        }
+
+        if (!string.IsNullOrWhiteSpace(di.PayerAddress))
+        {
+            accountAddress = di.PayerAddress.Trim();
+            accountAddressConf = Math.Clamp(Math.Max(accountAddressConf, 0.66), 0.5, 0.86);
+        }
 
         if (di.NumberAmount is { } na && na > 0m && di.NumberAmountConfidence >= 0.6
                                          && (amountConf < 0.52 || Math.Abs(amount - na) > 0.02m))

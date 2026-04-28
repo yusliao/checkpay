@@ -33,4 +33,55 @@ public class CheckOcrVisionReadParserTests
         Assert.Equal(3, date.Value.Month);
         Assert.Equal(15, date.Value.Day);
     }
+
+    [Fact]
+    public void ParseBankName_PrefersTopLeftBankCandidate()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Date 03/15/2024", 0.18, 0.10, 0.08, 0.12, 0.05, 0.30),
+            new ReadOcrLine("FIRST NATIONAL BANK", 0.25, 0.12, 0.10, 0.14, 0.05, 0.45),
+            new ReadOcrLine("Pay to the order of JOHN DOE", 0.42, 0.40, 0.36, 0.44, 0.10, 0.70)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (bankName, confidence) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("FIRST NATIONAL BANK", bankName);
+        Assert.True(confidence >= 0.7);
+    }
+
+    [Fact]
+    public void ParseAccountHolderName_AvoidsAddressLikeLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("123 Main Street", 0.20, 0.38, 0.34, 0.42, 0.05, 0.40),
+            new ReadOcrLine("JOHN A DOE", 0.24, 0.44, 0.40, 0.48, 0.05, 0.42),
+            new ReadOcrLine("Memo Payroll", 0.22, 0.52, 0.50, 0.54, 0.05, 0.36)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (holder, confidence) = CheckOcrVisionReadParser.ParseAccountHolderName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("JOHN A DOE", holder);
+        Assert.True(confidence >= 0.6);
+    }
+
+    [Fact]
+    public void ParseAccountAddress_MergesNearbyAddressLines()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("JOHN A DOE", 0.22, 0.44, 0.40, 0.48, 0.05, 0.42),
+            new ReadOcrLine("123 Main Street", 0.24, 0.56, 0.52, 0.60, 0.06, 0.44),
+            new ReadOcrLine("New York NY 10001", 0.26, 0.62, 0.60, 0.64, 0.06, 0.46)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (address, confidence) = CheckOcrVisionReadParser.ParseAccountAddress(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("123 Main Street, New York NY 10001", address);
+        Assert.True(confidence >= 0.6);
+    }
 }

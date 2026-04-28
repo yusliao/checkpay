@@ -30,12 +30,24 @@ public sealed class CheckOcrParsingProfile
     [JsonPropertyName("printedCheckPriorRegion")]
     public NormRegion? PrintedCheckPriorRegion { get; set; }
 
+    [JsonPropertyName("bankNamePriorRegion")]
+    public NormRegion? BankNamePriorRegion { get; set; }
+
+    [JsonPropertyName("accountHolderPriorRegion")]
+    public NormRegion? AccountHolderPriorRegion { get; set; }
+
+    [JsonPropertyName("accountAddressPriorRegion")]
+    public NormRegion? AccountAddressPriorRegion { get; set; }
+
     public static CheckOcrParsingProfile CreateDefault() => new()
     {
         AmountPriorRegion = new NormRegion(0.48, 0.0, 1.0, 0.52),
         MicrPriorRegion = new NormRegion(0.0, 0.72, 1.0, 1.0),
         DatePriorRegion = new NormRegion(0.0, 0.0, 0.55, 0.42),
-        PrintedCheckPriorRegion = new NormRegion(0.52, 0.0, 1.0, 0.42)
+        PrintedCheckPriorRegion = new NormRegion(0.52, 0.0, 1.0, 0.42),
+        BankNamePriorRegion = new NormRegion(0.0, 0.0, 0.62, 0.28),
+        AccountHolderPriorRegion = new NormRegion(0.0, 0.22, 0.76, 0.62),
+        AccountAddressPriorRegion = new NormRegion(0.0, 0.28, 0.80, 0.72)
     };
 
     public static readonly CheckOcrParsingProfile Default = CreateDefault();
@@ -52,7 +64,10 @@ public sealed class CheckOcrParsingProfile
             AmountPriorRegion = partial.AmountPriorRegion ?? d.AmountPriorRegion,
             MicrPriorRegion = partial.MicrPriorRegion ?? d.MicrPriorRegion,
             DatePriorRegion = partial.DatePriorRegion ?? d.DatePriorRegion,
-            PrintedCheckPriorRegion = partial.PrintedCheckPriorRegion ?? d.PrintedCheckPriorRegion
+            PrintedCheckPriorRegion = partial.PrintedCheckPriorRegion ?? d.PrintedCheckPriorRegion,
+            BankNamePriorRegion = partial.BankNamePriorRegion ?? d.BankNamePriorRegion,
+            AccountHolderPriorRegion = partial.AccountHolderPriorRegion ?? d.AccountHolderPriorRegion,
+            AccountAddressPriorRegion = partial.AccountAddressPriorRegion ?? d.AccountAddressPriorRegion
         };
     }
 }

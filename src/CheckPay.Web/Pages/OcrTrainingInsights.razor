@@ -5,6 +5,7 @@
 @using CheckPay.Application.Common.Models
 @using CheckPay.Domain.Entities
 @using Microsoft.EntityFrameworkCore
+@using System.Text.Json
 @inject IApplicationDbContext DbContext
 
 <PageTitle>OCR 训练效果看板 - CheckPay</PageTitle>
@@ -58,6 +59,33 @@ else
             </MudPaper>
         </MudItem>
     </MudGrid>
+
+    <MudPaper Class="pa-4 mb-4">
+        <MudText Typo="Typo.h6" Class="mb-2">MICR 二次通道效果（近窗口）</MudText>
+        <MudGrid>
+            <MudItem xs="12" sm="6" md="3">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">OCR 完成样本</MudText>
+                <MudText Typo="Typo.h6">@_micrOverview.TotalCompleted</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">二次通道命中</MudText>
+                <MudText Typo="Typo.h6">@_micrOverview.SecondPassApplied</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">命中率（全样本）</MudText>
+                <MudText Typo="Typo.h6">@_micrOverview.AppliedRateOnAll.ToString("P1")</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">ABA 修复率（候选样本）</MudText>
+                <MudText Typo="Typo.h6">@_micrOverview.AbaFixRateOnCandidates.ToString("P1")</MudText>
+            </MudItem>
+        </MudGrid>
+        <MudDivider Class="my-2" />
+        <MudText Typo="Typo.body2">
+            首轮 ABA 失败候选：@_micrOverview.FirstPassAbaFailedCandidates，
+            其中被二次通道修复：@_micrOverview.AbaFixedBySecondPass。
+        </MudText>
+    </MudPaper>
 
     <MudAlert Severity="@_healthSeverity" Dense="true" Class="mb-4">
         <MudText Typo="Typo.subtitle2">@_healthTitle</MudText>
@@ -174,6 +202,60 @@ else
             </MudTable>
         }
     </MudPaper>
+
+    <MudPaper Class="pa-4 mt-4">
+        <MudText Typo="Typo.h6" Class="mb-2">MICR 二次通道按天趋势</MudText>
+        @if (_micrDaily.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary">当前窗口暂无 MICR 诊断数据。</MudText>
+        }
+        else
+        {
+            <MudTable Items="_micrDaily" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh>日期</MudTh>
+                    <MudTh>OCR 完成</MudTh>
+                    <MudTh>首轮 ABA 失败</MudTh>
+                    <MudTh>二次通道命中</MudTh>
+                    <MudTh>ABA 修复</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Day.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd>@context.TotalCompleted</MudTd>
+                    <MudTd>@context.FirstPassAbaFailed</MudTd>
+                    <MudTd>@context.SecondPassApplied</MudTd>
+                    <MudTd>@context.AbaFixed</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mt-4">
+        <MudText Typo="Typo.h6" Class="mb-2">MICR 二次通道按 RTN/模板分组（Top 10）</MudText>
+        @if (_micrGroupRows.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary">当前窗口暂无可分组的 MICR 诊断数据。</MudText>
+        }
+        else
+        {
+            <MudTable Items="_micrGroupRows" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh>分组</MudTh>
+                    <MudTh>OCR 完成</MudTh>
+                    <MudTh>首轮 ABA 失败</MudTh>
+                    <MudTh>二次通道命中率</MudTh>
+                    <MudTh>ABA 修复率</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="max-width:260px;word-break:break-all">@context.GroupKey</MudTd>
+                    <MudTd>@context.TotalCompleted</MudTd>
+                    <MudTd>@context.FirstPassAbaFailed</MudTd>
+                    <MudTd>@context.SecondPassAppliedRate.ToString("P1")</MudTd>
+                    <MudTd>@context.AbaFixRate.ToString("P1")</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudPaper>
 }
 
 @code {
@@ -186,6 +268,9 @@ else
     private List<DailyRow> _daily = new();
     private List<WeeklyCompareRow> _weeklyCompareRows = new();
     private List<GroupRow> _groupRows = new();
+    private MicrOverviewRow _micrOverview = new();
+    private List<MicrDailyRow> _micrDaily = new();
+    private List<MicrGroupRow> _micrGroupRows = new();
     private Severity _healthSeverity = Severity.Info;
     private string _healthTitle = "训练效果观察中";
     private string _healthMessage = "数据不足，建议继续积累自动样本后再评估。";
@@ -262,6 +347,7 @@ else
                 .Take(10)
                 .ToList();
             BuildHealthStatus(stats);
+            await BuildMicrOverviewAsync(fromUtc);
         }
         finally
         {
@@ -416,9 +502,126 @@ else
         _healthMessage = $"自动样本占比变化 {autoDelta:P1}，平均改正字段变化 {changedDelta:+0.00;-0.00;0.00}。建议排查自动样本噪声、票型簇阈值与低置信门控策略。";
     }
 
+    private async Task BuildMicrOverviewAsync(DateTime fromUtc)
+    {
+        var rawResults = await DbContext.OcrResults.AsNoTracking()
+            .Where(x => x.CreatedAt >= fromUtc && x.RawResult != null)
+            .Select(x => new { x.CreatedAt, x.RawResult })
+            .ToListAsync();
+
+        var rows = new List<MicrDiagStat>(rawResults.Count);
+        foreach (var item in rawResults)
+        {
+            var diagnostics = TryGetDiagnostics(item.RawResult);
+            if (diagnostics is null)
+                continue;
+
+            var firstPassAbaOk = ParseNullableBool(diagnostics, "routing_aba_checksum_ok_first_pass");
+            var finalAbaOk = ParseNullableBool(diagnostics, "routing_aba_checksum_ok");
+            var secondPassApplied = ParseNullableBool(diagnostics, "micr_bottom_band_second_pass_applied") == true;
+            var firstPassFailed = firstPassAbaOk == false;
+            var abaFixed = firstPassFailed && finalAbaOk == true;
+
+            var groupKey = ResolveMicrGroupKey(diagnostics);
+            rows.Add(new MicrDiagStat(
+                item.CreatedAt.Date,
+                secondPassApplied,
+                firstPassFailed,
+                abaFixed,
+                groupKey));
+        }
+
+        var total = rows.Count;
+        var secondPassAppliedCount = rows.Count(x => x.SecondPassApplied);
+        var firstPassFailedCount = rows.Count(x => x.FirstPassFailedCandidate);
+        var abaFixedCount = rows.Count(x => x.AbaFixed);
+
+        _micrOverview = new MicrOverviewRow
+        {
+            TotalCompleted = total,
+            SecondPassApplied = secondPassAppliedCount,
+            AppliedRateOnAll = total == 0 ? 0 : secondPassAppliedCount / (double)total,
+            FirstPassAbaFailedCandidates = firstPassFailedCount,
+            AbaFixedBySecondPass = abaFixedCount,
+            AbaFixRateOnCandidates = firstPassFailedCount == 0 ? 0 : abaFixedCount / (double)firstPassFailedCount
+        };
+
+        _micrDaily = rows
+            .GroupBy(x => x.Day)
+            .OrderByDescending(g => g.Key)
+            .Select(g => new MicrDailyRow(
+                g.Key,
+                g.Count(),
+                g.Count(x => x.FirstPassFailedCandidate),
+                g.Count(x => x.SecondPassApplied),
+                g.Count(x => x.AbaFixed)))
+            .ToList();
+
+        _micrGroupRows = rows
+            .GroupBy(x => x.GroupKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var totalCompleted = g.Count();
+                var firstPassFailed = g.Count(x => x.FirstPassFailedCandidate);
+                var secondPassAppliedInGroup = g.Count(x => x.SecondPassApplied);
+                var abaFixedInGroup = g.Count(x => x.AbaFixed);
+                return new MicrGroupRow(
+                    g.Key,
+                    totalCompleted,
+                    firstPassFailed,
+                    totalCompleted == 0 ? 0 : secondPassAppliedInGroup / (double)totalCompleted,
+                    firstPassFailed == 0 ? 0 : abaFixedInGroup / (double)firstPassFailed);
+            })
+            .OrderByDescending(x => x.TotalCompleted)
+            .Take(10)
+            .ToList();
+    }
+
+    private static Dictionary<string, string>? TryGetDiagnostics(JsonDocument? rawResult)
+    {
+        if (rawResult is null)
+            return null;
+        if (!rawResult.RootElement.TryGetProperty("Diagnostics", out var diagnosticsElement)
+            || diagnosticsElement.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in diagnosticsElement.EnumerateObject())
+        {
+            map[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                ? property.Value.GetString() ?? string.Empty
+                : property.Value.ToString();
+        }
+
+        return map;
+    }
+
+    private static bool? ParseNullableBool(IReadOnlyDictionary<string, string> diagnostics, string key)
+    {
+        if (!diagnostics.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (bool.TryParse(raw, out var parsed))
+            return parsed;
+        return null;
+    }
+
+    private static string ResolveMicrGroupKey(IReadOnlyDictionary<string, string> diagnostics)
+    {
+        if (diagnostics.TryGetValue("template_id", out var templateId) && !string.IsNullOrWhiteSpace(templateId))
+            return $"模板:{templateId}";
+        if (diagnostics.TryGetValue("routing_number_final", out var routingFinal) && !string.IsNullOrWhiteSpace(routingFinal))
+            return $"RTN:{routingFinal}";
+        if (diagnostics.TryGetValue("routing_number_first_pass", out var routingFirst) && !string.IsNullOrWhiteSpace(routingFirst))
+            return $"RTN:{routingFirst}";
+        return "RTN:未知";
+    }
+
     private sealed record SampleStat(DateTime Day, bool IsAuto, int ChangedFieldCount, List<string> ChangedFields, string GroupKey);
+    private sealed record MicrDiagStat(DateTime Day, bool SecondPassApplied, bool FirstPassFailedCandidate, bool AbaFixed, string GroupKey);
     private sealed record FieldTopRow(string Field, int Count);
     private sealed record DailyRow(DateTime Day, int TotalSamples, int AutoSamples, double AutoRate, double AvgChangedFields);
+    private sealed record MicrDailyRow(DateTime Day, int TotalCompleted, int FirstPassAbaFailed, int SecondPassApplied, int AbaFixed);
+    private sealed record MicrGroupRow(string GroupKey, int TotalCompleted, int FirstPassAbaFailed, double SecondPassAppliedRate, double AbaFixRate);
     private sealed record WeeklyCompareRow(string Metric, string Recent, string Previous, string Delta);
     private sealed record GroupRow(string GroupKey, int TotalSamples, double AutoRate, double AvgChangedFields);
 
@@ -429,5 +632,15 @@ else
         public int ManualSamples { get; set; }
         public double AutoSampleRate { get; set; }
         public double AvgChangedFields { get; set; }
+    }
+
+    private sealed class MicrOverviewRow
+    {
+        public int TotalCompleted { get; set; }
+        public int SecondPassApplied { get; set; }
+        public double AppliedRateOnAll { get; set; }
+        public int FirstPassAbaFailedCandidates { get; set; }
+        public int AbaFixedBySecondPass { get; set; }
+        public double AbaFixRateOnCandidates { get; set; }
     }
 }

@@ -7,7 +7,7 @@
 - **前端**: Blazor Server + MudBlazor
 - **后端**: ASP.NET Core 10 + EF Core 10
 - **数据库**: PostgreSQL 16
-- **OCR**: Azure Vision Read 主识别；可选 `Ocr:PrebuiltCheck:EnrichPrimaryResult=true` 再调 **prebuilt-check.us** 与 Read 融合；金额低于置信度阈值时触发 DI 手写金额校验；配置节沿用 `Azure:DocumentIntelligence`；结果写入 `ocr_results.raw_result`（含 `Diagnostics` 诊断键值），金额校验写入 `amount_validation_*`。支票 **提交入库**（非草稿）可按 `Ocr:Training:AutoSampleOnCheckSubmit` 自动写入训练样本表。排查见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
+- **OCR**: Azure Vision Read 主识别；可选 `Ocr:PrebuiltCheck:EnrichPrimaryResult=true` 再调 **prebuilt-check.us** 与 Read 融合；金额低于置信度阈值时触发 DI 手写金额校验；同时对 `BankName` / `AccountHolderName` / `AccountAddress` 增加版式区域锚点解析（可由票型 profile 覆盖）并融合 prebuilt 字段；`RoutingNumber/MICR` 解析增加“底部区域优先 + OCR易错字符归一化（O/0, I/1 等）”；配置节沿用 `Azure:DocumentIntelligence`；结果写入 `ocr_results.raw_result`（含 `Diagnostics` 诊断键值），金额校验写入 `amount_validation_*`。支票 **提交入库**（非草稿）可按 `Ocr:Training:AutoSampleOnCheckSubmit` 自动写入训练样本表。排查见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
 - **存储**: MinIO（S3 兼容，Docker Compose 默认）
 - **部署**: Docker Compose（推荐，应用 + PostgreSQL + MinIO）
 
@@ -41,7 +41,7 @@ cd checkpay
 docker compose up -d
 ```
 
-在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence** 美国支票模型 **`prebuilt-check.us`**（v4）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**；资源与 SDK 不匹配旧模型名时会出现 **404 ModelNotFound**。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。可选 **`OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT=true`**（对应 `Ocr:PrebuiltCheck:EnrichPrimaryResult`）在每张支票上多一次 DI 调用以提升路由/银行名等结构化字段，详见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)。**`OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT`** / **`OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF`** / **`OCR_TRAINING_AUTO_SAMPLE_DEDUP_BY_OCR_RESULT_ID`** / **`OCR_TRAINING_AUTO_SAMPLE_LOG_VERBOSITY`**（Minimal / Verbose / Off）控制支票入库后自动训练样本；自动样本仅在“低置信字段被人工改正”时写入，减少噪声样本。`OCR_CHECK_AZURE_TRAINING_CORRECTION_MODE` 默认 `Similarity`，默认参数改为“即时生效”：`OCR_CHECK_AZURE_TRAINING_CORRECTION_CLUSTER_MIN_SAMPLES`（簇最小样本数，默认 1）与 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SAMPLE_MIN_AGE_MINUTES`（样本最小年龄，默认 0 分钟）；`OCR_CHECK_AZURE_TRAINING_CORRECTION_REQUIRE_TEMPLATE_MATCH=true` 时仅在同模板/同 RTN 簇内纠偏。可选汇总日志 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_ENABLED=true` 与 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_FLUSH_MINUTES=15`，按周期输出命中率、平均改正字段数与 Top 改正字段。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
+在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence** 美国支票模型 **`prebuilt-check.us`**（v4）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**；资源与 SDK 不匹配旧模型名时会出现 **404 ModelNotFound**。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。可选 **`OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT=true`**（对应 `Ocr:PrebuiltCheck:EnrichPrimaryResult`）在每张支票上多一次 DI 调用以提升路由/银行名等结构化字段；`OCR_MICR_BOTTOM_BAND_SECOND_PASS_ENABLED` / `OCR_MICR_BOTTOM_BAND_MIN_NORM_CENTER_Y` 用于在首轮 ABA 校验失败时启用 MICR 底部条带二次解析。详见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)。**`OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT`** / **`OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF`** / **`OCR_TRAINING_AUTO_SAMPLE_DEDUP_BY_OCR_RESULT_ID`** / **`OCR_TRAINING_AUTO_SAMPLE_LOG_VERBOSITY`**（Minimal / Verbose / Off）控制支票入库后自动训练样本；自动样本仅在“低置信字段被人工改正”时写入，减少噪声样本。`OCR_CHECK_AZURE_TRAINING_CORRECTION_MODE` 默认 `Similarity`，默认参数改为“即时生效”：`OCR_CHECK_AZURE_TRAINING_CORRECTION_CLUSTER_MIN_SAMPLES`（簇最小样本数，默认 1）与 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SAMPLE_MIN_AGE_MINUTES`（样本最小年龄，默认 0 分钟）；`OCR_CHECK_AZURE_TRAINING_CORRECTION_REQUIRE_TEMPLATE_MATCH=true` 时仅在同模板/同 RTN 簇内纠偏。可选汇总日志 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_ENABLED=true` 与 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_FLUSH_MINUTES=15`，按周期输出命中率、平均改正字段数与 Top 改正字段。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
 
 ## 本地开发
 
@@ -118,7 +118,7 @@ dotnet run --project src/CheckPay.Web
 ## OCR 训练统计查看
 
 - 管理员可在「系统管理 → OCR 训练效果看板」查看自动训练效果趋势（`/admin/ocr-training-insights`）。
-- 页面展示最近 N 天：自动样本占比、平均改正字段数、字段改正 Top、按天趋势。
+- 页面展示最近 N 天：自动样本占比、平均改正字段数、字段改正 Top、按天趋势，以及 MICR 底部条带二次通道的触发/命中/ABA 修复统计（含按 RTN/模板分组 Top 视图）。
 - 实时运行日志可在应用日志/Seq 搜索：
   - 单次纠偏：`已应用训练样本纠偏(强匹配)`、`已应用训练样本纠偏(相似度)`
   - 周期汇总：`CheckOcrTrainingCorrectionSummary`

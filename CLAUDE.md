@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-28** - MICR 看板分组增强：`/admin/ocr-training-insights` 新增“MICR 二次通道按 RTN/模板分组（Top 10）”，显示各组 OCR 完成量、首轮 ABA 失败量、二次通道命中率与 ABA 修复率，优先按 `template_id` 分组，缺失时回退 `routing_number_final/first_pass`
+- **2026-04-28** - 管理端看板增强：`/admin/ocr-training-insights` 新增 MICR 二次通道统计（OCR 完成样本、二次命中率、ABA 修复率）与按天趋势，数据来自 `ocr_results.raw_result.Diagnostics`（`micr_bottom_band_second_pass_applied`、`routing_aba_checksum_ok_first_pass`、`routing_aba_checksum_ok`）
+- **2026-04-28** - MICR 可观测性增强：`AzureOcrService` 在底部条带二次解析命中时输出结构化日志（首轮→最终路由/账号/模式），并在 `Diagnostics` 增加 `routing_number_first_pass/final`、`account_number_first_pass/final`、`routing_aba_checksum_ok_first_pass` 等键，便于按命中样本评估策略收益
+- **2026-04-28** - MICR 二次通道上线：`Ocr:Micr:BottomBandSecondPassEnabled` / `BottomBandMinNormCenterY` 控制首轮 ABA 失败后的底部条带二次解析；`CheckOcrVisionReadParser.ParseMicrHeuristicBottomBand` 仅使用底部行并复用归一化+ABA 规则；`AzureOcrService` 诊断新增 `micr_bottom_band_second_pass_*` 键
+- **2026-04-28** - MICR 解析增强：`CheckOcrVisionReadParser` 新增基于 `ReadOcrLayout + profile` 的 MICR 区域优先解析；增加 OCR 易错字符归一化（`O/0`、`I/1`、`S/5`、`B/8`）后再做 ABA/账号启发式；`AzureOcrService` 路由模板提示与主解析改用该路径，降低全图噪声对 Routing Number 的干扰
+- **2026-04-28** - 支票 OCR 非金额字段增强：`CheckOcrParsingProfile` 新增 `bankNamePriorRegion` / `accountHolderPriorRegion` / `accountAddressPriorRegion`（支持模板覆盖）；`CheckOcrVisionReadParser` 新增 `BankName`/`AccountHolderName`/`AccountAddress` 区域候选评分解析；`AzureOcrService` 将上述字段与 `prebuilt-check.us`（含 `PayerAddress`）融合并输出对应置信度与来源诊断
 - **2026-04-28** - 支票训练纠偏默认改为**即时生效**：`CheckAzureTrainingCorrectionClusterMinSamples` 默认 `1`、`CheckAzureTrainingCorrectionSampleMinAgeMinutes` 默认 `0`（同步 `appsettings.json` / `.env.example` / `docker-compose.yml` / README），以支持“提交入库自动样本后再次上传同票快速命中纠偏”
 - **2026-04-28** - 修复支票上传/复核“提交入库”偶发保存失败：`CheckSubmitOcrTrainingSamplePageHelper` 去重查询改为可翻译的 `EF.Functions.Like`，避免 `Notes.Contains(..., StringComparison.Ordinal)` 在 EF Core 中触发 `could not be translated`
 - **2026-04-28** - 美国财务 `ACH 支票导出`（`/reports/ach-us`）新增收款方筛选：支持二选一 **`CHEUNG KONG HOLDING INC`** / **`MAXWELL TRADING`**，查询与 CSV 导出结果保持一致；页面会记忆并恢复上次选择的收款方（`localStorage`）

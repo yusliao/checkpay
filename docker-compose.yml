@@ -70,6 +70,8 @@ services:
       Ocr__AmountValidation__TriggerConfidenceThreshold: ${OCR_AMOUNT_VALIDATION_TRIGGER_CONFIDENCE_THRESHOLD:-0.85}
       Ocr__AmountValidation__FailOpen: ${OCR_AMOUNT_VALIDATION_FAIL_OPEN:-true}
       Ocr__PrebuiltCheck__EnrichPrimaryResult: ${OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT:-false}
+      Ocr__Micr__BottomBandSecondPassEnabled: ${OCR_MICR_BOTTOM_BAND_SECOND_PASS_ENABLED:-true}
+      Ocr__Micr__BottomBandMinNormCenterY: ${OCR_MICR_BOTTOM_BAND_MIN_NORM_CENTER_Y:-0.78}
       Ocr__Training__AutoSampleOnCheckSubmit: ${OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT:-true}
       Ocr__Training__AutoSampleRequireDiff: ${OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF:-true}
       Ocr__Training__AutoSampleDedupByOcrResultId: ${OCR_TRAINING_AUTO_SAMPLE_DEDUP_BY_OCR_RESULT_ID:-true}

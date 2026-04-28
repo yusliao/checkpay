@@ -20,6 +20,7 @@ internal static class PrebuiltCheckStructuredExtractor
         f.BankName = GetPlainString(doc, "BankName");
         f.PayTo = GetPlainString(doc, "PayTo");
         f.PayerName = GetPlainString(doc, "PayerName");
+        f.PayerAddress = GetPlainString(doc, "PayerAddress");
         f.NumberAmount = GetCurrencyOrNumber(doc, "NumberAmount");
         f.NumberAmountConfidence = GetFieldConfidence(doc, "NumberAmount");
         f.CheckDate = GetDateField(doc, "CheckDate");
@@ -123,6 +124,7 @@ internal sealed class PrebuiltCheckStructuredFields
     public string? BankName { get; set; }
     public string? PayTo { get; set; }
     public string? PayerName { get; set; }
+    public string? PayerAddress { get; set; }
     public decimal? NumberAmount { get; set; }
     public double NumberAmountConfidence { get; set; }
     public DateTime? CheckDate { get; set; }

@@ -2,6 +2,8 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-28** - 自动训练样本质量门控：支票上传/复核「提交入库」自动样本仅在**低置信字段被人工改正**时写入，减少噪声样本；默认纠偏模式 `Ocr:CheckAzureTrainingCorrectionMode` 由 `StrongOnly` 调整为 `Similarity`，并新增“**自动模板簇 + 生效延迟**”门槛（`ClusterMinSamples` / `SampleMinAgeMinutes` / `RequireTemplateMatch`），提升困难样本命中率与稳定性；纠偏日志新增字段级 `before -> after` 统计（命中模式、簇信息、变更字段数/明细），并按周期输出汇总日志 `CheckOcrTrainingCorrectionSummary`（命中率、平均改正字段数、Top 字段）；补充 `CheckSubmitOcrTrainingSamplePageHelperTests`、`CheckOcrParsedSampleCorrectorTests`
+- **2026-04-28** - 新增管理员页面 `/admin/ocr-training-insights`（系统管理 → OCR 训练效果看板），按窗口展示自动样本占比、平均改正字段数、字段改正 Top、按天趋势；并在 README 说明日志关键字与页面入口
 - **2026-04-27** - 支票自动训练样本增强：`Notes` 含 `ocrResultId`/`checkRecordId`；**去重**（`Ocr:Training:AutoSampleDedupByOcrResultId`）；**票型**写入 `OcrCheckTemplateId`（`ICheckOcrTemplateResolver`）；**日志** `Ocr:Training:AutoSampleLogVerbosity`（Minimal/Verbose/Off）；差异比较时 **MicrFieldOrderNote** 表单未填则按 OCR 值对齐，减少伪差异；集成测试 `CheckSubmitOcrTrainingSamplePageHelperTests`
 - **2026-04-27** - 支票上传/复核 **仅「提交入库」** 成功后可选自动写入 `ocr_training_samples`（`Notes` 以 `auto:check-final-submit` 开头；`OcrRawResponse` 与标注页一致的复制面板格式）；草稿保存不写；配置 **`Ocr:Training:AutoSampleOnCheckSubmit`** / **`Ocr:Training:AutoSampleRequireDiff`**；Compose / `.env.example` 增加 `OCR_TRAINING_*`；`CheckAchExtensionData.EqualsForTraining` 供纠偏与样本差异共用
 - **2026-04-27** - 支票 OCR 策略增强：MICR 启发式增加 **ABA 路由校验位**、底部三连数字行、尾部滑动窗；`OcrResultDto` 增加 **`Diagnostics`**（及 `Iban`/`Bic` 欧洲提示字段）；日志输出 `CheckOcrDiagnostics`；可选 **`Ocr:PrebuiltCheck:EnrichPrimaryResult`** 在同图再调 **prebuilt-check.us** 与 Vision Read 融合；文档 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)；Compose / `.env.example` 增加 `OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT`

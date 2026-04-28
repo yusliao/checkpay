@@ -10,7 +10,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d checkpay"]
       interval: 10s
@@ -77,9 +77,14 @@ services:
       Ocr__CheckAzureTrainingCorrectionEnabled: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_ENABLED:-true}
       Ocr__CheckAzureTrainingCorrectionMaxScan: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MAX_SCAN:-40}
       Ocr__CheckAzureTrainingCorrectionPoolTake: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_POOL_TAKE:-80}
-      Ocr__CheckAzureTrainingCorrectionMode: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MODE:-StrongOnly}
+      Ocr__CheckAzureTrainingCorrectionMode: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MODE:-Similarity}
       Ocr__CheckAzureTrainingCorrectionMinSimilarity: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_MIN_SIMILARITY:-0.80}
       Ocr__CheckAzureTrainingCorrectionSimilarityMaxFieldConfidence: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_SIMILARITY_MAX_FIELD_CONFIDENCE:-0.62}
+      Ocr__CheckAzureTrainingCorrectionClusterMinSamples: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_CLUSTER_MIN_SAMPLES:-3}
+      Ocr__CheckAzureTrainingCorrectionSampleMinAgeMinutes: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_SAMPLE_MIN_AGE_MINUTES:-30}
+      Ocr__CheckAzureTrainingCorrectionRequireTemplateMatch: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_REQUIRE_TEMPLATE_MATCH:-true}
+      Ocr__CheckAzureTrainingCorrectionSummaryEnabled: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_ENABLED:-true}
+      Ocr__CheckAzureTrainingCorrectionSummaryFlushMinutes: ${OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_FLUSH_MINUTES:-15}
 
       # Azure：Vision Read（主 OCR）+ 可选 Document Intelligence（手写金额校验，与 Vision 可非同一张 Key）
       Azure__DocumentIntelligence__Endpoint: ${AZURE_VISION_ENDPOINT:-}

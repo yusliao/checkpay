@@ -1,0 +1,433 @@
+@page "/admin/ocr-training-insights"
+@attribute [Authorize(Roles = "Admin")]
+@using CheckPay.Application.Common
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Application.Common.Models
+@using CheckPay.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+
+<PageTitle>OCR 训练效果看板 - CheckPay</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">OCR 训练效果看板</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+    统计来源：<code>ocr_training_samples</code> 与自动样本备注（<code>auto:check-final-submit</code>）。用于观察自动训练是否稳定提升识别。
+</MudText>
+
+<MudPaper Class="pa-3 mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudSelect T="int" Label="统计窗口（天）" Variant="Variant.Outlined" Dense="true" @bind-Value="_windowDays" Style="max-width:220px">
+            <MudSelectItem T="int" Value="7">最近 7 天</MudSelectItem>
+            <MudSelectItem T="int" Value="14">最近 14 天</MudSelectItem>
+            <MudSelectItem T="int" Value="30">最近 30 天</MudSelectItem>
+            <MudSelectItem T="int" Value="60">最近 60 天</MudSelectItem>
+        </MudSelect>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadAsync">刷新</MudButton>
+    </MudStack>
+</MudPaper>
+
+@if (_loading)
+{
+    <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+}
+else
+{
+    <MudGrid Class="mb-4">
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">样本总数</MudText>
+                <MudText Typo="Typo.h5">@_overview.TotalSamples</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">自动样本数</MudText>
+                <MudText Typo="Typo.h5">@_overview.AutoSamples</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">自动样本占比</MudText>
+                <MudText Typo="Typo.h5">@_overview.AutoSampleRate.ToString("P1")</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">平均改正字段数</MudText>
+                <MudText Typo="Typo.h5">@_overview.AvgChangedFields.ToString("F2")</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudAlert Severity="@_healthSeverity" Dense="true" Class="mb-4">
+        <MudText Typo="Typo.subtitle2">@_healthTitle</MudText>
+        <MudText Typo="Typo.body2">@_healthMessage</MudText>
+    </MudAlert>
+
+    <MudGrid Class="mb-4">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-2">近 7 天对照（与前 7 天）</MudText>
+                <MudTable Items="_weeklyCompareRows" Dense="true" Hover="true">
+                    <HeaderContent>
+                        <MudTh>指标</MudTh>
+                        <MudTh>近 7 天</MudTh>
+                        <MudTh>前 7 天</MudTh>
+                        <MudTh>变化</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.Metric</MudTd>
+                        <MudTd>@context.Recent</MudTd>
+                        <MudTd>@context.Previous</MudTd>
+                        <MudTd>@context.Delta</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-2">按 RTN / 模板分组（Top 10）</MudText>
+                @if (_groupRows.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">当前窗口暂无分组数据。</MudText>
+                }
+                else
+                {
+                    <MudTable Items="_groupRows" Dense="true" Hover="true">
+                        <HeaderContent>
+                            <MudTh>分组</MudTh>
+                            <MudTh>样本数</MudTh>
+                            <MudTh>自动占比</MudTh>
+                            <MudTh>平均改正字段数</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd Style="max-width:260px;word-break:break-all">@context.GroupKey</MudTd>
+                            <MudTd>@context.TotalSamples</MudTd>
+                            <MudTd>@context.AutoRate.ToString("P1")</MudTd>
+                            <MudTd>@context.AvgChangedFields.ToString("F2")</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudGrid>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 mb-4">
+                <MudText Typo="Typo.h6" Class="mb-2">字段改正 Top</MudText>
+                @if (_fieldTop.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">当前窗口暂无改正字段数据。</MudText>
+                }
+                else
+                {
+                    <MudTable Items="_fieldTop" Dense="true" Hover="true">
+                        <HeaderContent>
+                            <MudTh>字段</MudTh>
+                            <MudTh>改正次数</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.Field</MudTd>
+                            <MudTd>@context.Count</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 mb-4">
+                <MudText Typo="Typo.h6" Class="mb-2">样本来源分布</MudText>
+                <MudText Typo="Typo.body2">自动样本：@_overview.AutoSamples</MudText>
+                <MudText Typo="Typo.body2">人工样本：@_overview.ManualSamples</MudText>
+                <MudDivider Class="my-2" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    提示：若你计划完全取消人工标注，可重点观察“自动样本占比”持续提升且“平均改正字段数”稳定。
+                </MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Class="pa-4">
+        <MudText Typo="Typo.h6" Class="mb-2">按天趋势</MudText>
+        @if (_daily.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary">当前窗口暂无数据。</MudText>
+        }
+        else
+        {
+            <MudTable Items="_daily" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh>日期</MudTh>
+                    <MudTh>总样本</MudTh>
+                    <MudTh>自动样本</MudTh>
+                    <MudTh>自动占比</MudTh>
+                    <MudTh>平均改正字段数</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Day.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd>@context.TotalSamples</MudTd>
+                    <MudTd>@context.AutoSamples</MudTd>
+                    <MudTd>@context.AutoRate.ToString("P1")</MudTd>
+                    <MudTd>@context.AvgChangedFields.ToString("F2")</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudPaper>
+}
+
+@code {
+    private const string AutoPrefix = "auto:check-final-submit";
+
+    private bool _loading;
+    private int _windowDays = 14;
+    private OverviewRow _overview = new();
+    private List<FieldTopRow> _fieldTop = new();
+    private List<DailyRow> _daily = new();
+    private List<WeeklyCompareRow> _weeklyCompareRows = new();
+    private List<GroupRow> _groupRows = new();
+    private Severity _healthSeverity = Severity.Info;
+    private string _healthTitle = "训练效果观察中";
+    private string _healthMessage = "数据不足，建议继续积累自动样本后再评估。";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var fromUtc = DateTime.UtcNow.Date.AddDays(-_windowDays + 1);
+            var samples = await DbContext.OcrTrainingSamples.AsNoTracking()
+                .Where(s => s.DocumentType == "check" && s.CreatedAt >= fromUtc)
+                .OrderBy(s => s.CreatedAt)
+                .ToListAsync();
+
+            var stats = samples.Select(ToSampleStat).ToList();
+            var total = stats.Count;
+            var auto = stats.Count(s => s.IsAuto);
+            var manual = total - auto;
+            var avgChanged = total == 0 ? 0.0 : stats.Average(s => s.ChangedFieldCount);
+
+            _overview = new OverviewRow
+            {
+                TotalSamples = total,
+                AutoSamples = auto,
+                ManualSamples = manual,
+                AutoSampleRate = total == 0 ? 0 : auto / (double)total,
+                AvgChangedFields = avgChanged
+            };
+
+            _fieldTop = stats
+                .SelectMany(s => s.ChangedFields)
+                .GroupBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new FieldTopRow(g.Key, g.Count()))
+                .OrderByDescending(x => x.Count)
+                .Take(12)
+                .ToList();
+
+            _daily = stats
+                .GroupBy(s => s.Day)
+                .OrderByDescending(g => g.Key)
+                .Select(g =>
+                {
+                    var dayTotal = g.Count();
+                    var dayAuto = g.Count(x => x.IsAuto);
+                    return new DailyRow(
+                        g.Key,
+                        dayTotal,
+                        dayAuto,
+                        dayTotal == 0 ? 0 : dayAuto / (double)dayTotal,
+                        dayTotal == 0 ? 0 : g.Average(x => x.ChangedFieldCount));
+                })
+                .ToList();
+
+            BuildWeeklyComparison(stats);
+            _groupRows = stats
+                .GroupBy(s => s.GroupKey, StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    var count = g.Count();
+                    var auto = g.Count(x => x.IsAuto);
+                    return new GroupRow(
+                        g.Key,
+                        count,
+                        count == 0 ? 0 : auto / (double)count,
+                        count == 0 ? 0 : g.Average(x => x.ChangedFieldCount));
+                })
+                .OrderByDescending(x => x.TotalSamples)
+                .Take(10)
+                .ToList();
+            BuildHealthStatus(stats);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static SampleStat ToSampleStat(OcrTrainingSample sample)
+    {
+        var ocr = CheckAchExtensionData.Deserialize(sample.OcrAchExtensionJson);
+        var correct = CheckAchExtensionData.Deserialize(sample.CorrectAchExtensionJson);
+        var fields = new List<string>();
+
+        Track("CheckNumber", sample.OcrCheckNumber, sample.CorrectCheckNumber);
+        if (sample.OcrAmount != sample.CorrectAmount)
+            fields.Add("Amount");
+        if (sample.OcrDate?.Date != sample.CorrectDate?.Date)
+            fields.Add("Date");
+        Track("RoutingNumber", ocr?.RoutingNumber, correct?.RoutingNumber);
+        Track("AccountNumber", ocr?.AccountNumber, correct?.AccountNumber);
+        Track("BankName", ocr?.BankName, correct?.BankName);
+        Track("AccountHolderName", ocr?.AccountHolderName, correct?.AccountHolderName);
+        Track("AccountAddress", ocr?.AccountAddress, correct?.AccountAddress);
+        Track("AccountType", ocr?.AccountType, correct?.AccountType);
+        Track("PayToOrderOf", ocr?.PayToOrderOf, correct?.PayToOrderOf);
+        Track("ForMemo", ocr?.ForMemo, correct?.ForMemo);
+        Track("MicrLineRaw", ocr?.MicrLineRaw, correct?.MicrLineRaw);
+        Track("CheckNumberMicr", ocr?.CheckNumberMicr, correct?.CheckNumberMicr);
+        Track("MicrFieldOrderNote", ocr?.MicrFieldOrderNote, correct?.MicrFieldOrderNote);
+        Track("CompanyName", ocr?.CompanyName, correct?.CompanyName);
+
+        var groupKey = sample.OcrCheckTemplateId.HasValue
+            ? $"模板:{sample.OcrCheckTemplateId.Value:D}"
+            : BuildRtnGroupKey(ocr, correct);
+
+        return new SampleStat(
+            sample.CreatedAt.Date,
+            sample.Notes?.StartsWith(AutoPrefix, StringComparison.OrdinalIgnoreCase) == true,
+            fields.Count,
+            fields,
+            groupKey);
+
+        void Track(string field, string? a, string? b)
+        {
+            var x = string.IsNullOrWhiteSpace(a) ? string.Empty : a.Trim();
+            var y = string.IsNullOrWhiteSpace(b) ? string.Empty : b.Trim();
+            if (!string.Equals(x, y, StringComparison.OrdinalIgnoreCase))
+                fields.Add(field);
+        }
+    }
+
+    private static string BuildRtnGroupKey(CheckAchExtensionData? ocr, CheckAchExtensionData? correct)
+    {
+        var rtn = FirstNotEmpty(correct?.RoutingNumber, ocr?.RoutingNumber);
+        return string.IsNullOrWhiteSpace(rtn) ? "RTN:未知" : $"RTN:{rtn.Trim()}";
+    }
+
+    private static string? FirstNotEmpty(params string?[] values)
+        => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+    private void BuildWeeklyComparison(List<SampleStat> stats)
+    {
+        var today = DateTime.UtcNow.Date;
+        var recentFrom = today.AddDays(-6);
+        var prevFrom = today.AddDays(-13);
+        var prevTo = today.AddDays(-7);
+
+        var recent = stats.Where(x => x.Day >= recentFrom && x.Day <= today).ToList();
+        var previous = stats.Where(x => x.Day >= prevFrom && x.Day <= prevTo).ToList();
+
+        var rAutoRate = CalcAutoRate(recent);
+        var pAutoRate = CalcAutoRate(previous);
+        var rAvgChanged = CalcAvgChanged(recent);
+        var pAvgChanged = CalcAvgChanged(previous);
+
+        _weeklyCompareRows = new List<WeeklyCompareRow>
+        {
+            new("样本总数", recent.Count.ToString(), previous.Count.ToString(), DeltaInt(recent.Count, previous.Count)),
+            new("自动样本占比", rAutoRate.ToString("P1"), pAutoRate.ToString("P1"), DeltaPercent(rAutoRate, pAutoRate)),
+            new("平均改正字段数", rAvgChanged.ToString("F2"), pAvgChanged.ToString("F2"), DeltaDouble(rAvgChanged, pAvgChanged))
+        };
+    }
+
+    private static double CalcAutoRate(List<SampleStat> rows)
+        => rows.Count == 0 ? 0 : rows.Count(x => x.IsAuto) / (double)rows.Count;
+
+    private static double CalcAvgChanged(List<SampleStat> rows)
+        => rows.Count == 0 ? 0 : rows.Average(x => x.ChangedFieldCount);
+
+    private static string DeltaInt(int recent, int previous)
+    {
+        var d = recent - previous;
+        return d == 0 ? "0" : d > 0 ? $"+{d}" : d.ToString();
+    }
+
+    private static string DeltaDouble(double recent, double previous)
+    {
+        var d = recent - previous;
+        return d == 0 ? "0.00" : d > 0 ? $"+{d:F2}" : d.ToString("F2");
+    }
+
+    private static string DeltaPercent(double recent, double previous)
+    {
+        var d = recent - previous;
+        return d == 0 ? "0.0%" : d > 0 ? $"+{d:P1}" : d.ToString("P1");
+    }
+
+    private void BuildHealthStatus(List<SampleStat> stats)
+    {
+        var today = DateTime.UtcNow.Date;
+        var recentFrom = today.AddDays(-6);
+        var prevFrom = today.AddDays(-13);
+        var prevTo = today.AddDays(-7);
+
+        var recent = stats.Where(x => x.Day >= recentFrom && x.Day <= today).ToList();
+        var previous = stats.Where(x => x.Day >= prevFrom && x.Day <= prevTo).ToList();
+
+        if (recent.Count < 8 || previous.Count < 8)
+        {
+            _healthSeverity = Severity.Info;
+            _healthTitle = "训练效果观察中（样本不足）";
+            _healthMessage = $"近7天样本 {recent.Count}，前7天样本 {previous.Count}。建议每周至少 8~10 条样本后再判断趋势。";
+            return;
+        }
+
+        var recentAutoRate = CalcAutoRate(recent);
+        var prevAutoRate = CalcAutoRate(previous);
+        var recentAvgChanged = CalcAvgChanged(recent);
+        var prevAvgChanged = CalcAvgChanged(previous);
+
+        var autoDelta = recentAutoRate - prevAutoRate;
+        var changedDelta = recentAvgChanged - prevAvgChanged;
+
+        if (autoDelta >= 0.05 && changedDelta >= -0.10)
+        {
+            _healthSeverity = Severity.Success;
+            _healthTitle = "训练效果健康（绿色）";
+            _healthMessage = $"自动样本占比上升 {autoDelta:P1}，平均改正字段变化 {changedDelta:+0.00;-0.00;0.00}。当前自动训练闭环处于正向趋势。";
+            return;
+        }
+
+        if (autoDelta >= 0 && changedDelta > -0.30)
+        {
+            _healthSeverity = Severity.Warning;
+            _healthTitle = "训练效果需观察（黄色）";
+            _healthMessage = $"自动样本占比变化 {autoDelta:P1}，平均改正字段变化 {changedDelta:+0.00;-0.00;0.00}。建议继续关注 RTN/模板分组中低表现票型。";
+            return;
+        }
+
+        _healthSeverity = Severity.Error;
+        _healthTitle = "训练效果风险（红色）";
+        _healthMessage = $"自动样本占比变化 {autoDelta:P1}，平均改正字段变化 {changedDelta:+0.00;-0.00;0.00}。建议排查自动样本噪声、票型簇阈值与低置信门控策略。";
+    }
+
+    private sealed record SampleStat(DateTime Day, bool IsAuto, int ChangedFieldCount, List<string> ChangedFields, string GroupKey);
+    private sealed record FieldTopRow(string Field, int Count);
+    private sealed record DailyRow(DateTime Day, int TotalSamples, int AutoSamples, double AutoRate, double AvgChangedFields);
+    private sealed record WeeklyCompareRow(string Metric, string Recent, string Previous, string Delta);
+    private sealed record GroupRow(string GroupKey, int TotalSamples, double AutoRate, double AvgChangedFields);
+
+    private sealed class OverviewRow
+    {
+        public int TotalSamples { get; set; }
+        public int AutoSamples { get; set; }
+        public int ManualSamples { get; set; }
+        public double AutoSampleRate { get; set; }
+        public double AvgChangedFields { get; set; }
+    }
+}

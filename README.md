@@ -41,7 +41,7 @@ cd checkpay
 docker compose up -d
 ```
 
-在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence** 美国支票模型 **`prebuilt-check.us`**（v4）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**；资源与 SDK 不匹配旧模型名时会出现 **404 ModelNotFound**。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。可选 **`OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT=true`**（对应 `Ocr:PrebuiltCheck:EnrichPrimaryResult`）在每张支票上多一次 DI 调用以提升路由/银行名等结构化字段，详见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)。**`OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT`** / **`OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF`** / **`OCR_TRAINING_AUTO_SAMPLE_DEDUP_BY_OCR_RESULT_ID`** / **`OCR_TRAINING_AUTO_SAMPLE_LOG_VERBOSITY`**（Minimal / Verbose / Off）控制支票入库后自动训练样本、无差异是否跳过、按 OCR 行去重与日志详细度。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
+在 `.env` 中配置 **`AZURE_VISION_ENDPOINT`** 与 **`AZURE_VISION_API_KEY`**（见 [.env.example](.env.example)），否则支票 OCR 任务会失败。手写金额二次校验使用 **Document Intelligence** 美国支票模型 **`prebuilt-check.us`**（v4）；若 Vision 与 DI 不在同一 Azure 资源，需另填 **`AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`** / **`AZURE_DOCUMENT_INTELLIGENCE_API_KEY`**，否则校验常见 **401**；资源与 SDK 不匹配旧模型名时会出现 **404 ModelNotFound**。金额校验开关/阈值由 `OCR_AMOUNT_VALIDATION_*` 控制。可选 **`OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT=true`**（对应 `Ocr:PrebuiltCheck:EnrichPrimaryResult`）在每张支票上多一次 DI 调用以提升路由/银行名等结构化字段，详见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)。**`OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT`** / **`OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF`** / **`OCR_TRAINING_AUTO_SAMPLE_DEDUP_BY_OCR_RESULT_ID`** / **`OCR_TRAINING_AUTO_SAMPLE_LOG_VERBOSITY`**（Minimal / Verbose / Off）控制支票入库后自动训练样本；自动样本仅在“低置信字段被人工改正”时写入，减少噪声样本。`OCR_CHECK_AZURE_TRAINING_CORRECTION_MODE` 默认 `Similarity`，并启用“自动模板簇 + 生效延迟”：`OCR_CHECK_AZURE_TRAINING_CORRECTION_CLUSTER_MIN_SAMPLES`（簇最小样本数，默认 3）与 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SAMPLE_MIN_AGE_MINUTES`（样本最小年龄，默认 30 分钟）；`OCR_CHECK_AZURE_TRAINING_CORRECTION_REQUIRE_TEMPLATE_MATCH=true` 时仅在同模板/同 RTN 簇内纠偏。可选汇总日志 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_ENABLED=true` 与 `OCR_CHECK_AZURE_TRAINING_CORRECTION_SUMMARY_FLUSH_MINUTES=15`，按周期输出命中率、平均改正字段数与 Top 改正字段。默认 Web: `http://localhost:8080`；PostgreSQL、MinIO 端口见根目录 [CLAUDE.md](CLAUDE.md) 或 [docker-compose.yml](docker-compose.yml)。
 
 ## 本地开发
 
@@ -113,3 +113,11 @@ dotnet run --project src/CheckPay.Web
 ## 贡献指南
 
 协作规范见 [AGENTS.md](AGENTS.md)。
+
+## OCR 训练统计查看
+
+- 管理员可在「系统管理 → OCR 训练效果看板」查看自动训练效果趋势（`/admin/ocr-training-insights`）。
+- 页面展示最近 N 天：自动样本占比、平均改正字段数、字段改正 Top、按天趋势。
+- 实时运行日志可在应用日志/Seq 搜索：
+  - 单次纠偏：`已应用训练样本纠偏(强匹配)`、`已应用训练样本纠偏(相似度)`
+  - 周期汇总：`CheckOcrTrainingCorrectionSummary`

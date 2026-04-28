@@ -32,6 +32,7 @@
         @* 用户管理：仅管理员 *@
         <AuthorizeView Roles="Admin">
             <MudNavLink Href="/users" Icon="@Icons.Material.Filled.People">用户管理</MudNavLink>
+            <MudNavLink Href="/admin/ocr-training-insights" Icon="@Icons.Material.Filled.Insights">OCR 训练效果看板</MudNavLink>
             <MudNavLink Href="/admin/ocr-training-checks" Icon="@Icons.Material.Filled.Receipt">支票 OCR 训练标注</MudNavLink>
             <MudNavLink Href="/admin/ocr-training" Icon="@Icons.Material.Filled.ModelTraining">扣款 OCR 训练标注</MudNavLink>
             <MudNavLink Href="/admin/check-records" Icon="@Icons.Material.Filled.ReceiptLong">支票记录管理</MudNavLink>

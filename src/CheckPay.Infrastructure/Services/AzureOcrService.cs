@@ -169,6 +169,10 @@ public class AzureOcrService : IOcrService
             ["eu_iban_present"] = (iban != null).ToString(),
             ["eu_bic_present"] = (bic != null).ToString()
         };
+        if (resolution.TemplateId.HasValue)
+            diagnostics["template_id"] = resolution.TemplateId.Value.ToString("D");
+        if (!string.IsNullOrWhiteSpace(resolution.TemplateName))
+            diagnostics["template_name"] = resolution.TemplateName!;
 
         if (micrAppliedLines == 0 && rawText.Length > 40)
             diagnostics["suspect_micr_region_miss"] = "true";

@@ -187,4 +187,46 @@ public class CheckSubmitOcrTrainingSamplePageHelperTests
         Assert.Equal(templateId, row.OcrCheckTemplateId);
         Assert.Contains("checkRecordId=", row.Notes, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task TryAppend_WhenOnlyHighConfidenceFieldChanged_SkipsAutoSample()
+    {
+        await using var db = CreateContext();
+        var ocrId = Guid.NewGuid();
+        var dto = new OcrResultDto(
+            "A100",
+            1m,
+            new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            new Dictionary<string, double>());
+        db.OcrResults.Add(new OcrResult
+        {
+            Id = ocrId,
+            ImageUrl = "http://x/a.jpg",
+            Status = OcrStatus.Completed,
+            RawResult = JsonDocument.Parse(JsonSerializer.Serialize(dto)),
+            ConfidenceScores = JsonDocument.Parse("""{"CheckNumber":0.95,"Amount":0.90,"Date":0.90}""")
+        });
+        await db.SaveChangesAsync();
+
+        var cfg = Config(
+            ("Ocr:Training:AutoSampleOnCheckSubmit", "true"),
+            ("Ocr:Training:AutoSampleRequireDiff", "true"),
+            ("Ocr:Training:AutoSampleDedupByOcrResultId", "false"),
+            ("Ocr:Training:AutoSampleLogVerbosity", "Verbose"));
+
+        await CheckSubmitOcrTrainingSamplePageHelper.TryAppendAfterCheckFinalSubmitAsync(
+            db,
+            cfg,
+            "http://x/a.jpg",
+            ocrId,
+            "A200",
+            1m,
+            new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            CheckAchExtensionData.FromOcrResult(dto with { CheckNumber = "A200" }),
+            Guid.NewGuid(),
+            new NullTemplateResolver(),
+            NullLogger.Instance);
+
+        Assert.Equal(0, await db.OcrTrainingSamples.CountAsync());
+    }
 }

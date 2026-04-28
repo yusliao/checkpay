@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using CheckPay.Application.Common.Interfaces;
 using CheckPay.Application.Common.Models;
 using CheckPay.Domain.Entities;
@@ -15,6 +16,20 @@ public sealed class CheckOcrParsedSampleCorrector(
     IConfiguration configuration,
     ILogger<CheckOcrParsedSampleCorrector> logger) : ICheckOcrParsedSampleCorrector
 {
+    private static readonly object StatsLock = new();
+    private static DateTime _statsWindowStartUtc = DateTime.UtcNow;
+    private static DateTime _statsLastFlushUtc = DateTime.UtcNow;
+    private static int _statsTotalRequests;
+    private static int _statsMatchedRequests;
+    private static int _statsChangedFieldTotal;
+    private static readonly Dictionary<string, int> StatsFieldHits = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record CandidateSelection(
+        List<OcrTrainingSample> Samples,
+        string? ClusterKey,
+        int MaturedSampleCount,
+        int EligibleClusterCount);
+
     public async Task<OcrResultDto> ApplyIfMatchedAsync(OcrResultDto parsed, CancellationToken cancellationToken = default)
     {
         var enabled = true;
@@ -35,8 +50,14 @@ public sealed class CheckOcrParsedSampleCorrector(
 
         var ordered = await CheckOcrTrainingSamplePool.LoadOrderedAsync(
             dbContext, poolTake, maxScan, cancellationToken);
+        var selection = SelectClusterCandidates(parsed, ordered);
+        if (selection.Samples.Count == 0)
+        {
+            RecordAndMaybeFlushSummary(matched: false, changedFields: []);
+            return parsed;
+        }
 
-        foreach (var s in ordered)
+        foreach (var s in selection.Samples)
         {
             if (!CheckOcrTrainingSampleDiff.HasStructuredDiff(s))
                 continue;
@@ -44,16 +65,25 @@ public sealed class CheckOcrParsedSampleCorrector(
                 continue;
 
             var merged = MergeFromSample(parsed, s);
+            var changeStats = BuildChangeStats(parsed, merged);
             logger.LogInformation(
-                "Azure/规则支票 OCR 已应用训练样本纠偏(强匹配) SampleId={SampleId} CreatedAt={CreatedAt:O}",
+                "Azure/规则支票 OCR 已应用训练样本纠偏(强匹配) SampleId={SampleId} CreatedAt={CreatedAt:O} ClusterKey={ClusterKey} ChangedCount={ChangedCount} ChangedFields={ChangedFields} ChangedPairs={ChangedPairs}",
                 s.Id,
-                s.CreatedAt);
+                s.CreatedAt,
+                selection.ClusterKey,
+                changeStats.ChangedCount,
+                string.Join(",", changeStats.ChangedFields),
+                changeStats.ChangedPairs);
+            RecordAndMaybeFlushSummary(matched: true, changedFields: changeStats.ChangedFields);
             return merged;
         }
 
         var mode = configuration["Ocr:CheckAzureTrainingCorrectionMode"]?.Trim() ?? "StrongOnly";
         if (!string.Equals(mode, "Similarity", StringComparison.OrdinalIgnoreCase))
+        {
+            RecordAndMaybeFlushSummary(matched: false, changedFields: []);
             return parsed;
+        }
 
         var minSim = 0.80;
         _ = double.TryParse(
@@ -71,7 +101,7 @@ public sealed class CheckOcrParsedSampleCorrector(
 
         OcrTrainingSample? best = null;
         var bestScore = 0.0;
-        foreach (var s in ordered)
+        foreach (var s in selection.Samples)
         {
             if (!CheckOcrTrainingSampleDiff.HasStructuredDiff(s))
                 continue;
@@ -89,19 +119,158 @@ public sealed class CheckOcrParsedSampleCorrector(
         }
 
         if (best is null || bestScore < minSim)
+        {
+            RecordAndMaybeFlushSummary(matched: false, changedFields: []);
             return parsed;
+        }
 
         var (fieldMerged, appliedFields) = TryMergeFromSampleSimilarity(parsed, best, maxFieldConf);
         if (appliedFields.Count == 0)
+        {
+            RecordAndMaybeFlushSummary(matched: false, changedFields: []);
             return parsed;
+        }
 
         logger.LogInformation(
-            "Azure/规则支票 OCR 已应用训练样本纠偏(相似度) SampleId={SampleId} Similarity={Similarity:F3} AppliedFields={Fields}",
+            "Azure/规则支票 OCR 已应用训练样本纠偏(相似度) SampleId={SampleId} Similarity={Similarity:F3} ClusterKey={ClusterKey} CandidateSamples={CandidateSamples} MaturedSamples={MaturedSamples} EligibleClusters={EligibleClusters} ChangedCount={ChangedCount} ChangedFields={Fields} ChangedPairs={ChangedPairs}",
             best.Id,
             bestScore,
-            string.Join(",", appliedFields));
+            selection.ClusterKey,
+            selection.Samples.Count,
+            selection.MaturedSampleCount,
+            selection.EligibleClusterCount,
+            appliedFields.Count,
+            string.Join(",", appliedFields),
+            BuildChangedPairs(parsed, fieldMerged, appliedFields));
+        RecordAndMaybeFlushSummary(matched: true, changedFields: appliedFields);
 
         return fieldMerged;
+    }
+
+    private void RecordAndMaybeFlushSummary(bool matched, IReadOnlyCollection<string> changedFields)
+    {
+        var enabled = true;
+        if (bool.TryParse(configuration["Ocr:CheckAzureTrainingCorrectionSummaryEnabled"], out var en))
+            enabled = en;
+        if (!enabled)
+            return;
+
+        var flushMinutes = 15;
+        if (int.TryParse(configuration["Ocr:CheckAzureTrainingCorrectionSummaryFlushMinutes"], out var cfg) && cfg > 0)
+            flushMinutes = cfg;
+
+        var now = DateTime.UtcNow;
+        bool shouldFlush;
+        string? summaryPayload = null;
+
+        lock (StatsLock)
+        {
+            _statsTotalRequests++;
+            if (matched)
+            {
+                _statsMatchedRequests++;
+                _statsChangedFieldTotal += changedFields.Count;
+                foreach (var field in changedFields)
+                {
+                    if (StatsFieldHits.TryGetValue(field, out var count))
+                        StatsFieldHits[field] = count + 1;
+                    else
+                        StatsFieldHits[field] = 1;
+                }
+            }
+
+            shouldFlush = (now - _statsLastFlushUtc).TotalMinutes >= flushMinutes;
+            if (!shouldFlush || _statsTotalRequests == 0)
+                return;
+
+            var hitRate = _statsMatchedRequests / (double)_statsTotalRequests;
+            var avgChanged = _statsMatchedRequests == 0 ? 0.0 : _statsChangedFieldTotal / (double)_statsMatchedRequests;
+            var topFields = StatsFieldHits
+                .OrderByDescending(x => x.Value)
+                .Take(5)
+                .Select(x => $"{x.Key}:{x.Value}")
+                .ToArray();
+
+            var sb = new StringBuilder();
+            sb.Append("WindowStart=").Append(_statsWindowStartUtc.ToString("O", CultureInfo.InvariantCulture));
+            sb.Append(" WindowEnd=").Append(now.ToString("O", CultureInfo.InvariantCulture));
+            sb.Append(" Total=").Append(_statsTotalRequests);
+            sb.Append(" Matched=").Append(_statsMatchedRequests);
+            sb.Append(" HitRate=").Append(hitRate.ToString("P2", CultureInfo.InvariantCulture));
+            sb.Append(" AvgChangedFields=").Append(avgChanged.ToString("F2", CultureInfo.InvariantCulture));
+            sb.Append(" TopFields=").Append(topFields.Length == 0 ? "-" : string.Join(",", topFields));
+            summaryPayload = sb.ToString();
+
+            _statsWindowStartUtc = now;
+            _statsLastFlushUtc = now;
+            _statsTotalRequests = 0;
+            _statsMatchedRequests = 0;
+            _statsChangedFieldTotal = 0;
+            StatsFieldHits.Clear();
+        }
+
+        if (!string.IsNullOrWhiteSpace(summaryPayload))
+        {
+            logger.LogInformation(
+                "CheckOcrTrainingCorrectionSummary {Summary}",
+                summaryPayload);
+        }
+    }
+
+    private CandidateSelection SelectClusterCandidates(
+        OcrResultDto parsed,
+        List<OcrTrainingSample> ordered)
+    {
+        var minSamples = 3;
+        if (int.TryParse(configuration["Ocr:CheckAzureTrainingCorrectionClusterMinSamples"], out var configuredMin) && configuredMin > 0)
+            minSamples = configuredMin;
+
+        var minAgeMinutes = 30;
+        if (int.TryParse(configuration["Ocr:CheckAzureTrainingCorrectionSampleMinAgeMinutes"], out var configuredAge) && configuredAge >= 0)
+            minAgeMinutes = configuredAge;
+
+        var requireTemplateMatch = true;
+        if (bool.TryParse(configuration["Ocr:CheckAzureTrainingCorrectionRequireTemplateMatch"], out var strict))
+            requireTemplateMatch = strict;
+
+        var thresholdUtc = DateTime.UtcNow.AddMinutes(-minAgeMinutes);
+        var matured = ordered.Where(s => s.CreatedAt <= thresholdUtc).ToList();
+        if (matured.Count == 0)
+            return new CandidateSelection([], null, 0, 0);
+
+        var parsedTemplateId = TryGetParsedTemplateId(parsed.Diagnostics);
+        var parsedCluster = BuildClusterKey(parsedTemplateId, parsed.RoutingNumber);
+
+        var grouped = matured
+            .GroupBy(s => BuildClusterKey(s.OcrCheckTemplateId, CheckAchExtensionData.Deserialize(s.OcrAchExtensionJson)?.RoutingNumber))
+            .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() >= minSamples)
+            .ToDictionary(g => g.Key!, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(parsedCluster) && grouped.TryGetValue(parsedCluster, out var clusterSamples))
+            return new CandidateSelection(clusterSamples, parsedCluster, matured.Count, grouped.Count);
+
+        if (requireTemplateMatch)
+            return new CandidateSelection([], parsedCluster, matured.Count, grouped.Count);
+
+        var fallback = grouped.Values.SelectMany(v => v).OrderByDescending(s => s.CreatedAt).ToList();
+        return new CandidateSelection(fallback, parsedCluster, matured.Count, grouped.Count);
+    }
+
+    private static Guid? TryGetParsedTemplateId(IReadOnlyDictionary<string, string>? diagnostics)
+    {
+        if (diagnostics == null)
+            return null;
+        if (!diagnostics.TryGetValue("template_id", out var raw) || string.IsNullOrWhiteSpace(raw))
+            return null;
+        return Guid.TryParse(raw, out var id) ? id : null;
+    }
+
+    private static string? BuildClusterKey(Guid? templateId, string? routingNumber)
+    {
+        if (templateId.HasValue)
+            return $"tpl:{templateId.Value:D}";
+        var routing = CheckOcrTrainingSampleDiff.NormDigits(routingNumber);
+        return routing == null ? null : $"rtn:{routing}";
     }
 
     private static bool IsStrongMatch(OcrResultDto current, OcrTrainingSample s)
@@ -368,4 +537,77 @@ public sealed class CheckOcrParsedSampleCorrector(
 
         return d;
     }
+
+    private static (int ChangedCount, List<string> ChangedFields, string ChangedPairs) BuildChangeStats(
+        OcrResultDto before,
+        OcrResultDto after)
+    {
+        var fields = new List<string>();
+        var pairs = new List<string>();
+        Track("CheckNumber", before.CheckNumber, after.CheckNumber);
+        Track("Amount", before.Amount.ToString("0.00", CultureInfo.InvariantCulture), after.Amount.ToString("0.00", CultureInfo.InvariantCulture));
+        Track("Date", before.Date.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), after.Date.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Track("RoutingNumber", before.RoutingNumber, after.RoutingNumber);
+        Track("AccountNumber", before.AccountNumber, after.AccountNumber);
+        Track("BankName", before.BankName, after.BankName);
+        Track("AccountHolderName", before.AccountHolderName, after.AccountHolderName);
+        Track("AccountAddress", before.AccountAddress, after.AccountAddress);
+        Track("AccountType", before.AccountType, after.AccountType);
+        Track("PayToOrderOf", before.PayToOrderOf, after.PayToOrderOf);
+        Track("ForMemo", before.ForMemo, after.ForMemo);
+        Track("MicrLineRaw", before.MicrLineRaw, after.MicrLineRaw);
+        Track("CheckNumberMicr", before.CheckNumberMicr, after.CheckNumberMicr);
+        Track("MicrFieldOrderNote", before.MicrFieldOrderNote, after.MicrFieldOrderNote);
+        Track("CompanyName", before.CompanyName, after.CompanyName);
+
+        return (fields.Count, fields, string.Join(" | ", pairs));
+
+        void Track(string field, string? b, string? a)
+        {
+            if (string.Equals(NormForStats(b), NormForStats(a), StringComparison.OrdinalIgnoreCase))
+                return;
+            fields.Add(field);
+            pairs.Add($"{field}:{Safe(b)}->{Safe(a)}");
+        }
+    }
+
+    private static string BuildChangedPairs(OcrResultDto before, OcrResultDto after, IReadOnlyCollection<string> fields)
+    {
+        if (fields.Count == 0)
+            return string.Empty;
+
+        var pairs = new List<string>();
+        foreach (var field in fields)
+        {
+            var b = GetFieldValue(before, field);
+            var a = GetFieldValue(after, field);
+            if (!string.Equals(NormForStats(b), NormForStats(a), StringComparison.OrdinalIgnoreCase))
+                pairs.Add($"{field}:{Safe(b)}->{Safe(a)}");
+        }
+        return string.Join(" | ", pairs);
+    }
+
+    private static string? GetFieldValue(OcrResultDto dto, string field) =>
+        field switch
+        {
+            "CheckNumber" => dto.CheckNumber,
+            "Amount" => dto.Amount.ToString("0.00", CultureInfo.InvariantCulture),
+            "Date" => dto.Date.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            "RoutingNumber" => dto.RoutingNumber,
+            "AccountNumber" => dto.AccountNumber,
+            "BankName" => dto.BankName,
+            "AccountHolderName" => dto.AccountHolderName,
+            "AccountAddress" => dto.AccountAddress,
+            "AccountType" => dto.AccountType,
+            "PayToOrderOf" => dto.PayToOrderOf,
+            "ForMemo" => dto.ForMemo,
+            "MicrLineRaw" => dto.MicrLineRaw,
+            "CheckNumberMicr" => dto.CheckNumberMicr,
+            "MicrFieldOrderNote" => dto.MicrFieldOrderNote,
+            "CompanyName" => dto.CompanyName,
+            _ => null
+        };
+
+    private static string NormForStats(string? value) => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+    private static string Safe(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
 }

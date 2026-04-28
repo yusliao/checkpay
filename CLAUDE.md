@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-29** - 启动慢定位修复：统一本地默认连接串与 Compose 凭据（`src/CheckPay.Web/appsettings.json` 默认 `admin/admin123`），避免本地启动阶段因数据库认证失败触发 `Program` 的 10 次重试（每次 3 秒）导致冷启动明显变慢
 - **2026-04-28** - 支票上传/复核新增“人工复核完毕”按钮：当金额校验不一致经人工确认属于大小写误报时，可写入备注标记并解除提交阻断（保留原始校验结果与提示追溯）
 - **2026-04-28** - 兜底修复“手动校验手写金额”失败：`CheckUpload` / `CheckReview` 在金额校验后写审计日志改为 `try/catch` 非阻断，审计失败仅记 `Warning` 日志，不再影响校验结果保存与页面提示
 - **2026-04-28** - 修复“一键转草稿/手动金额校验”偶发保存失败：`AuditLogService` 不再写死 `SystemUserId=000...001`，改为优先使用当前登录用户 `ClaimTypes.NameIdentifier`（GUID）并校验存在性，缺失时回退到库内有效管理员/首个有效用户，避免 `audit_logs.user_id -> users.id` 外键冲突（`FK_audit_logs_users_user_id`）

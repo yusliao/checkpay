@@ -2,6 +2,9 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-28** - 支票上传/复核新增“人工复核完毕”按钮：当金额校验不一致经人工确认属于大小写误报时，可写入备注标记并解除提交阻断（保留原始校验结果与提示追溯）
+- **2026-04-28** - 兜底修复“手动校验手写金额”失败：`CheckUpload` / `CheckReview` 在金额校验后写审计日志改为 `try/catch` 非阻断，审计失败仅记 `Warning` 日志，不再影响校验结果保存与页面提示
+- **2026-04-28** - 修复“一键转草稿/手动金额校验”偶发保存失败：`AuditLogService` 不再写死 `SystemUserId=000...001`，改为优先使用当前登录用户 `ClaimTypes.NameIdentifier`（GUID）并校验存在性，缺失时回退到库内有效管理员/首个有效用户，避免 `audit_logs.user_id -> users.id` 外键冲突（`FK_audit_logs_users_user_id`）
 - **2026-04-28** - MICR 看板分组增强：`/admin/ocr-training-insights` 新增“MICR 二次通道按 RTN/模板分组（Top 10）”，显示各组 OCR 完成量、首轮 ABA 失败量、二次通道命中率与 ABA 修复率，优先按 `template_id` 分组，缺失时回退 `routing_number_final/first_pass`
 - **2026-04-28** - 管理端看板增强：`/admin/ocr-training-insights` 新增 MICR 二次通道统计（OCR 完成样本、二次命中率、ABA 修复率）与按天趋势，数据来自 `ocr_results.raw_result.Diagnostics`（`micr_bottom_band_second_pass_applied`、`routing_aba_checksum_ok_first_pass`、`routing_aba_checksum_ok`）
 - **2026-04-28** - MICR 可观测性增强：`AzureOcrService` 在底部条带二次解析命中时输出结构化日志（首轮→最终路由/账号/模式），并在 `Diagnostics` 增加 `routing_number_first_pass/final`、`account_number_first_pass/final`、`routing_aba_checksum_ok_first_pass` 等键，便于按命中样本评估策略收益

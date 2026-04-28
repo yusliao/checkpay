@@ -227,17 +227,33 @@ else
                                 @OcrAmountValidationNotes.MismatchBlockingMessage
                             </MudAlert>
                         }
+                        @if (HasManualReviewCompleted())
+                        {
+                            <MudAlert Severity="Severity.Success" Dense="true" Class="mb-2">
+                                <MudIcon Icon="@Icons.Material.Filled.Verified" Class="mr-1" />
+                                @OcrAmountValidationNotes.ManualReviewCompletedMessage
+                            </MudAlert>
+                        }
                         @if (CanShowManualAmountValidationButton())
                         {
-                            <MudButton Variant="Variant.Outlined"
-                                       Size="Size.Small"
-                                       Color="Color.Info"
-                                       Class="mb-2"
-                                       StartIcon="@Icons.Material.Filled.FactCheck"
-                                       OnClick="RunAmountValidationAsync"
-                                       Disabled="@_amountValidationRunning">
-                                @(_amountValidationRunning ? OcrAmountValidationNotes.ManualValidatingButtonText : OcrAmountValidationNotes.ManualValidateButtonText)
-                            </MudButton>
+                            <MudStack Row="true" Spacing="1" Class="mb-2">
+                                <MudButton Variant="Variant.Outlined"
+                                           Size="Size.Small"
+                                           Color="Color.Info"
+                                           StartIcon="@Icons.Material.Filled.FactCheck"
+                                           OnClick="RunAmountValidationAsync"
+                                           Disabled="@_amountValidationRunning">
+                                    @(_amountValidationRunning ? OcrAmountValidationNotes.ManualValidatingButtonText : OcrAmountValidationNotes.ManualValidateButtonText)
+                                </MudButton>
+                                <MudButton Variant="Variant.Outlined"
+                                           Size="Size.Small"
+                                           Color="Color.Success"
+                                           StartIcon="@Icons.Material.Filled.VerifiedUser"
+                                           OnClick="MarkManualReviewCompleted"
+                                           Disabled="@(!HasAmountValidationRawMismatch())">
+                                    @OcrAmountValidationNotes.ManualReviewCompleteButtonText
+                                </MudButton>
+                            </MudStack>
                         }
 
                         @* 日期 *@
@@ -825,23 +841,30 @@ else
             tracked.UpdatedAt = DateTime.UtcNow;
 
             await DbContext.SaveChangesAsync();
-            await AuditLog.LogAsync(
-                AuditAction.Update,
-                "OcrResult",
-                tracked.Id,
-                new
-                {
-                    AmountValidationStatus = oldStatus.ToString(),
-                    AmountValidationErrorMessage = oldError,
-                    AmountValidationResult = oldResult
-                },
-                new
-                {
-                    AmountValidationStatus = tracked.AmountValidationStatus.ToString(),
-                    AmountValidationErrorMessage = tracked.AmountValidationErrorMessage,
-                    AmountValidationResult = tracked.AmountValidationResult?.RootElement.GetRawText(),
-                    Trigger = "Manual"
-                });
+            try
+            {
+                await AuditLog.LogAsync(
+                    AuditAction.Update,
+                    "OcrResult",
+                    tracked.Id,
+                    new
+                    {
+                        AmountValidationStatus = oldStatus.ToString(),
+                        AmountValidationErrorMessage = oldError,
+                        AmountValidationResult = oldResult
+                    },
+                    new
+                    {
+                        AmountValidationStatus = tracked.AmountValidationStatus.ToString(),
+                        AmountValidationErrorMessage = tracked.AmountValidationErrorMessage,
+                        AmountValidationResult = tracked.AmountValidationResult?.RootElement.GetRawText(),
+                        Trigger = "Manual"
+                    });
+            }
+            catch (Exception auditEx)
+            {
+                Logger.LogWarning(auditEx, "手动金额校验审计日志写入失败，已忽略。OcrResultId={OcrResultId}", tracked.Id);
+            }
 
             _ocrResult = tracked;
             Snackbar.Add("手写金额校验已完成", Severity.Success);
@@ -983,6 +1006,30 @@ else
         var line = $"{marker} 时间:{DateTime.Now.ToString(OcrAmountValidationNotes.UiDateTimeFormat)}";
         _notes = string.IsNullOrWhiteSpace(_notes) ? line : $"{_notes.Trim()}\n{line}";
     }
+
+    private void MarkManualReviewCompleted()
+    {
+        if (!HasAmountValidationRawMismatch())
+        {
+            Snackbar.Add("当前不存在金额不一致，无需人工复核确认。", Severity.Info);
+            return;
+        }
+
+        const string marker = OcrAmountValidationNotes.ManualReviewCompleteMarker;
+        if (!string.IsNullOrWhiteSpace(_notes) && _notes.Contains(marker, StringComparison.Ordinal))
+        {
+            Snackbar.Add("已标记人工复核完毕，可直接提交入库。", Severity.Success);
+            return;
+        }
+
+        var line = $"{marker} 时间:{DateTime.Now.ToString(OcrAmountValidationNotes.UiDateTimeFormat)}";
+        _notes = string.IsNullOrWhiteSpace(_notes) ? line : $"{_notes.Trim()}\n{line}";
+        Snackbar.Add("已标记人工复核完毕，可继续提交入库。", Severity.Success);
+    }
+
+    private bool HasManualReviewCompleted()
+        => !string.IsNullOrWhiteSpace(_notes)
+           && _notes.Contains(OcrAmountValidationNotes.ManualReviewCompleteMarker, StringComparison.Ordinal);
 
     private void RemoveItem(QueueItem item)
     {
@@ -1309,7 +1356,7 @@ else
     private string BuildValidationTimeText()
         => _ocrResult?.AmountValidatedAt is DateTime dt ? $"（最后校验：{dt.ToLocalTime().ToString(OcrAmountValidationNotes.UiDateTimeFormat)}）" : string.Empty;
 
-    private bool HasAmountValidationMismatch()
+    private bool HasAmountValidationRawMismatch()
     {
         if (_ocrResult?.AmountValidationResult == null) return false;
         try
@@ -1323,6 +1370,9 @@ else
             return false;
         }
     }
+
+    private bool HasAmountValidationMismatch()
+        => HasAmountValidationRawMismatch() && !HasManualReviewCompleted();
 
     // ── JSON 解析工具 ─────────────────────────────────────────────
 

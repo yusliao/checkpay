@@ -19,6 +19,7 @@ public class AuditLogServiceTests
     public async Task LogAsync_ShouldCreateAuditLog()
     {
         await using var context = CreateContext();
+        var userId = await SeedUserAsync(context, "admin", "admin@checkpay.local");
         var service = new AuditLogService(context);
 
         var entityId = Guid.NewGuid();
@@ -29,6 +30,7 @@ public class AuditLogServiceTests
         Assert.Equal(AuditAction.Create, log.Action);
         Assert.Equal("CheckRecord", log.EntityType);
         Assert.Equal(entityId, log.EntityId);
+        Assert.Equal(userId, log.UserId);
         Assert.NotNull(log.NewValues);
     }
 
@@ -36,6 +38,7 @@ public class AuditLogServiceTests
     public async Task LogAsync_ShouldHandleNullValues()
     {
         await using var context = CreateContext();
+        var userId = await SeedUserAsync(context, "admin", "admin@checkpay.local");
         var service = new AuditLogService(context);
 
         var entityId = Guid.NewGuid();
@@ -43,7 +46,40 @@ public class AuditLogServiceTests
 
         var log = await context.AuditLogs.FirstOrDefaultAsync();
         Assert.NotNull(log);
+        Assert.Equal(userId, log.UserId);
         Assert.Null(log.OldValues);
         Assert.Null(log.NewValues);
+    }
+
+    [Fact]
+    public async Task LogAsync_ShouldFallbackToAdmin_WhenClaimMissing()
+    {
+        await using var context = CreateContext();
+        var adminId = await SeedUserAsync(context, "admin", "admin@checkpay.local");
+        var service = new AuditLogService(context);
+
+        await service.LogAsync(AuditAction.Update, "CheckRecord", Guid.NewGuid());
+
+        var log = await context.AuditLogs.FirstOrDefaultAsync();
+        Assert.NotNull(log);
+        Assert.Equal(adminId, log.UserId);
+    }
+
+    private static async Task<Guid> SeedUserAsync(ApplicationDbContext context, string entraId, string email)
+    {
+        var userId = Guid.NewGuid();
+        context.Users.Add(new CheckPay.Domain.Entities.User
+        {
+            Id = userId,
+            EntraId = entraId,
+            Email = email,
+            DisplayName = "Test User",
+            PasswordHash = "hashed",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await context.SaveChangesAsync();
+        return userId;
     }
 }

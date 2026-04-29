@@ -2,6 +2,8 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-29** - 修复登录后首页加载慢：`/` Dashboard 统计由多次串行 `CountAsync` 收敛为聚合查询，并将 `CreatedAt.Date == UtcToday` 改为 `[todayStart, tomorrowStart)` 范围过滤，减少数据库往返并提升索引命中
+- **2026-04-29** - 修复生产环境前端字体外链导致首屏卡顿：移除 `_Layout.cshtml` 中 `fonts.googleapis.com` 的 Roboto 依赖，改由 `site.css` 使用系统字体栈，避免外网不可达时阻塞样式加载
 - **2026-04-29** - 大陆财务 `ACH 已扣款导出` CSV 增加 `CheckDate` 字段，导出列调整为 `CustomerCode, MobilePhone, CheckDate, DebitDate, Amount, InvoiceNumbers, CompanyName, PaymentPeriod, CheckNumber`
 - **2026-04-29** - 美国财务 `ACH 支票导出` CSV 字段精简：仅保留 `UploadDate, CustomerCode, MobilePhone, CheckDate, BankName, RoutingNumber, AccountNumber, AccountHolderName, CheckNumber, Amount, AchDebitSucceeded`（“全部导出 / 扣款未成功导出”一致）
 - **2026-04-29** - 修复重复支票校验缺陷：上传/复核统一 `CheckNumber` 规范化（`Trim + UpperInvariant`）并改为“同银行（`RoutingNumber`）内去重”（含软删除记录）；保存时新增唯一索引冲突兜底提示；数据库唯一索引改为 `upper(btrim(check_number)) + coalesce(btrim(routing_number),'')`，允许不同银行同票号并阻断大小写/首尾空格穿透

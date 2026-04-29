@@ -141,15 +141,32 @@
 
     private async Task LoadData()
     {
-        _pendingDebitCount   = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.PendingDebit);
-        _pendingReviewCount  = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.PendingReview);
-        _confirmedCount      = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.Confirmed);
-        _questionedCount     = await DbContext.CheckRecords.CountAsync(c => c.Status == CheckStatus.Questioned);
+        var utcTodayStart = DateTime.UtcNow.Date;
+        var utcTomorrowStart = utcTodayStart.AddDays(1);
+
+        var aggregate = await DbContext.CheckRecords
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                PendingDebitCount = g.Count(c => c.Status == CheckStatus.PendingDebit),
+                PendingReviewCount = g.Count(c => c.Status == CheckStatus.PendingReview),
+                ConfirmedCount = g.Count(c => c.Status == CheckStatus.Confirmed),
+                QuestionedCount = g.Count(c => c.Status == CheckStatus.Questioned),
+                TodayCount = g.Count(c => c.CreatedAt >= utcTodayStart && c.CreatedAt < utcTomorrowStart),
+                AchSuccessRevokedPendingCount = g.Count(c =>
+                    c.Status == CheckStatus.PendingReview && c.AchDebitSuccessRevokedAt != null)
+            })
+            .FirstOrDefaultAsync();
+
+        _pendingDebitCount = aggregate?.PendingDebitCount ?? 0;
+        _pendingReviewCount = aggregate?.PendingReviewCount ?? 0;
+        _confirmedCount = aggregate?.ConfirmedCount ?? 0;
+        _questionedCount = aggregate?.QuestionedCount ?? 0;
+        _todayCount = aggregate?.TodayCount ?? 0;
+        _achSuccessRevokedPendingCount = aggregate?.AchSuccessRevokedPendingCount ?? 0;
+
         // 与异常列表一致：未关联支票的扣款（含「曾匹配但支票已删」的孤儿行）
-        _unmatchedCount      = await DbContext.DebitRecords.CountAsync(d => d.CheckRecordId == null);
-        _todayCount          = await DbContext.CheckRecords.CountAsync(c => c.CreatedAt.Date == DateTime.UtcNow.Date);
-        _achSuccessRevokedPendingCount = await DbContext.CheckRecords.CountAsync(c =>
-            c.Status == CheckStatus.PendingReview && c.AchDebitSuccessRevokedAt != null);
+        _unmatchedCount = await DbContext.DebitRecords.CountAsync(d => d.CheckRecordId == null);
     }
 
     public void Dispose() => _refreshTimer?.Dispose();

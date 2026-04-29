@@ -53,7 +53,7 @@ public class CheckRecordConfiguration : IEntityTypeConfiguration<CheckRecord>
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
         builder.Property(e => e.DeletedAt).HasColumnName("deleted_at");
 
-        builder.HasIndex(e => e.CheckNumber).IsUnique().HasDatabaseName("ix_check_records_check_number");
+        builder.HasIndex(e => new { e.CheckNumber, e.RoutingNumber }).IsUnique().HasDatabaseName("ix_check_records_check_number");
         builder.HasIndex(e => e.CustomerId).HasDatabaseName("ix_check_records_customer_id");
         builder.HasIndex(e => e.Status).HasDatabaseName("ix_check_records_status");
         builder.HasIndex(e => e.SubmittedAt).HasDatabaseName("ix_check_records_submitted_at");

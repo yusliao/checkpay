@@ -4,6 +4,7 @@
 @using CheckPay.Application.Common
 @using CheckPay.Domain.Entities
 @using CheckPay.Domain.Enums
+@using CheckPay.Web.Common
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.JSInterop
 @inject IApplicationDbContext DbContext
@@ -574,10 +575,31 @@ else
     private async Task CheckMatchAsync()
     {
         if (string.IsNullOrWhiteSpace(_checkNumber)) return;
+        _checkNumber = CheckNumberGuard.Normalize(_checkNumber);
         _checkedOnce = true;
-        _matchedCheck = await DbContext.CheckRecords
+
+        var candidatesQuery = DbContext.CheckRecords
             .Include(c => c.Customer)
-            .FirstOrDefaultAsync(c => c.CheckNumber == _checkNumber && c.Status == CheckStatus.PendingDebit);
+            .Where(c => c.CheckNumber == _checkNumber && c.Status == CheckStatus.PendingDebit);
+
+        if (_customerId != Guid.Empty)
+            candidatesQuery = candidatesQuery.Where(c => c.CustomerId == _customerId);
+
+        var candidates = await candidatesQuery
+            .OrderByDescending(c => c.CheckDate)
+            .Take(2)
+            .ToListAsync();
+
+        if (candidates.Count > 1)
+        {
+            _matchedCheck = null;
+            _matchIcon = Icons.Material.Filled.WarningAmber;
+            _matchColor = Color.Warning;
+            Snackbar.Add("同支票号存在多条待扣款记录，请先选择客户并从待扣款列表手动指定。", Severity.Warning);
+            return;
+        }
+
+        _matchedCheck = candidates.FirstOrDefault();
 
         if (_matchedCheck != null)
         {

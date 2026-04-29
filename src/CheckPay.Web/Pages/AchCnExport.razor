@@ -85,12 +85,13 @@
         try
         {
             var sb = new StringBuilder();
-            sb.AppendLine("CustomerCode,MobilePhone,DebitDate,Amount,InvoiceNumbers,CompanyName,PaymentPeriod,CheckNumber");
+            sb.AppendLine("CustomerCode,MobilePhone,CheckDate,DebitDate,Amount,InvoiceNumbers,CompanyName,PaymentPeriod,CheckNumber");
             foreach (var c in _rows)
             {
                 sb.AppendLine(string.Join(',',
                     Csv(c.Customer.CustomerCode),
                     Csv(c.Customer.MobilePhone),
+                    Csv(c.CheckDate.ToString("yyyy-MM-dd")),
                     Csv(c.AchDebitSucceededAt?.ToUniversalTime().ToString("yyyy-MM-dd")),
                     c.CheckAmount.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
                     Csv(c.InvoiceNumbers),

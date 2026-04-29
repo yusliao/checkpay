@@ -164,11 +164,6 @@ else if (ShowCheckEditForm())
                               Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")" />
                 <MudTextField @bind-Value="_forMemo" Label="For / Memo" Variant="Variant.Outlined" Class="mb-2"
                               Style="@GetFieldStyle("forMemo")" HelperText="@GetFieldHint("forMemo")" />
-                <MudTextField @bind-Value="_micrLineRaw" Label="MICR line (raw)" Variant="Variant.Outlined" Class="mb-2"
-                              Style="@GetFieldStyle("micrLineRaw")" HelperText="@GetFieldHint("micrLineRaw")" Lines="2" />
-                <MudTextField @bind-Value="_checkNumberMicr" Label="Check # (MICR)" Variant="Variant.Outlined" Class="mb-2"
-                              Style="@GetFieldStyle("checkNumberMicr")" HelperText="@GetFieldHint("checkNumberMicr")" />
-
                 <MudTextField @bind-Value="_companyName" Label="公司名称（付款/开票主体）" Variant="Variant.Outlined" Class="mb-2"
                               Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")" />
 
@@ -982,9 +977,10 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
         var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
 
+        var normalizedCheckNumber = CheckNumberGuard.Normalize(_checkNumber);
         var check = new CheckRecord
         {
-            CheckNumber = _checkNumber.Trim(),
+            CheckNumber = normalizedCheckNumber,
             CheckAmount = _amount,
             CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc),
             Customer = customer,
@@ -1023,7 +1019,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
                     Configuration,
                     _ocrResult.ImageUrl,
                     _ocrResult.Id,
-                    _checkNumber.Trim(),
+                    normalizedCheckNumber,
                     _amount,
                     checkDateUtc,
                     BuildSubmittedAchExtensionData(),
@@ -1038,6 +1034,10 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         catch (DbUpdateConcurrencyException)
         {
             Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+        }
+        catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
+        {
+            Snackbar.Add($"同银行下支票号 {CheckNumberGuard.Normalize(_checkNumber)} 已存在", Severity.Error);
         }
     }
 
@@ -1135,7 +1135,8 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
                 return;
             }
 
-            tracked.CheckNumber = _checkNumber.Trim();
+            var normalizedCheckNumber = CheckNumberGuard.Normalize(_checkNumber);
+            tracked.CheckNumber = normalizedCheckNumber;
             tracked.CheckAmount = _amount;
             tracked.CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
             tracked.CustomerId = customer.Id;
@@ -1167,7 +1168,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
                     Configuration,
                     tracked.ImageUrl ?? string.Empty,
                     tracked.OcrResultId,
-                    _checkNumber.Trim(),
+                    normalizedCheckNumber,
                     _amount,
                     checkDateUtc,
                     BuildSubmittedAchExtensionData(),
@@ -1182,6 +1183,10 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         catch (DbUpdateConcurrencyException)
         {
             Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+        }
+        catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
+        {
+            Snackbar.Add($"同银行下支票号 {CheckNumberGuard.Normalize(_checkNumber)} 已存在", Severity.Error);
         }
     }
 
@@ -1222,11 +1227,14 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
                 return "提交入库时请填写 Account Number";
         }
 
-        var num = _checkNumber.Trim();
+        var num = CheckNumberGuard.Normalize(_checkNumber);
+        var routing = CheckNumberGuard.NormalizeRouting(_routingNumber);
+        _checkNumber = num;
+        _routingNumber = routing;
         var selfId = _editingCheckRecordId ?? Guid.Empty;
-        var exists = await DbContext.CheckRecords.AnyAsync(c => c.CheckNumber == num && c.Id != selfId);
+        var exists = await CheckNumberGuard.ExistsAsync(DbContext, num, routing, selfId);
         if (exists)
-            return $"支票号 {num} 已存在";
+            return $"同银行下支票号 {num} 已存在";
 
         return null;
     }

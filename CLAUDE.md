@@ -2,6 +2,9 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-29** - 大陆财务 `ACH 已扣款导出` CSV 增加 `CheckDate` 字段，导出列调整为 `CustomerCode, MobilePhone, CheckDate, DebitDate, Amount, InvoiceNumbers, CompanyName, PaymentPeriod, CheckNumber`
+- **2026-04-29** - 美国财务 `ACH 支票导出` CSV 字段精简：仅保留 `UploadDate, CustomerCode, MobilePhone, CheckDate, BankName, RoutingNumber, AccountNumber, AccountHolderName, CheckNumber, Amount, AchDebitSucceeded`（“全部导出 / 扣款未成功导出”一致）
+- **2026-04-29** - 修复重复支票校验缺陷：上传/复核统一 `CheckNumber` 规范化（`Trim + UpperInvariant`）并改为“同银行（`RoutingNumber`）内去重”（含软删除记录）；保存时新增唯一索引冲突兜底提示；数据库唯一索引改为 `upper(btrim(check_number)) + coalesce(btrim(routing_number),'')`，允许不同银行同票号并阻断大小写/首尾空格穿透
 - **2026-04-29** - 启动慢定位修复：统一本地默认连接串与 Compose 凭据（`src/CheckPay.Web/appsettings.json` 默认 `admin/admin123`），避免本地启动阶段因数据库认证失败触发 `Program` 的 10 次重试（每次 3 秒）导致冷启动明显变慢
 - **2026-04-28** - 支票上传/复核新增“人工复核完毕”按钮：当金额校验不一致经人工确认属于大小写误报时，可写入备注标记并解除提交阻断（保留原始校验结果与提示追溯）
 - **2026-04-28** - 兜底修复“手动校验手写金额”失败：`CheckUpload` / `CheckReview` 在金额校验后写审计日志改为 `try/catch` 非阻断，审计失败仅记 `Warning` 日志，不再影响校验结果保存与页面提示

@@ -302,11 +302,6 @@ else
                         </MudSelect>
                         <MudTextField @bind-Value="_forMemo" Label="For / Memo" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("forMemo")" HelperText="@GetFieldHint("forMemo")" />
-                        <MudTextField @bind-Value="_micrLineRaw" Label="MICR line (raw)" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("micrLineRaw")" HelperText="@GetFieldHint("micrLineRaw")" Lines="2" />
-                        <MudTextField @bind-Value="_checkNumberMicr" Label="Check # (MICR)" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("checkNumberMicr")" HelperText="@GetFieldHint("checkNumberMicr")" />
-
                         <MudTextField @bind-Value="_companyName" Label="公司名称（付款/开票主体）" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")" />
 
@@ -908,13 +903,14 @@ else
             var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
             var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
 
+            var normalizedCheckNumber = CheckNumberGuard.Normalize(_checkNumber);
             var capturedImageUrl = _current.ImageUrl;
             var capturedOcrResultId = _current.OcrResultId;
             var checkDateUtc = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
 
             var check = new CheckRecord
             {
-                CheckNumber = _checkNumber,
+                CheckNumber = normalizedCheckNumber,
                 CheckAmount = _amount,
                 CheckDate = checkDateUtc,
                 Customer = customer,
@@ -951,7 +947,7 @@ else
                     Configuration,
                     capturedImageUrl,
                     capturedOcrResultId,
-                    _checkNumber.Trim(),
+                    normalizedCheckNumber,
                     _amount,
                     checkDateUtc,
                     BuildSubmittedAchExtensionData(),
@@ -974,6 +970,10 @@ else
         catch (DbUpdateConcurrencyException)
         {
             Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
+        }
+        catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
+        {
+            Snackbar.Add($"同银行下支票号 {CheckNumberGuard.Normalize(_checkNumber)} 已存在", Severity.Error);
         }
         catch (Exception ex)
         {
@@ -1099,9 +1099,11 @@ else
                 return "提交入库时请填写 Account Number";
         }
 
-        var exists = await DbContext.CheckRecords.AnyAsync(c => c.CheckNumber == _checkNumber);
+        _checkNumber = CheckNumberGuard.Normalize(_checkNumber);
+        _routingNumber = CheckNumberGuard.NormalizeRouting(_routingNumber);
+        var exists = await CheckNumberGuard.ExistsAsync(DbContext, _checkNumber, _routingNumber);
         if (exists)
-            return $"支票号 {_checkNumber} 已存在";
+            return $"同银行下支票号 {_checkNumber} 已存在";
 
         return null;
     }

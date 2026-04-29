@@ -319,7 +319,7 @@
         try
         {
             var sb = new StringBuilder();
-            sb.AppendLine("UploadDate,CustomerCode,MobilePhone,CheckDate,BankName,RoutingNumber,AccountNumber,AccountType,AccountHolderName,AccountAddress,CheckNumber,Amount,Note,SubmittedAtUtc,AchDebitSucceeded,InvoiceNumbers,PaymentPeriod,CompanyName,CustomerCompanyNewRelationshipWarning");
+            sb.AppendLine("UploadDate,CustomerCode,MobilePhone,CheckDate,BankName,RoutingNumber,AccountNumber,AccountHolderName,CheckNumber,Amount,AchDebitSucceeded");
             foreach (var c in rows)
             {
                 sb.AppendLine(string.Join(',',
@@ -330,18 +330,10 @@
                     Csv(c.BankName),
                     Csv(c.RoutingNumber),
                     Csv(c.AccountNumber),
-                    Csv(c.AccountType),
                     Csv(c.AccountHolderName),
-                    Csv(c.AccountAddress),
                     Csv(c.CheckNumber),
                     c.CheckAmount.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
-                    Csv(c.Notes),
-                    Csv(c.SubmittedAt?.ToUniversalTime().ToString("yyyy-MM-dd HH:mm")),
-                    c.AchDebitSucceeded ? "Y" : "N",
-                    Csv(c.InvoiceNumbers),
-                    Csv(c.PaymentPeriodText),
-                    Csv(c.CompanyName),
-                    c.CustomerCompanyNewRelationshipWarning ? "Y" : "N"));
+                    c.AchDebitSucceeded ? "Y" : "N"));
             }
 
             var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();

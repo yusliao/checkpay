@@ -32,6 +32,10 @@ internal static class CheckOcrVisionReadParser
         @"(?:check\s*(?:no\.?|number|#)\s*:?\s*|^|\s)(\d{4,6})(?:\s|$)",
         RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
 
+    private static readonly Regex PrintedCheckNumberLineRegex = new(
+        @"(?:\bcheck\s*(?:no\.?|number|#)\s*[:#]?\s*)?\#?(?<num>\d{4,8})\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex AmountRegex = new(
         @"\$\s*([\d,]+\.\d{2})\b|([\d,]{1,10}\.\d{2})\b",
         RegexOptions.Compiled);
@@ -117,22 +121,24 @@ internal static class CheckOcrVisionReadParser
             printedText = layout.FullText;
 
         var micrMatch = MicrCheckNumberRegex.Match(micrText);
-        var printedMatch = PrintedCheckNumberRegex.Match(printedText);
-
         var micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
-        var printedNumber = printedMatch.Success ? printedMatch.Groups[1].Value.Trim() : null;
+        var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText);
+        var printedNumber = printedCandidate.number;
+        var printedScore = printedCandidate.score;
 
         if (micrNumber != null && printedNumber != null)
         {
             if (micrNumber == printedNumber)
-                return (micrNumber, 0.92);
+                return (micrNumber, 0.94);
+            if (printedScore >= 0.78)
+                return (printedNumber, Math.Clamp(printedScore, 0.66, 0.88));
             return (micrNumber, 0.55);
         }
 
         if (micrNumber != null)
             return (micrNumber, 0.72);
         if (printedNumber != null)
-            return (printedNumber, 0.62);
+            return (printedNumber, Math.Clamp(printedScore, 0.62, 0.88));
 
         // 退化：全文再扫一遍
         return ParseCheckNumberFullText(layout.FullText);
@@ -157,6 +163,59 @@ internal static class CheckOcrVisionReadParser
         if (printedNumber != null)
             return (printedNumber, 0.62);
         return (string.Empty, 0.1);
+    }
+
+    private static (string? number, double score) PickBestPrintedCheckCandidate(ReadOcrLayout layout, CheckOcrParsingProfile profile, string printedText)
+    {
+        var candidates = new List<(string number, double score)>();
+        var printedRegion = profile.PrintedCheckPriorRegion;
+        var micrRegion = profile.MicrPriorRegion;
+
+        foreach (var line in layout.Lines)
+        {
+            foreach (Match match in PrintedCheckNumberLineRegex.Matches(line.Text))
+            {
+                if (!match.Success)
+                    continue;
+
+                var number = match.Groups["num"].Value.Trim();
+                if (number.Length is < 4 or > 8)
+                    continue;
+
+                var score = 0.30;
+                if (printedRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+                    score += 0.24;
+                if (line.NormCenterX >= 0.70)
+                    score += 0.18;
+                if (line.NormCenterY <= 0.30)
+                    score += 0.14;
+                if (Regex.IsMatch(line.Text, @"(?i)\bcheck\s*(?:no\.?|number|#)\b"))
+                    score += 0.16;
+                if (Regex.IsMatch(line.Text, @"[$]|(?:\d{1,3},)?\d+\.\d{2}"))
+                    score -= 0.26;
+                if (DateRegex.IsMatch(line.Text))
+                    score -= 0.22;
+                if (micrRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+                    score -= 0.20;
+
+                candidates.Add((number, score));
+            }
+        }
+
+        if (candidates.Count > 0)
+        {
+            var best = candidates
+                .OrderByDescending(x => x.score)
+                .ThenByDescending(x => x.number.Length)
+                .First();
+            return (best.number, Math.Clamp(best.score, 0.20, 0.92));
+        }
+
+        var printedMatch = PrintedCheckNumberRegex.Match(printedText);
+        if (printedMatch.Success)
+            return (printedMatch.Groups[1].Value.Trim(), 0.62);
+
+        return (null, 0.1);
     }
 
     public static (decimal amount, double confidence) ParseAmount(ReadOcrLayout layout, CheckOcrParsingProfile profile)

@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-29** - 美国支票 `CheckNumber` 识别增强：`CheckOcrVisionReadParser.ParseCheckNumber` 新增“逐行候选 + 右上区域几何评分”策略（优先 `PrintedCheckPriorRegion` / 右上高分候选），在 MICR 与印刷号冲突时允许高置信右上印刷号优先，并降低将金额/日期误判为票号的概率
 - **2026-04-29** - 修复登录后首页加载慢：`/` Dashboard 统计由多次串行 `CountAsync` 收敛为聚合查询，并将 `CreatedAt.Date == UtcToday` 改为 `[todayStart, tomorrowStart)` 范围过滤，减少数据库往返并提升索引命中
 - **2026-04-29** - 修复生产环境前端字体外链导致首屏卡顿：移除 `_Layout.cshtml` 中 `fonts.googleapis.com` 的 Roboto 依赖，改由 `site.css` 使用系统字体栈，避免外网不可达时阻塞样式加载
 - **2026-04-29** - 大陆财务 `ACH 已扣款导出` CSV 增加 `CheckDate` 字段，导出列调整为 `CustomerCode, MobilePhone, CheckDate, DebitDate, Amount, InvoiceNumbers, CompanyName, PaymentPeriod, CheckNumber`

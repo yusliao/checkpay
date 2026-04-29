@@ -6,6 +6,39 @@ namespace CheckPay.Tests.Infrastructure;
 public class CheckOcrVisionReadParserTests
 {
     [Fact]
+    public void ParseCheckNumber_PrefersTopRightPrintedCandidateWhenMicrConflicts()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Check No. 824901", 0.86, 0.10, 0.08, 0.12, 0.76, 0.96),
+            new ReadOcrLine("Date 03/15/2024", 0.12, 0.10, 0.08, 0.12, 0.05, 0.30),
+            new ReadOcrLine("123456789 1234567890 123456", 0.56, 0.90, 0.86, 0.94, 0.18, 0.94)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (checkNumber, confidence) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("824901", checkNumber);
+        Assert.True(confidence >= 0.66);
+    }
+
+    [Fact]
+    public void ParseCheckNumber_AvoidsPickingAmountAsPrintedCheckNumber()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("$1234.56", 0.84, 0.12, 0.10, 0.14, 0.76, 0.94),
+            new ReadOcrLine("Check # 567890", 0.82, 0.18, 0.16, 0.20, 0.72, 0.94)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (checkNumber, confidence) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("567890", checkNumber);
+        Assert.True(confidence >= 0.62);
+    }
+
+    [Fact]
     public void ParseAmount_PrefersUpperRightDollarOverBottomMicrLikeAmount()
     {
         var lines = new[]

@@ -44,6 +44,32 @@ public class CheckOcrRoutingMicrEuTests
         Assert.True(r.RoutingAbaChecksumValid);
     }
 
+    /// <summary>路由单独成行，下一行「账号⑈支票号」且缺账号左侧 ⑈（Regions / Harland 类版式）。</summary>
+    [Fact]
+    public void ParseMicrHeuristic_E13bTransit_NewlineThenAuxiliaryOnUs_AccountAndMode()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var text = $"{transit}063104668{transit}\n0317832241{onUs}00764\nHarland Clarke";
+        var r = CheckOcrVisionReadParser.ParseMicrHeuristic(text);
+        Assert.Equal("063104668", r.RoutingNumber);
+        Assert.Equal("0317832241", r.AccountNumber);
+        Assert.True(r.RoutingAbaChecksumValid);
+        Assert.Equal("e13b_transit_aux_on_us", r.RoutingSelectionMode);
+    }
+
+    [Fact]
+    public void ParseMicrHeuristic_E13bTransit_SameLineAuxiliaryOnUs_Account()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var text = $"{transit}063104668{transit}0317832241{onUs}00764";
+        var r = CheckOcrVisionReadParser.ParseMicrHeuristic(text);
+        Assert.Equal("063104668", r.RoutingNumber);
+        Assert.Equal("0317832241", r.AccountNumber);
+        Assert.Equal("e13b_transit_aux_on_us", r.RoutingSelectionMode);
+    }
+
     [Fact]
     public void ParseMicrHeuristic_WithLayout_PrefersMicrRegionOverFullTextNoise()
     {
@@ -200,6 +226,35 @@ public class CheckOcrRoutingMicrEuTests
         var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
         var (bank, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
         Assert.Equal("WELLS FARGO", bank);
+    }
+
+    /// <summary>左上像门牌+公路的行不应胜过磁墨上方的银行品牌（Regions 类版式）。</summary>
+    [Fact]
+    public void ParseBankName_PrefersMicrAdjacentBrandOverHighwayAddressLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("SILVER SPRINGS CHINA KING LLC", 0.35, 0.08, 0.06, 0.10, 0.08, 0.72),
+            new ReadOcrLine("15924 W HIGHWAY 40", 0.38, 0.12, 0.10, 0.14, 0.08, 0.72),
+            new ReadOcrLine("SILVER SPRINGS, FL 34488", 0.35, 0.16, 0.14, 0.18, 0.08, 0.72),
+            new ReadOcrLine("REGIONS", 0.28, 0.58, 0.56, 0.60, 0.08, 0.42)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
+        var (bank, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("REGIONS", bank);
+    }
+
+    [Fact]
+    public void ParseBankName_RejectsHarlandClarkeSupplierLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("CHASE BANK", 0.22, 0.14, 0.12, 0.16, 0.05, 0.45),
+            new ReadOcrLine("Harland Clarke", 0.35, 0.62, 0.60, 0.64, 0.10, 0.50)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
+        var (bank, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("CHASE BANK", bank);
     }
 
     [Fact]

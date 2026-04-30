@@ -24,21 +24,21 @@ internal static class CheckOcrVisionReadParser
 
     private static readonly Regex TailDigitRunsRegex = new(@"\d{4,}", RegexOptions.Compiled);
 
-    // MICR 行格式：⑆路由号⑆ ⑈账号⑈ 支票号（或简化版数字序列）；⑈ 前可为 4~9 位（含分行末行支票号）
+    // MICR 行格式：⑆路由号⑆ ⑈账号⑈ 支票号（或简化版数字序列）；⑈ 前可为 4~17 位（含行末长 external check）
     private static readonly Regex MicrCheckNumberRegex = new(
-        @"(?:⑆[0-9⑆⑈ ]+⑈[0-9⑆⑈ ]+\s+|[⑆⑈])([0-9]{4,9})\s*$",
+        @"(?:⑆[0-9⑆⑈ ]+⑈[0-9⑆⑈ ]+\s+|[⑆⑈])([0-9]{4,17})\s*$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
-    /// <summary>E13B transit 符号（U+2446）包裹的 9 位路由号。</summary>
-    private static readonly Regex E13bTransitRoutingRegex = new(@"⑆(\d{9})⑆", RegexOptions.Compiled);
+    /// <summary>E13B transit 符号（U+2446）包裹的 9 位路由号（允许符号与数字间少量空格）。</summary>
+    private static readonly Regex E13bTransitRoutingRegex = new(@"⑆\s*(\d{9})\s*⑆", RegexOptions.Compiled);
 
     private static readonly Regex E13bOnUsAccountRegex = new(@"⑈(\d{4,17})⑈", RegexOptions.Compiled);
 
-    private static readonly Regex MicrCheckTrailingOnUsRegex = new(@"(\d{4,9})⑈", RegexOptions.Compiled);
+    private static readonly Regex MicrCheckTrailingOnUsRegex = new(@"(\d{4,17})⑈", RegexOptions.Compiled);
 
-    /// <summary>行末「州缩写 + 空格 + 5 位邮编」——其中的 5 位常被误当成支票号。</summary>
+    /// <summary>「州 + 5 位邮编 + 可选 ZIP+4」行；其中 5 位/后 4 位易被误当成支票号。</summary>
     private static readonly Regex UsStateZipLineRegex = new(
-        @"(?i)\b[A-Z]{2}\s+(?<zip>\d{5})(?:\s|$|,)",
+        @"(?i)\b[A-Z]{2}\s+(?<zip>\d{5})(?:-(?<zip4>\d{4}))?\b",
         RegexOptions.Compiled);
 
     private static readonly Regex PrintedCheckNumberRegex = new(
@@ -85,6 +85,72 @@ internal static class CheckOcrVisionReadParser
         "ln", "lane", "way", "court", "ct", "suite", "ste", "apt", "unit", "p.o.", "po", "box"
     };
 
+    private static bool LooksLikeMicrInkLine(string text) =>
+        text.Contains('⑆', StringComparison.Ordinal) || text.Contains('⑈', StringComparison.Ordinal);
+
+    /// <summary>从全文按行提取含 E13B 磁墨符号的行，供 <see cref="MicrLineRaw"/>（无磁墨行时返回 null）。</summary>
+    public static string? TryBuildMicrLineRawFromPlainText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && LooksLikeMicrInkLine(l))
+            .ToList();
+        if (lines.Count == 0)
+            return null;
+        var joined = string.Join("\n", lines);
+        const int max = 640;
+        return joined.Length <= max ? joined : joined[^max..];
+    }
+
+    /// <summary>从 Vision Read 行几何中选取磁墨行原文：自下而上，优先含解析出的 9 位路由。</summary>
+    public static string? TryResolveMicrLineRawFromLayout(ReadOcrLayout layout, string? routingNumber)
+    {
+        if (layout.Lines.Count == 0)
+            return null;
+        var ink = layout.Lines
+            .Where(l => LooksLikeMicrInkLine(l.Text))
+            .OrderByDescending(l => l.NormCenterY)
+            .ThenBy(l => l.NormLeft)
+            .ToList();
+        if (ink.Count == 0)
+            return null;
+        if (routingNumber is { Length: 9 } rt)
+        {
+            var filtered = ink.Where(l => l.Text.Contains(rt, StringComparison.Ordinal)).ToList();
+            if (filtered.Count > 0)
+                ink = filtered;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var parts = new List<string>();
+        foreach (var line in ink)
+        {
+            var t = line.Text.Trim();
+            if (t.Length == 0 || !seen.Add(t))
+                continue;
+            parts.Add(t);
+        }
+
+        if (parts.Count == 0)
+            return null;
+        var joined = string.Join("\n", parts);
+        const int max = 640;
+        return joined.Length <= max ? joined : joined[^max..];
+    }
+
+    /// <summary>MICR 区内若无 E13B/磁墨符号，仅数字滑动窗或 legacy 结果不可信（易把日期/金额拼成假 ABA），应回退全文。</summary>
+    private static bool AcceptRegionMicrParse(string regionText, MicrHeuristicParseResult p)
+    {
+        if (p.RoutingNumber is not { Length: 9 } || p.RoutingAbaChecksumValid != true)
+            return false;
+        if (p.RoutingSelectionMode.StartsWith("e13b_transit", StringComparison.Ordinal)
+            || string.Equals(p.RoutingSelectionMode, "triple_line", StringComparison.Ordinal))
+            return true;
+        return LooksLikeMicrInkLine(regionText);
+    }
+
     public static MicrHeuristicParseResult ParseMicrHeuristic(ReadOcrLayout layout, CheckOcrParsingProfile profile)
     {
         var regionLines = layout.Lines
@@ -95,12 +161,12 @@ internal static class CheckOcrVisionReadParser
         {
             var regionText = string.Join("\n", regionLines.Select(line => line.Text));
             var parsedRegion = ParseMicrHeuristic(regionText);
-            if (parsedRegion.RoutingNumber is { Length: 9 } && parsedRegion.RoutingAbaChecksumValid == true)
+            if (AcceptRegionMicrParse(regionText, parsedRegion))
                 return parsedRegion with { RoutingSelectionMode = $"{parsedRegion.RoutingSelectionMode}_region" };
 
             var bottomLineText = string.Join("\n", regionLines.TakeLast(Math.Min(4, regionLines.Count)).Select(line => line.Text));
             var parsedBottom = ParseMicrHeuristic(bottomLineText);
-            if (parsedBottom.RoutingNumber is { Length: 9 } && parsedBottom.RoutingAbaChecksumValid == true)
+            if (AcceptRegionMicrParse(bottomLineText, parsedBottom))
                 return parsedBottom with { RoutingSelectionMode = $"{parsedBottom.RoutingSelectionMode}_bottom" };
         }
 
@@ -171,7 +237,10 @@ internal static class CheckOcrVisionReadParser
         var micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
         string? printedNumber = printedMatch.Success ? printedMatch.Groups[1].Value.Trim() : null;
         if (printedNumber is not null && printedNumber.Length == 5
-            && Regex.IsMatch(text, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(printedNumber)}\b"))
+            && Regex.IsMatch(text, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(printedNumber)}(?:-\d{{4}})?\b"))
+            printedNumber = null;
+        if (printedNumber is not null && printedNumber.Length == 4
+            && Regex.IsMatch(text, $@"(?i)\b[A-Z]{{2}}\s+\d{{5}}-{Regex.Escape(printedNumber)}\b"))
             printedNumber = null;
 
         if (micrNumber != null && printedNumber != null)
@@ -206,9 +275,13 @@ internal static class CheckOcrVisionReadParser
                 if (number.Length is < 4 or > 8)
                     continue;
 
-                if (UsStateZipLineRegex.Match(line.Text) is { Success: true } zipM
-                    && string.Equals(zipM.Groups["zip"].Value, number, StringComparison.Ordinal))
-                    continue;
+                if (UsStateZipLineRegex.Match(line.Text) is { Success: true } zipM)
+                {
+                    if (string.Equals(zipM.Groups["zip"].Value, number, StringComparison.Ordinal))
+                        continue;
+                    if (zipM.Groups["zip4"].Value is { Length: 4 } z4 && string.Equals(z4, number, StringComparison.Ordinal))
+                        continue;
+                }
 
                 var score = 0.30;
                 if (printedRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
@@ -243,7 +316,9 @@ internal static class CheckOcrVisionReadParser
         if (printedMatch.Success)
         {
             var v = printedMatch.Groups[1].Value.Trim();
-            if (v.Length == 5 && Regex.IsMatch(printedText, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(v)}\b"))
+            if (v.Length == 5 && Regex.IsMatch(printedText, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(v)}(?:-\d{{4}})?\b"))
+                return (null, 0.1);
+            if (v.Length == 4 && Regex.IsMatch(printedText, $@"(?i)\b[A-Z]{{2}}\s+\d{{5}}-{Regex.Escape(v)}\b"))
                 return (null, 0.1);
             return (v, 0.62);
         }
@@ -409,8 +484,9 @@ internal static class CheckOcrVisionReadParser
                 ? firstOnUs.Groups[1].Value
                 : null;
 
-            var micrSnip = text.Length <= 160 ? text.Trim() : text[(text.Length - 160)..].Trim();
-            return new MicrHeuristicParseResult(rt, account, micrSnip, 0.9, account != null ? 0.68 : 0.35, 0.88, true, "e13b_transit");
+            var micrRaw = TryBuildMicrLineRawFromPlainText(text);
+            micrRaw ??= text.Length <= 160 ? text.Trim() : text[(text.Length - 160)..].Trim();
+            return new MicrHeuristicParseResult(rt, account, micrRaw, 0.9, account != null ? 0.68 : 0.35, 0.88, true, "e13b_transit");
         }
 
         // 1) 底部行常见「路由 账号 支票号」三连数字（E13B 常被读成空格分隔）
@@ -447,7 +523,7 @@ internal static class CheckOcrVisionReadParser
         if (abaWindows.Count > 0)
         {
             static bool HasE13bTransitDelimiters(string src, string routing) =>
-                src.Contains($"⑆{routing}⑆", StringComparison.Ordinal);
+                Regex.IsMatch(src, $@"⑆\s*{Regex.Escape(routing)}\s*⑆");
 
             var explicitMarked = abaWindows.Where(w => HasE13bTransitDelimiters(text, w.Routing)).ToList();
             var best = explicitMarked.Count > 0
@@ -633,6 +709,9 @@ internal static class CheckOcrVisionReadParser
         if (Regex.IsMatch(t, @"^(?i)(pay(\s+to(\s+the)?)?|to\s+the|order\s+of|for|dollars|deposits|photo|mp)$"))
             return 0.0;
         var lower = normalized.ToLowerInvariant();
+        if (!lower.Contains("bank", StringComparison.Ordinal)
+            && Regex.IsMatch(t, @"(?i),\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\s*$"))
+            return 0.0;
         var score = 0.3;
         if (lower.Contains("bank", StringComparison.Ordinal))
             score += 0.42;

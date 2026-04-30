@@ -78,6 +78,60 @@ public class CheckOcrRoutingMicrEuTests
     }
 
     [Fact]
+    public void TryResolveMicrLineRawFromLayout_PrefersLineContainingRouting()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micr = $"{onUs}002594{onUs} {transit}061000227{transit} 2078288384{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("noise top", 0.5, 0.4, 0.39, 0.41, 0, 1),
+            new ReadOcrLine($"{onUs}wrong{onUs}", 0.5, 0.5, 0.49, 0.51, 0, 1),
+            new ReadOcrLine(micr, 0.5, 0.9, 0.89, 0.91, 0, 1)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+        var raw = CheckOcrVisionReadParser.TryResolveMicrLineRawFromLayout(layout, "061000227");
+        Assert.Equal(micr, raw);
+    }
+
+    [Fact]
+    public void ParseMicrHeuristic_Layout_RejectsRegionSlidingWithoutMicrInk_FallsBackToFullTextE13b()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micr = $"{onUs}002594{onUs} {transit}061000227{transit} 2078288384{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("03/27/2026", 0.12, 0.74, 0.73, 0.75, 0.05, 0.25),
+            new ReadOcrLine("$3442.80", 0.5, 0.78, 0.77, 0.79, 0.4, 0.6),
+            new ReadOcrLine(micr, 0.5, 0.68, 0.67, 0.69, 0.1, 0.9)
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1000, 1000);
+        var r = CheckOcrVisionReadParser.ParseMicrHeuristic(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("061000227", r.RoutingNumber);
+        Assert.True(r.RoutingAbaChecksumValid);
+        Assert.StartsWith("e13b_transit", r.RoutingSelectionMode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseCheckNumber_SkipsZipPlus4AndUsesTenDigitExternalOnUs()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micr = $"{onUs}002594{onUs} {transit}061000227{transit} 2078288384{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("Macon, GA 31201-1925", 0.22, 0.22, 0.20, 0.24, 0.05, 0.45),
+            new ReadOcrLine(micr, 0.5, 0.88, 0.86, 0.90, 0.1, 0.9)
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1000, 1000);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("2078288384", cn);
+    }
+
+    [Fact]
     public void ParseCheckNumber_SkipsZipAndUsesLastOnUsBlock()
     {
         const char transit = '\u2446';
@@ -94,6 +148,19 @@ public class CheckOcrRoutingMicrEuTests
         var layout = new ReadOcrLayout(full, lines, 1000, 1000);
         var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
         Assert.Equal("562203631", cn);
+    }
+
+    [Fact]
+    public void ParseBankName_RejectsCityStateZipLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Macon, GA 31201-1925", 0.12, 0.12, 0.10, 0.14, 0.05, 0.4),
+            new ReadOcrLine("WELLS FARGO", 0.22, 0.14, 0.12, 0.16, 0.15, 0.42)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
+        var (bank, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("WELLS FARGO", bank);
     }
 
     [Fact]

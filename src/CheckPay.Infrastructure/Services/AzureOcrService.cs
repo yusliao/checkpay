@@ -221,6 +221,25 @@ public class AzureOcrService : IOcrService
         if (micrAppliedLines == 0 && rawText.Length > 40)
             diagnostics["suspect_micr_region_miss"] = "true";
 
+        var micrLineRawSource = "none";
+        var micrLineRaw = CheckOcrVisionReadParser.TryResolveMicrLineRawFromLayout(layout, mergedRouting);
+        if (!string.IsNullOrEmpty(micrLineRaw))
+            micrLineRawSource = "layout";
+        else
+        {
+            micrLineRaw = CheckOcrVisionReadParser.TryBuildMicrLineRawFromPlainText(rawText);
+            if (!string.IsNullOrEmpty(micrLineRaw))
+                micrLineRawSource = "plain";
+            else
+            {
+                micrLineRaw = micr.MicrLineRaw;
+                if (!string.IsNullOrEmpty(micrLineRaw))
+                    micrLineRawSource = "heuristic";
+            }
+        }
+
+        diagnostics["micr_line_raw_source"] = micrLineRawSource;
+
         _logger.LogInformation("CheckOcrDiagnostics {@Diagnostics}", diagnostics);
 
         var micConf = micr.MicrLineConfidence;
@@ -259,7 +278,7 @@ public class AzureOcrService : IOcrService
             AccountAddress: accountAddress,
             PayToOrderOf: mergedPayTo,
             CompanyName: mergedPayTo,
-            MicrLineRaw: micr.MicrLineRaw,
+            MicrLineRaw: micrLineRaw,
             CheckNumberMicr: _prebuiltCheckEnrichPrimary ? diFields.CheckNumberMicr : null,
             ExtractedText: rawText,
             Iban: iban,

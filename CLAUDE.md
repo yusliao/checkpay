@@ -2,7 +2,7 @@
 
 ## 变更记录 (Changelog)
 
-- **2026-04-30** - 支票 Vision Read 解析：`CheckOcrVisionReadParser` 优先从 E13B transit 符号 `⑆9位路由⑆` 提取 ABA；MICR 支票号支持末行 `数字…⑈`（取最后一处 on-us）；印刷号候选排除「州缩写 + 5 位邮编」行；多段 ABA 合法数字时滑动窗优先带 `⑆` 定界符的窗；日期 `TryParse` 统一 `InvariantCulture`（避免非 en-US 下 `M/d` 误读）；银行名过滤 `TO THE`/`PAY` 等抬头碎片
+- **2026-04-30** - 支票 Vision Read 解析：`CheckOcrVisionReadParser` 优先从 E13B transit 符号 `⑆9位路由⑆`（允许符号与数字间空格）提取 ABA；MICR 支票号支持末行 `数字…⑈`（取最后一处 on-us，最长 17 位）；印刷号候选排除「州 + 5 位邮编 + 可选 ZIP+4」行及扩展后 4 位；**MICR 区内若无 `⑆/⑈` 磁墨行则不信该区 `aba_sliding_window`/legacy 路由**，回退全文以免日期/金额拼成假 ABA；多段 ABA 时滑动窗仍优先带 `⑆` 定界符的窗；日期 `TryParse` 用 `InvariantCulture`；银行名过滤抬头碎片及「城市, ST 邮编」整行（无 `bank` 字样时）；**`micr_line_raw`**：`AzureOcrService` 优先 `TryResolveMicrLineRawFromLayout`（按行自下而上、可筛路由），其次 `TryBuildMicrLineRawFromPlainText`，最后才用启发式 `MicrLineRaw`；`Diagnostics` 增加 `micr_line_raw_source`（`layout`/`plain`/`heuristic`/`none`）
 - **2026-04-29** - 美国支票 `CheckNumber` 识别增强：`CheckOcrVisionReadParser.ParseCheckNumber` 新增“逐行候选 + 右上区域几何评分”策略（优先 `PrintedCheckPriorRegion` / 右上高分候选），在 MICR 与印刷号冲突时允许高置信右上印刷号优先，并降低将金额/日期误判为票号的概率
 - **2026-04-29** - 修复登录后首页加载慢：`/` Dashboard 统计由多次串行 `CountAsync` 收敛为聚合查询，并将 `CreatedAt.Date == UtcToday` 改为 `[todayStart, tomorrowStart)` 范围过滤，减少数据库往返并提升索引命中
 - **2026-04-29** - 修复生产环境前端字体外链导致首屏卡顿：移除 `_Layout.cshtml` 中 `fonts.googleapis.com` 的 Roboto 依赖，改由 `site.css` 使用系统字体栈，避免外网不可达时阻塞样式加载

@@ -12,6 +12,7 @@
 @using Microsoft.Extensions.Configuration
 @using Microsoft.JSInterop
 @using System.Text.Json
+@using System.Text.RegularExpressions
 @implements IDisposable
 @inject IBlobStorageService BlobStorage
 @inject IJSRuntime JS
@@ -1330,8 +1331,16 @@ else
             var parsed = result.LegalAmountParsed.HasValue ? result.LegalAmountParsed.Value.ToString("N2") : "未解析";
             if (result.IsConsistent == true)
             {
-                severity = Severity.Success;
-                text = $"手写金额校验一致：数字金额 {_amount:N2}，手写解析 {parsed}（置信度 {result.Confidence:P0}）{BuildValidationTimeText()}";
+                if (!HasWrittenAmountEvidence(result))
+                {
+                    severity = Severity.Warning;
+                    text = $"未识别到大写金额文本，需手动校验金额（数字金额 {_amount:N2}）{BuildValidationTimeText()}";
+                }
+                else
+                {
+                    severity = Severity.Success;
+                    text = $"手写金额校验一致：数字金额 {_amount:N2}，手写解析 {parsed}（置信度 {result.Confidence:P0}）{BuildValidationTimeText()}";
+                }
             }
             else if (result.IsConsistent == false)
             {
@@ -1350,6 +1359,15 @@ else
         {
             return false;
         }
+    }
+
+    private static bool HasWrittenAmountEvidence(AmountValidationResult result)
+    {
+        if (string.IsNullOrWhiteSpace(result.LegalAmountRaw))
+            return false;
+
+        // 仅有数字/符号不算大写金额证据，至少应包含英文金额词。
+        return Regex.IsMatch(result.LegalAmountRaw, @"[A-Za-z]");
     }
 
     private bool CanShowManualAmountValidationButton()

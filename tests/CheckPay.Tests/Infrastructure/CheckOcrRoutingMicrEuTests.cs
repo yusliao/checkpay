@@ -149,6 +149,27 @@ public class CheckOcrRoutingMicrEuTests
         Assert.Equal("002594", cn);
     }
 
+    /// <summary>版头印刷 2594 + 右上误读 61000227 + MICR 002594：应输出展示形 2594，且不误吸 ABA 去零串。</summary>
+    [Fact]
+    public void ParseCheckNumber_WellsMaconStyle_PrefersHeader2594_OverRoutingTrimArtifact()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micr = $"{onUs}002594{onUs} {transit}061000227{transit} 2078288384{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("MACON WINGS INC", 0.35, 0.06, 0.05, 0.07, 0.08, 0.55),
+            new ReadOcrLine("2594", 0.35, 0.11, 0.10, 0.12, 0.12, 0.42),
+            new ReadOcrLine("64-22/610", 0.22, 0.22, 0.20, 0.24, 0.05, 0.45),
+            new ReadOcrLine("61000227", 0.88, 0.12, 0.10, 0.14, 0.82, 0.96),
+            new ReadOcrLine(micr, 0.5, 0.90, 0.88, 0.92, 0.08, 0.95)
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1000, 1000);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("2594", cn);
+    }
+
     [Fact]
     public void ParseCheckNumber_SkipsZipAndUsesLastOnUsBlock()
     {

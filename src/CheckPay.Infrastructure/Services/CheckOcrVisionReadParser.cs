@@ -181,6 +181,22 @@ internal static class CheckOcrVisionReadParser
         return null;
     }
 
+    /// <summary>支票号数字在忽略前导 0 下是否同一串（如 002594 与 2594）。</summary>
+    private static string CanonicalCheckDigitsKey(string digits)
+    {
+        var t = digits.TrimStart('0');
+        return t.Length == 0 ? digits : t;
+    }
+
+    private static bool CanonicalCheckDigitsEqual(string a, string b) =>
+        string.Equals(CanonicalCheckDigitsKey(a), CanonicalCheckDigitsKey(b), StringComparison.Ordinal);
+
+    /// <summary>MICR 与印刷在数值上等价时优先较短展示形（印刷 2594 优于磁墨 002594）。</summary>
+    private static string PreferShorterCanonicallyEqualCheckDigits(string a, string b) =>
+        CanonicalCheckDigitsEqual(a, b)
+            ? (a.Length <= b.Length ? a : b)
+            : a;
+
     /// <summary>印刷号候选是否像「路由号去前导 0」误读（如 061000227 → 61000227）。</summary>
     private static bool LooksLikeMisreadRoutingDigits(string number, string micrCorpus)
     {
@@ -304,9 +320,21 @@ internal static class CheckOcrVisionReadParser
     /// <summary>支票号：MICR 区 + 印刷区双通道，逻辑与旧版一致，优先使用版式区域裁剪文本。</summary>
     public static (string checkNumber, double confidence) ParseCheckNumber(ReadOcrLayout layout, CheckOcrParsingProfile profile)
     {
-        var micrText = layout.ConcatLinesInRegion(profile.MicrPriorRegion, "\n");
+        var fullNormMicr = NormalizeMicrLikeText(layout.FullText);
+        var regionMicr = layout.ConcatLinesInRegion(profile.MicrPriorRegion, "\n").Trim();
+        var inkFromPlain = TryBuildMicrLineRawFromPlainText(layout.FullText);
+        var micrParts = new List<string>();
+        if (regionMicr.Length > 0)
+            micrParts.Add(regionMicr);
+        if (!string.IsNullOrEmpty(inkFromPlain))
+            micrParts.Add(inkFromPlain);
+        var micrText = micrParts.Count > 0
+            ? string.Join("\n", micrParts.Distinct(StringComparer.Ordinal))
+            : string.Empty;
         if (string.IsNullOrWhiteSpace(micrText))
             micrText = TailFallback(layout.FullText, 600);
+        else if (!LooksLikeMicrInkLine(micrText) && fullNormMicr.Contains('⑆', StringComparison.Ordinal))
+            micrText = micrText + "\n" + layout.FullText;
 
         var printedRegion = profile.PrintedCheckPriorRegion;
         var printedText = layout.ConcatLinesInRegion(printedRegion, "\n");
@@ -314,7 +342,9 @@ internal static class CheckOcrVisionReadParser
             printedText = layout.FullText;
 
         var micrNorm = NormalizeMicrLikeText(micrText);
-        var micrNumber = TryExtractMicrCheckBracketedAroundTransit(micrNorm);
+        var micrBracketedCheck = TryExtractMicrCheckBracketedAroundTransit(micrNorm)
+            ?? TryExtractMicrCheckBracketedAroundTransit(fullNormMicr);
+        var micrNumber = micrBracketedCheck;
         if (micrNumber is null)
         {
             var micrMatch = MicrCheckNumberRegex.Match(micrNorm);
@@ -328,14 +358,16 @@ internal static class CheckOcrVisionReadParser
                 micrNumber = onUs[^1].Groups[1].Value.Trim();
         }
 
-        var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText, micrNorm);
+        var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText, micrNumber);
         var printedNumber = printedCandidate.number;
         var printedScore = printedCandidate.score;
 
         if (micrNumber != null && printedNumber != null)
         {
-            if (micrNumber == printedNumber)
-                return (micrNumber, 0.94);
+            if (micrNumber == printedNumber || CanonicalCheckDigitsEqual(micrNumber, printedNumber))
+                return (PreferShorterCanonicallyEqualCheckDigits(micrNumber, printedNumber), 0.94);
+            if (micrBracketedCheck != null)
+                return (micrNumber, 0.82);
             if (printedScore >= 0.78)
                 return (printedNumber, Math.Clamp(printedScore, 0.66, 0.88));
             return (micrNumber, 0.55);
@@ -383,6 +415,8 @@ internal static class CheckOcrVisionReadParser
         {
             if (micrNumber == printedNumber)
                 return (micrNumber, 0.92);
+            if (CanonicalCheckDigitsEqual(micrNumber, printedNumber))
+                return (PreferShorterCanonicallyEqualCheckDigits(micrNumber, printedNumber), 0.92);
             return (micrNumber, 0.55);
         }
 
@@ -398,11 +432,12 @@ internal static class CheckOcrVisionReadParser
         ReadOcrLayout layout,
         CheckOcrParsingProfile profile,
         string printedText,
-        string? micrCorpusForRoutingFilter = null)
+        string? micrCheckHint = null)
     {
         var candidates = new List<(string number, double score)>();
         var printedRegion = profile.PrintedCheckPriorRegion;
         var micrRegion = profile.MicrPriorRegion;
+        var routingMisreadCorpus = NormalizeMicrLikeText(layout.FullText);
 
         foreach (var line in layout.Lines)
         {
@@ -423,7 +458,7 @@ internal static class CheckOcrVisionReadParser
                         continue;
                 }
 
-                if (micrCorpusForRoutingFilter is not null && LooksLikeMisreadRoutingDigits(number, micrCorpusForRoutingFilter))
+                if (LooksLikeMisreadRoutingDigits(number, routingMisreadCorpus))
                     continue;
 
                 var score = 0.30;
@@ -448,6 +483,19 @@ internal static class CheckOcrVisionReadParser
 
         if (candidates.Count > 0)
         {
+            if (micrCheckHint is { Length: > 0 } hint)
+            {
+                var aligned = candidates.Where(c => CanonicalCheckDigitsEqual(c.number, hint)).ToList();
+                if (aligned.Count > 0)
+                {
+                    var bestAligned = aligned
+                        .OrderBy(x => x.number.Length)
+                        .ThenByDescending(x => x.score)
+                        .First();
+                    return (bestAligned.number, Math.Clamp(bestAligned.score + 0.08, 0.22, 0.92));
+                }
+            }
+
             var best = candidates
                 .OrderByDescending(x => x.score)
                 .ThenByDescending(x => x.number.Length)
@@ -459,7 +507,7 @@ internal static class CheckOcrVisionReadParser
         if (printedMatch.Success)
         {
             var v = printedMatch.Groups[1].Value.Trim();
-            if (micrCorpusForRoutingFilter is not null && LooksLikeMisreadRoutingDigits(v, micrCorpusForRoutingFilter))
+            if (LooksLikeMisreadRoutingDigits(v, routingMisreadCorpus))
                 return (null, 0.1);
             if (v.Length == 5 && Regex.IsMatch(printedText, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(v)}(?:-\d{{4}})?\b"))
                 return (null, 0.1);

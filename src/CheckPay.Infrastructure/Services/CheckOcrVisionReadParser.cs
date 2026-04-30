@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using CheckPay.Application.Common.Models;
 
@@ -23,10 +24,22 @@ internal static class CheckOcrVisionReadParser
 
     private static readonly Regex TailDigitRunsRegex = new(@"\d{4,}", RegexOptions.Compiled);
 
-    // MICR 行格式：⑆路由号⑆ ⑈账号⑈ 支票号（或简化版数字序列）
+    // MICR 行格式：⑆路由号⑆ ⑈账号⑈ 支票号（或简化版数字序列）；⑈ 前可为 4~9 位（含分行末行支票号）
     private static readonly Regex MicrCheckNumberRegex = new(
-        @"(?:⑆[0-9⑆⑈ ]+⑈[0-9⑆⑈ ]+\s+|[⑆⑈])([0-9]{4,6})\s*$",
+        @"(?:⑆[0-9⑆⑈ ]+⑈[0-9⑆⑈ ]+\s+|[⑆⑈])([0-9]{4,9})\s*$",
         RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /// <summary>E13B transit 符号（U+2446）包裹的 9 位路由号。</summary>
+    private static readonly Regex E13bTransitRoutingRegex = new(@"⑆(\d{9})⑆", RegexOptions.Compiled);
+
+    private static readonly Regex E13bOnUsAccountRegex = new(@"⑈(\d{4,17})⑈", RegexOptions.Compiled);
+
+    private static readonly Regex MicrCheckTrailingOnUsRegex = new(@"(\d{4,9})⑈", RegexOptions.Compiled);
+
+    /// <summary>行末「州缩写 + 空格 + 5 位邮编」——其中的 5 位常被误当成支票号。</summary>
+    private static readonly Regex UsStateZipLineRegex = new(
+        @"(?i)\b[A-Z]{2}\s+(?<zip>\d{5})(?:\s|$|,)",
+        RegexOptions.Compiled);
 
     private static readonly Regex PrintedCheckNumberRegex = new(
         @"(?:check\s*(?:no\.?|number|#)\s*:?\s*|^|\s)(\d{4,6})(?:\s|$)",
@@ -122,6 +135,13 @@ internal static class CheckOcrVisionReadParser
 
         var micrMatch = MicrCheckNumberRegex.Match(micrText);
         var micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
+        if (micrNumber is null)
+        {
+            var onUs = MicrCheckTrailingOnUsRegex.Matches(micrText);
+            if (onUs.Count > 0)
+                micrNumber = onUs[^1].Groups[1].Value.Trim();
+        }
+
         var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText);
         var printedNumber = printedCandidate.number;
         var printedScore = printedCandidate.score;
@@ -149,7 +169,10 @@ internal static class CheckOcrVisionReadParser
         var micrMatch = MicrCheckNumberRegex.Match(text);
         var printedMatch = PrintedCheckNumberRegex.Match(text);
         var micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
-        var printedNumber = printedMatch.Success ? printedMatch.Groups[1].Value.Trim() : null;
+        string? printedNumber = printedMatch.Success ? printedMatch.Groups[1].Value.Trim() : null;
+        if (printedNumber is not null && printedNumber.Length == 5
+            && Regex.IsMatch(text, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(printedNumber)}\b"))
+            printedNumber = null;
 
         if (micrNumber != null && printedNumber != null)
         {
@@ -162,6 +185,7 @@ internal static class CheckOcrVisionReadParser
             return (micrNumber, 0.72);
         if (printedNumber != null)
             return (printedNumber, 0.62);
+
         return (string.Empty, 0.1);
     }
 
@@ -180,6 +204,10 @@ internal static class CheckOcrVisionReadParser
 
                 var number = match.Groups["num"].Value.Trim();
                 if (number.Length is < 4 or > 8)
+                    continue;
+
+                if (UsStateZipLineRegex.Match(line.Text) is { Success: true } zipM
+                    && string.Equals(zipM.Groups["zip"].Value, number, StringComparison.Ordinal))
                     continue;
 
                 var score = 0.30;
@@ -213,7 +241,12 @@ internal static class CheckOcrVisionReadParser
 
         var printedMatch = PrintedCheckNumberRegex.Match(printedText);
         if (printedMatch.Success)
-            return (printedMatch.Groups[1].Value.Trim(), 0.62);
+        {
+            var v = printedMatch.Groups[1].Value.Trim();
+            if (v.Length == 5 && Regex.IsMatch(printedText, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(v)}\b"))
+                return (null, 0.1);
+            return (v, 0.62);
+        }
 
         return (null, 0.1);
     }
@@ -303,7 +336,7 @@ internal static class CheckOcrVisionReadParser
             if (!m.Success)
                 continue;
 
-            if (!DateTime.TryParse(m.Value, out var dt))
+            if (!DateTime.TryParse(m.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
                 continue;
 
             var score = 0.62;
@@ -311,6 +344,10 @@ internal static class CheckOcrVisionReadParser
                 score += 0.18;
             if (line.NormCenterY < 0.45 && line.NormCenterX < 0.6)
                 score += 0.06;
+            if (Regex.IsMatch(line.Text, @"(?i)\bdate\b"))
+                score += 0.2;
+            if (Regex.IsMatch(line.Text, @"(?i)(?!date\b)[a-z]{4,30}\s+\d{1,2}/\d{1,2}/\d{2,4}\b"))
+                score -= 0.42;
 
             if (score > bestScore)
             {
@@ -331,7 +368,7 @@ internal static class CheckOcrVisionReadParser
         if (!match.Success)
             return (null, 0.1);
 
-        if (DateTime.TryParse(match.Value, out var dt))
+        if (DateTime.TryParse(match.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
             return (dt, 0.82);
 
         return (null, 0.1);
@@ -345,6 +382,36 @@ internal static class CheckOcrVisionReadParser
         text = NormalizeMicrLikeText(text);
         var tailStart = Math.Max(0, text.Length - 400);
         var tail = text[tailStart..];
+
+        // 0) E13B transit 符号明确包裹的路由号（避免全文拼接数字后多个 ABA 合法窗误选）
+        Match? lastTransit = null;
+        foreach (Match m in E13bTransitRoutingRegex.Matches(text))
+        {
+            if (AbaRoutingNumberValidator.IsValid(m.Groups[1].Value))
+                lastTransit = m;
+        }
+
+        if (lastTransit is not null)
+        {
+            var rt = lastTransit.Groups[1].Value;
+            string? account = null;
+            foreach (Match am in E13bOnUsAccountRegex.Matches(text))
+            {
+                var cand = am.Groups[1].Value;
+                if (cand.Length >= 8)
+                {
+                    account = cand;
+                    break;
+                }
+            }
+
+            account ??= E13bOnUsAccountRegex.Match(text) is { Success: true } firstOnUs
+                ? firstOnUs.Groups[1].Value
+                : null;
+
+            var micrSnip = text.Length <= 160 ? text.Trim() : text[(text.Length - 160)..].Trim();
+            return new MicrHeuristicParseResult(rt, account, micrSnip, 0.9, account != null ? 0.68 : 0.35, 0.88, true, "e13b_transit");
+        }
 
         // 1) 底部行常见「路由 账号 支票号」三连数字（E13B 常被读成空格分隔）
         var lines = tail.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
@@ -379,7 +446,13 @@ internal static class CheckOcrVisionReadParser
 
         if (abaWindows.Count > 0)
         {
-            var best = abaWindows.MaxBy(x => x.Start);
+            static bool HasE13bTransitDelimiters(string src, string routing) =>
+                src.Contains($"⑆{routing}⑆", StringComparison.Ordinal);
+
+            var explicitMarked = abaWindows.Where(w => HasE13bTransitDelimiters(text, w.Routing)).ToList();
+            var best = explicitMarked.Count > 0
+                ? explicitMarked.MaxBy(x => x.Start)
+                : abaWindows.MaxBy(x => x.Start);
             var routing = best.Routing;
             var digitsRuns = TailDigitRunsRegex.Matches(tail).Cast<Match>().Select(x => x.Value).ToList();
             string? account = null;
@@ -556,6 +629,9 @@ internal static class CheckOcrVisionReadParser
         if (string.IsNullOrWhiteSpace(text))
             return 0.0;
         var normalized = NormalizeSpaces(text);
+        var t = normalized.Trim();
+        if (Regex.IsMatch(t, @"^(?i)(pay(\s+to(\s+the)?)?|to\s+the|order\s+of|for|dollars|deposits|photo|mp)$"))
+            return 0.0;
         var lower = normalized.ToLowerInvariant();
         var score = 0.3;
         if (lower.Contains("bank", StringComparison.Ordinal))

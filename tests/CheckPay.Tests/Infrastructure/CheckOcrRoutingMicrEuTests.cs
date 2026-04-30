@@ -59,6 +59,59 @@ public class CheckOcrRoutingMicrEuTests
     }
 
     [Fact]
+    public void ParseMicrHeuristic_E13bTransit_ExtractsRoutingDespiteOtherValidAbaDigits()
+    {
+        // 全文中可出现多段 ABA 合法 9 位数字；E13B transit（U+2446）定界符内的路由应优先
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var text =
+            """
+            Bushido II LLC
+            1408
+            Summerville, SC 29485
+            noise 140850055 noise
+            """ + $"{onUs}001408{onUs} {transit}021000021{transit}\n562203631{onUs}\n";
+        var r = CheckOcrVisionReadParser.ParseMicrHeuristic(text);
+        Assert.Equal("021000021", r.RoutingNumber);
+        Assert.Equal("e13b_transit", r.RoutingSelectionMode);
+        Assert.True(r.RoutingAbaChecksumValid);
+    }
+
+    [Fact]
+    public void ParseCheckNumber_SkipsZipAndUsesLastOnUsBlock()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{onUs}001408{onUs} {transit}021000021{transit}";
+        var micrLine2 = $"562203631{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("Summerville, SC 29485", 0.25, 0.14, 0.12, 0.16, 0.05, 0.45),
+            new ReadOcrLine(micrLine1, 0.5, 0.88, 0.86, 0.90, 0.1, 0.9),
+            new ReadOcrLine(micrLine2, 0.5, 0.92, 0.91, 0.93, 0.1, 0.9)
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1000, 1000);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("562203631", cn);
+    }
+
+    [Fact]
+    public void ParseDate_PrefersDateKeywordLineOverGarbageInlineDate()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("DATE 3/30/26", 0.12, 0.16, 0.14, 0.18, 0.05, 0.35),
+            new ReadOcrLine("Inte 2/9/08/", 0.12, 0.28, 0.26, 0.30, 0.05, 0.35)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
+        var (dt, _) = CheckOcrVisionReadParser.ParseDate(layout, CheckOcrParsingProfile.Default);
+        Assert.NotNull(dt);
+        Assert.Equal(3, dt.Value.Month);
+        Assert.Equal(30, dt.Value.Day);
+    }
+
+    [Fact]
     public void ParseMicrHeuristicBottomBand_PicksRoutingFromBottomArea()
     {
         var lines = new[]

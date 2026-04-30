@@ -115,7 +115,7 @@ public class CheckOcrRoutingMicrEuTests
     }
 
     [Fact]
-    public void ParseCheckNumber_SkipsZipPlus4AndUsesTenDigitExternalOnUs()
+    public void ParseCheckNumber_SkipsZipPlus4_BracketedShortIsCheckWhenAccountTenPlus()
     {
         const char transit = '\u2446';
         const char onUs = '\u2448';
@@ -128,7 +128,25 @@ public class CheckOcrRoutingMicrEuTests
         var full = string.Join("\n", lines.Select(l => l.Text));
         var layout = new ReadOcrLayout(full, lines, 1000, 1000);
         var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
-        Assert.Equal("2078288384", cn);
+        Assert.Equal("002594", cn);
+        var micrR = CheckOcrVisionReadParser.ParseMicrHeuristic(micr);
+        Assert.Equal("2078288384", micrR.AccountNumber);
+    }
+
+    [Fact]
+    public void ParseCheckNumber_RejectsPrintedRoutingLeadingZeroTrimArtifact()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micr = $"{onUs}002594{onUs} {transit}061000227{transit} 2078288384{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("61000227", 0.88, 0.12, 0.10, 0.14, 0.82, 0.96),
+            new ReadOcrLine(micr, 0.5, 0.88, 0.86, 0.90, 0.1, 0.9)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("002594", cn);
     }
 
     [Fact]

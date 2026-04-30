@@ -88,6 +88,120 @@ internal static class CheckOcrVisionReadParser
     private static bool LooksLikeMicrInkLine(string text) =>
         text.Contains('⑆', StringComparison.Ordinal) || text.Contains('⑈', StringComparison.Ordinal);
 
+    /// <summary>「⑈左段⑈ ⑆路由⑆ 右段⑈」：按位数将较短段视为支票号、较长段（通常 ≥8）视为账号。</summary>
+    private static bool TryAssignMicrCheckVsAccountByLength(string leftDigits, string rightDigits, out string? checkDigits, out string? accountDigits)
+    {
+        checkDigits = null;
+        accountDigits = null;
+        var L = leftDigits.Length;
+        var R = rightDigits.Length;
+        // 账号常见 ≥10 位；6+9 等组合在多家银行为「账号片段 + 支票号」，不能单凭长短互换（会误判 Chase 等）
+        if (Math.Max(L, R) < 10)
+            return false;
+        if (L <= 7 && R >= 8)
+        {
+            checkDigits = leftDigits;
+            accountDigits = rightDigits;
+            return true;
+        }
+
+        if (R <= 7 && L >= 8)
+        {
+            checkDigits = rightDigits;
+            accountDigits = leftDigits;
+            return true;
+        }
+
+        if (L >= 8 && R >= 8)
+        {
+            if (L > R)
+            {
+                accountDigits = leftDigits;
+                checkDigits = rightDigits;
+                return true;
+            }
+
+            if (R > L)
+            {
+                accountDigits = rightDigits;
+                checkDigits = leftDigits;
+                return true;
+            }
+
+            accountDigits = rightDigits;
+            checkDigits = leftDigits;
+            return true;
+        }
+
+        if (L >= 8 && R < 8)
+        {
+            accountDigits = leftDigits;
+            checkDigits = rightDigits;
+            return true;
+        }
+
+        if (R >= 8 && L < 8)
+        {
+            accountDigits = rightDigits;
+            checkDigits = leftDigits;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>在已归一化文本中，按「⑈…⑈ ⑆9位路由⑆ …⑈」提取支票号（与账号）；路由须通过 ABA。</summary>
+    private static bool TryClassifyOnUsDigitsAroundRouting(string text, string routing9, out string? checkDigits, out string? accountDigits)
+    {
+        checkDigits = null;
+        accountDigits = null;
+        if (routing9.Length != 9)
+            return false;
+        var m = Regex.Match(text, $@"⑈(\d{{4,17}})⑈\s*⑆\s*{Regex.Escape(routing9)}\s*⑆\s*(\d{{4,17}})⑈");
+        if (!m.Success)
+            return false;
+        return TryAssignMicrCheckVsAccountByLength(m.Groups[1].Value, m.Groups[2].Value, out checkDigits, out accountDigits);
+    }
+
+    /// <summary>从 MICR 文本中解析「磁墨支票号」（不含印刷号通道）；命中 ⑆…⑆ 两侧 on-us 时优先于末段 ⑈ 启发式。</summary>
+    private static string? TryExtractMicrCheckBracketedAroundTransit(string? micrText)
+    {
+        if (string.IsNullOrWhiteSpace(micrText))
+            return null;
+        var norm = NormalizeMicrLikeText(micrText);
+        foreach (Match tm in E13bTransitRoutingRegex.Matches(norm))
+        {
+            var rt = tm.Groups[1].Value;
+            if (!AbaRoutingNumberValidator.IsValid(rt))
+                continue;
+            if (TryClassifyOnUsDigitsAroundRouting(norm, rt, out var check, out _) && !string.IsNullOrEmpty(check))
+                return check;
+        }
+
+        return null;
+    }
+
+    /// <summary>印刷号候选是否像「路由号去前导 0」误读（如 061000227 → 61000227）。</summary>
+    private static bool LooksLikeMisreadRoutingDigits(string number, string micrCorpus)
+    {
+        if (number.Length is < 6 or > 8)
+            return false;
+        var norm = NormalizeMicrLikeText(micrCorpus);
+        foreach (Match tm in E13bTransitRoutingRegex.Matches(norm))
+        {
+            var rt = tm.Groups[1].Value;
+            if (rt.Length != 9 || !AbaRoutingNumberValidator.IsValid(rt))
+                continue;
+            if (string.Equals(number, rt, StringComparison.Ordinal))
+                return true;
+            var trimmed = rt.TrimStart('0');
+            if (trimmed.Length > 0 && string.Equals(number, trimmed, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     /// <summary>从全文按行提取含 E13B 磁墨符号的行，供 <see cref="MicrLineRaw"/>（无磁墨行时返回 null）。</summary>
     public static string? TryBuildMicrLineRawFromPlainText(string? text)
     {
@@ -199,16 +313,22 @@ internal static class CheckOcrVisionReadParser
         if (string.IsNullOrWhiteSpace(printedText))
             printedText = layout.FullText;
 
-        var micrMatch = MicrCheckNumberRegex.Match(micrText);
-        var micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
+        var micrNorm = NormalizeMicrLikeText(micrText);
+        var micrNumber = TryExtractMicrCheckBracketedAroundTransit(micrNorm);
         if (micrNumber is null)
         {
-            var onUs = MicrCheckTrailingOnUsRegex.Matches(micrText);
+            var micrMatch = MicrCheckNumberRegex.Match(micrNorm);
+            micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
+        }
+
+        if (micrNumber is null)
+        {
+            var onUs = MicrCheckTrailingOnUsRegex.Matches(micrNorm);
             if (onUs.Count > 0)
                 micrNumber = onUs[^1].Groups[1].Value.Trim();
         }
 
-        var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText);
+        var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText, micrNorm);
         var printedNumber = printedCandidate.number;
         var printedScore = printedCandidate.score;
 
@@ -232,10 +352,26 @@ internal static class CheckOcrVisionReadParser
 
     private static (string checkNumber, double confidence) ParseCheckNumberFullText(string text)
     {
-        var micrMatch = MicrCheckNumberRegex.Match(text);
+        var norm = NormalizeMicrLikeText(text);
+        var micrNumber = TryExtractMicrCheckBracketedAroundTransit(norm);
+        if (micrNumber is null)
+        {
+            var micrMatch = MicrCheckNumberRegex.Match(norm);
+            if (micrMatch.Success)
+                micrNumber = micrMatch.Groups[1].Value.Trim();
+        }
+
+        if (micrNumber is null)
+        {
+            var onUs = MicrCheckTrailingOnUsRegex.Matches(norm);
+            if (onUs.Count > 0)
+                micrNumber = onUs[^1].Groups[1].Value.Trim();
+        }
+
         var printedMatch = PrintedCheckNumberRegex.Match(text);
-        var micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
         string? printedNumber = printedMatch.Success ? printedMatch.Groups[1].Value.Trim() : null;
+        if (printedNumber is not null && LooksLikeMisreadRoutingDigits(printedNumber, norm))
+            printedNumber = null;
         if (printedNumber is not null && printedNumber.Length == 5
             && Regex.IsMatch(text, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(printedNumber)}(?:-\d{{4}})?\b"))
             printedNumber = null;
@@ -258,7 +394,11 @@ internal static class CheckOcrVisionReadParser
         return (string.Empty, 0.1);
     }
 
-    private static (string? number, double score) PickBestPrintedCheckCandidate(ReadOcrLayout layout, CheckOcrParsingProfile profile, string printedText)
+    private static (string? number, double score) PickBestPrintedCheckCandidate(
+        ReadOcrLayout layout,
+        CheckOcrParsingProfile profile,
+        string printedText,
+        string? micrCorpusForRoutingFilter = null)
     {
         var candidates = new List<(string number, double score)>();
         var printedRegion = profile.PrintedCheckPriorRegion;
@@ -282,6 +422,9 @@ internal static class CheckOcrVisionReadParser
                     if (zipM.Groups["zip4"].Value is { Length: 4 } z4 && string.Equals(z4, number, StringComparison.Ordinal))
                         continue;
                 }
+
+                if (micrCorpusForRoutingFilter is not null && LooksLikeMisreadRoutingDigits(number, micrCorpusForRoutingFilter))
+                    continue;
 
                 var score = 0.30;
                 if (printedRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
@@ -316,6 +459,8 @@ internal static class CheckOcrVisionReadParser
         if (printedMatch.Success)
         {
             var v = printedMatch.Groups[1].Value.Trim();
+            if (micrCorpusForRoutingFilter is not null && LooksLikeMisreadRoutingDigits(v, micrCorpusForRoutingFilter))
+                return (null, 0.1);
             if (v.Length == 5 && Regex.IsMatch(printedText, $@"(?i)\b[A-Z]{{2}}\s+{Regex.Escape(v)}(?:-\d{{4}})?\b"))
                 return (null, 0.1);
             if (v.Length == 4 && Regex.IsMatch(printedText, $@"(?i)\b[A-Z]{{2}}\s+\d{{5}}-{Regex.Escape(v)}\b"))
@@ -470,13 +615,18 @@ internal static class CheckOcrVisionReadParser
         {
             var rt = lastTransit.Groups[1].Value;
             string? account = null;
-            foreach (Match am in E13bOnUsAccountRegex.Matches(text))
+            if (TryClassifyOnUsDigitsAroundRouting(text, rt, out _, out var acBracket) && !string.IsNullOrEmpty(acBracket))
+                account = acBracket;
+            if (account is null)
             {
-                var cand = am.Groups[1].Value;
-                if (cand.Length >= 8)
+                foreach (Match am in E13bOnUsAccountRegex.Matches(text))
                 {
-                    account = cand;
-                    break;
+                    var cand = am.Groups[1].Value;
+                    if (cand.Length >= 8)
+                    {
+                        account = cand;
+                        break;
+                    }
                 }
             }
 

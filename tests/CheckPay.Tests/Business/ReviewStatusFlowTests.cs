@@ -176,6 +176,17 @@ public class ReviewStatusFlowTests
     public async Task ConfirmReview_ShouldCreateAuditLog()
     {
         await using var ctx = CreateContext();
+        ctx.Users.Add(new User
+        {
+            Email = "admin@checkpay.local",
+            DisplayName = "Admin",
+            EntraId = "admin",
+            Role = UserRole.Admin,
+            PasswordHash = "x",
+            IsActive = true
+        });
+        await ctx.SaveChangesAsync();
+
         var service = new AuditLogService(ctx);
 
         var checkId = Guid.NewGuid();

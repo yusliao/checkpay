@@ -117,4 +117,20 @@ public class CheckOcrVisionReadParserTests
         Assert.Equal("123 Main Street, New York NY 10001", address);
         Assert.True(confidence >= 0.6);
     }
+
+    [Fact]
+    public void ParseAccountAddress_IgnoresNearbyAmountWordsLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("123 Main Street", 0.24, 0.56, 0.52, 0.60, 0.06, 0.44),
+            new ReadOcrLine("four thousand five hundred only", 0.24, 0.60, 0.58, 0.62, 0.06, 0.56),
+            new ReadOcrLine("New York NY 10001", 0.26, 0.62, 0.60, 0.64, 0.06, 0.46)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (address, _) = CheckOcrVisionReadParser.ParseAccountAddress(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("123 Main Street, New York NY 10001", address);
+    }
 }

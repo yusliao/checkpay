@@ -69,6 +69,9 @@ internal static class CheckOcrVisionReadParser
     private static readonly Regex AddressLineRegex = new(
         @"\b\d{1,6}\s+[A-Z0-9][A-Z0-9\s\.\-#]{3,}\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex AmountWordsLikeRegex = new(
+        @"(?i)\b(?:dollars?|only|and|thousand|hundred|million|cents?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b",
+        RegexOptions.Compiled);
 
     private static readonly Regex NameTokenRegex = new(
         @"\b[A-Z][A-Za-z'\-]{1,}\b",
@@ -929,12 +932,43 @@ internal static class CheckOcrVisionReadParser
 
         var block = regionLines
             .Where(l => Math.Abs(l.NormCenterY - topNorm.NormCenterY) <= 0.12)
+            .Where(l => ShouldIncludeInAddressBlock(l.Text))
             .Select(l => l.Text)
             .Distinct()
             .Take(3)
             .ToList();
         var merged = NormalizeSpaces(string.Join(", ", block));
         return (merged, Math.Clamp(scored[0].Item2 + (block.Count > 1 ? 0.06 : 0.0), 0.22, 0.88));
+    }
+
+    private static bool ShouldIncludeInAddressBlock(string text)
+    {
+        var normalized = NormalizeSpaces(text);
+        if (normalized.Length < 3)
+            return false;
+        if (LooksLikeAmountWordsOnly(normalized))
+            return false;
+        return true;
+    }
+
+    private static bool LooksLikeAmountWordsOnly(string text)
+    {
+        if (Regex.IsMatch(text, @"[$]|\d{1,3}(?:,\d{3})*(?:\.\d{2})?"))
+            return false;
+
+        var matches = AmountWordsLikeRegex.Matches(text);
+        if (matches.Count < 2)
+            return false;
+
+        var lettersOnly = Regex.Replace(text, @"[^A-Za-z\s\-]", " ");
+        var tokens = lettersOnly
+            .Split(new[] { ' ', '-' }, StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (tokens.Count == 0)
+            return false;
+
+        var amountWordTokens = tokens.Count(t => AmountWordsLikeRegex.IsMatch(t));
+        return amountWordTokens >= Math.Max(2, (int)Math.Ceiling(tokens.Count * 0.6));
     }
 
     private static double ScoreBankNameCandidate(ReadOcrLine line)

@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-04-30** - 地址字段抗干扰增强：`ParseAccountAddress` 合并相邻地址行时新增 `ShouldIncludeInAddressBlock` 过滤，剔除大写金额英文行（`thousand/hundred/dollars/only` 等）与非地址噪声，避免“金额行写在地址上方”被拼进 `AccountAddress`；新增单测 `ParseAccountAddress_IgnoresNearbyAmountWordsLine`
 - **2026-04-30** - 上传/复核页金额校验提示优化：当 `AmountValidationResult.IsConsistent=true` 但 `LegalAmountRaw` 未含英文大写金额文本（仅数字/符号）时，不再提示“手写金额校验一致”，改为“未识别到大写金额文本，需手动校验金额”；`CheckUpload.razor` 与 `CheckReview.razor` 同步生效（保留最后校验时间）
 - **2026-04-30** - 支票 Vision Read 解析：`CheckOcrVisionReadParser` 优先从 E13B transit 符号 `⑆9位路由⑆`（允许符号与数字间空格）提取 ABA；MICR 支票号支持末行 `数字…⑈`（取最后一处 on-us，最长 17 位）；印刷号候选排除「州 + 5 位邮编 + 可选 ZIP+4」行及扩展后 4 位；**MICR 区内若无 `⑆/⑈` 磁墨行则不信该区 `aba_sliding_window`/legacy 路由**，回退全文以免日期/金额拼成假 ABA；多段 ABA 时滑动窗仍优先带 `⑆` 定界符的窗；日期 `TryParse` 用 `InvariantCulture`；银行名过滤抬头碎片及「城市, ST 邮编」整行（无 `bank` 字样时）；**`micr_line_raw`**：`AzureOcrService` 优先 `TryResolveMicrLineRawFromLayout`（按行自下而上、可筛路由），其次 `TryBuildMicrLineRawFromPlainText`，最后才用启发式 `MicrLineRaw`；`Diagnostics` 增加 `micr_line_raw_source`（`layout`/`plain`/`heuristic`/`none`）
 - **2026-04-30** - MICR ⑆ 两侧 on-us 数字：`TryAssignMicrCheckVsAccountByLength` 仅当 `max(左,右)≥10` 时按位数启发式区分支票号与账号（如 Wells `002594` + `2078288384`）；更短两侧（如 Chase 6+9）不启用以免互换；印刷号通道过滤「ABA 去前导 0」误读（如 `061000227`→`61000227`）；`CheckOcrRoutingMicrEuTests` 覆盖上述；`ReviewStatusFlowTests.ConfirmReview_ShouldCreateAuditLog` 入库前种子管理员用户以匹配 `AuditLogService` 无 actor 则跳过写入的行为

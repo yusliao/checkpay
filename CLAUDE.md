@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-05-04** - **ACH 支票导出**（`/reports/ach-us`）：表格首列行复选 + 表头 `TriState` 全选（仅当前查询结果中尚未 `AchDebitSucceeded` 的行）；「批量标为扣款成功」二次确认后批量写 `ach_debit_succeeded=Y` 与时间戳，并逐条 `AuditLog`（`BatchAchMark=true`）；查询刷新时自动剔除已不在结果或已标 Y 的勾选
 - **2026-05-04** - **收款记录**已提交票面编辑：`CheckRecordSubmittedEditDialog` 弹框编辑支票号/金额/日期/客户与手机号/ACH 与抬头等（与上传入库字段对齐）；**仅** `SubmittedAt` 已填且 **`AchDebitSucceeded` 为 false** 时可编辑；`Sales,USFinance,Admin`；同银行支票号唯一校验、主数据与公司名警告重算、`AuditLog` 更新；列表「操作」列与抽屉「编辑票面信息」入口；设计文档 [docs/收款系统_页面交互设计_V1.0.md](docs/收款系统_页面交互设计_V1.0.md) 增补 4.2.1
 - **2026-05-04** - **收款记录**（`/records`）与**客户管理**（`/customers`）：列表改为数据库分页（`Count` + `Skip`/`Take`），表格下展示总条数、每页 10/20/50 与 `MudPagination`；收款记录在抽屉内操作后通过 `RefreshSelectedRecordAsync` 按 ID 重载详情，避免当前页不含该行时详情丢失
 - **2026-05-04** - 公司名称 Vision 解析：`CheckOcrParsingProfile` 新增 `companyNamePriorRegion`（默认 Pay to 上方 `normY≈0.20~0.50` 窄带，模板 JSON 可覆盖）；`CheckOcrVisionReadParser.ParseCompanyName` 对 **INC./LLC/CORP/LTD** 等法人后缀强加权、对 GROUP/COMPANY 等弱加权，与 `PayToOrderOf` 解耦；`ScoreAccountHolderCandidate` 对同类后缀略加权；`AzureOcrService` 单独写入 `OcrResultDto.CompanyName` 与 `ConfidenceScores["CompanyName"]`，`Diagnostics` 增加 `company_name_source`（`vision_company_region` / `merged_holder_payto`）；单测 `ParseCompanyName_PrefersLineWithIncOverWeakerGroupStyleName` 等；排查文档 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md) 增补说明

@@ -16,7 +16,7 @@
 
 <MudText Typo="Typo.h4" GutterBottom="true">ACH 支票导出（美国财务）</MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-    只读列表，按上传日期筛选；可下载 CSV 供银行界面粘贴。美财/管理员可标记 ACH 扣款成功；待核查状态下可撤销成功标记（银行拒付/冲正）或撤销支票与扣款的关联。
+    按上传日期筛选；可下载 CSV 供银行界面粘贴。支持行复选与表头三态全选（仅未标 Y 的可选），批量标记 ACH 扣款成功；亦可逐行「标为成功」。待核查状态下可撤销成功标记（银行拒付/冲正）或撤销支票与扣款的关联。
 </MudText>
 
 <MudPaper Class="pa-4 mb-4">
@@ -45,8 +45,28 @@
     </MudGrid>
 </MudPaper>
 
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" Spacing="2" Wrap="Wrap.Wrap">
+    <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.TaskAlt"
+               OnClick="BatchMarkDebitSuccessAsync"
+               Disabled="@(!HasBatchEligibleSelection || _batchMarking || _loading)">
+        @(_batchMarking ? "处理中…" : $"批量标为扣款成功（{BatchEligibleSelectionCount}）")
+    </MudButton>
+    @if (_selectedIds.Count > 0)
+    {
+        <MudText Typo="Typo.caption" Color="Color.Secondary">
+            已勾选 @_selectedIds.Count 条；其中未标 Y 的 @BatchEligibleSelectionCount 条将参与批量标记
+        </MudText>
+    }
+</MudStack>
+
 <MudTable Items="_rows" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
     <HeaderContent>
+        <MudTh Style="width:52px">
+            <MudCheckBox T="bool?" TriState="true" Dense="true"
+                         Value="@_headerTriState"
+                         ValueChanged="OnHeaderTriChangedAsync"
+                         Disabled="@(!_rows.Any(r => !r.AchDebitSucceeded))" />
+        </MudTh>
         <MudTh>上传日期</MudTh>
         <MudTh>客户编号</MudTh>
         <MudTh>手机号</MudTh>
@@ -59,6 +79,11 @@
         <MudTh>操作</MudTh>
     </HeaderContent>
     <RowTemplate>
+        <MudTd @onclick:stopPropagation="true">
+            <MudCheckBox T="bool" Dense="true" Color="Color.Primary" Disabled="context.AchDebitSucceeded"
+                         Value="@_selectedIds.Contains(context.Id)"
+                         ValueChanged="@(v => ToggleRowSelectionAsync(context.Id, v))" />
+        </MudTd>
         <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
         <MudTd>@context.Customer.CustomerCode</MudTd>
         <MudTd>@CustomerDisplay.MobileOrDash(context.Customer.MobilePhone)</MudTd>
@@ -109,6 +134,15 @@
     private Guid? _revokingAchSuccessId;
     private string? _selectedPayee;
     private bool _restoredPayeeFromLocalStorage;
+
+    private readonly HashSet<Guid> _selectedIds = new();
+    private bool? _headerTriState;
+    private bool _batchMarking;
+
+    private int BatchEligibleSelectionCount =>
+        _rows.Count(r => _selectedIds.Contains(r.Id) && !r.AchDebitSucceeded);
+
+    private bool HasBatchEligibleSelection => BatchEligibleSelectionCount > 0;
 
     private const string CheungKongPayee = "CHEUNG KONG HOLDING INC";
     private const string MaxwellPayee = "MAXWELL TRADING";
@@ -171,7 +205,129 @@
             .ToListAsync();
 
         _failedRows = _rows.Where(c => c.SubmittedAt != null && !c.AchDebitSucceeded).ToList();
+        PruneSelectionToCurrentRows();
+        SyncHeaderTriFromSelection();
         _loading = false;
+    }
+
+    private void PruneSelectionToCurrentRows()
+    {
+        var byId = _rows.ToDictionary(r => r.Id);
+        _selectedIds.RemoveWhere(id =>
+            !byId.TryGetValue(id, out var r) || r.AchDebitSucceeded);
+    }
+
+    private void SyncHeaderTriFromSelection()
+    {
+        var eligible = _rows.Where(r => !r.AchDebitSucceeded).ToList();
+        if (eligible.Count == 0)
+        {
+            _headerTriState = false;
+            return;
+        }
+
+        var selectedEligible = eligible.Count(r => _selectedIds.Contains(r.Id));
+        _headerTriState = selectedEligible == 0 ? false : selectedEligible == eligible.Count ? true : null;
+    }
+
+    private Task ToggleRowSelectionAsync(Guid id, bool selected)
+    {
+        if (selected)
+            _selectedIds.Add(id);
+        else
+            _selectedIds.Remove(id);
+        SyncHeaderTriFromSelection();
+        return Task.CompletedTask;
+    }
+
+    private Task OnHeaderTriChangedAsync(bool? value)
+    {
+        if (value == true)
+        {
+            foreach (var r in _rows.Where(x => !x.AchDebitSucceeded))
+                _selectedIds.Add(r.Id);
+        }
+        else
+        {
+            foreach (var r in _rows)
+                _selectedIds.Remove(r.Id);
+        }
+
+        SyncHeaderTriFromSelection();
+        return Task.CompletedTask;
+    }
+
+    private async Task BatchMarkDebitSuccessAsync()
+    {
+        if (!HasBatchEligibleSelection || _batchMarking) return;
+
+        var eligibleIds = _rows.Where(r => _selectedIds.Contains(r.Id) && !r.AchDebitSucceeded).Select(r => r.Id).ToList();
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small };
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: "批量标记扣款成功",
+            message: $"将把 {eligibleIds.Count} 条支票标记为 ACH 扣款成功（Y）。已标记成功的不会重复处理。确定继续？",
+            yesText: "确定标记",
+            cancelText: "取消",
+            options: options);
+        if (confirmed != true) return;
+
+        _batchMarking = true;
+        try
+        {
+            var trackeds = await DbContext.CheckRecords
+                .Where(c => eligibleIds.Contains(c.Id))
+                .ToListAsync();
+
+            var now = DateTime.UtcNow;
+            var beforeSnapshots = new List<(Guid Id, bool Succeeded, DateTime? At)>();
+            foreach (var t in trackeds)
+            {
+                if (t.AchDebitSucceeded)
+                    continue;
+                beforeSnapshots.Add((t.Id, t.AchDebitSucceeded, t.AchDebitSucceededAt));
+                t.AchDebitSucceeded = true;
+                t.AchDebitSucceededAt = now;
+                t.AchDebitSuccessRevokedAt = null;
+                t.UpdatedAt = now;
+            }
+
+            if (beforeSnapshots.Count == 0)
+            {
+                Snackbar.Add("所选记录在刷新后已全部为扣款成功，未做更改。", Severity.Info);
+                await LoadAsync();
+                return;
+            }
+
+            try
+            {
+                await DbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请刷新后重试。", Severity.Error);
+                await LoadAsync();
+                return;
+            }
+
+            foreach (var snap in beforeSnapshots)
+            {
+                await AuditLog.LogAsync(
+                    AuditAction.Update,
+                    "CheckRecord",
+                    snap.Id,
+                    new { AchDebitSucceeded = snap.Succeeded, snap.At },
+                    new { AchDebitSucceeded = true, AchDebitSucceededAt = now, BatchAchMark = true });
+            }
+
+            Snackbar.Add($"已批量标记 {beforeSnapshots.Count} 条扣款成功", Severity.Success);
+            _selectedIds.Clear();
+            SyncHeaderTriFromSelection();
+            await LoadAsync();
+        }
+        finally
+        {
+            _batchMarking = false;
+        }
     }
 
     private async Task OnPayeeChangedAsync(string? payee)

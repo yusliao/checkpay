@@ -40,6 +40,7 @@ public sealed class CheckOcrParsingProfile
     [JsonPropertyName("companyNamePriorRegion")]
     public NormRegion? CompanyNamePriorRegion { get; set; }
 
+    /// <summary>票面印刷地址（常在商号/INC 行下方：门牌+街道 与 城市 ST 邮编 两行）。</summary>
     [JsonPropertyName("accountAddressPriorRegion")]
     public NormRegion? AccountAddressPriorRegion { get; set; }
 
@@ -52,7 +53,7 @@ public sealed class CheckOcrParsingProfile
         BankNamePriorRegion = new NormRegion(0.0, 0.0, 0.62, 0.28),
         AccountHolderPriorRegion = new NormRegion(0.0, 0.22, 0.76, 0.62),
         CompanyNamePriorRegion = new NormRegion(0.0, 0.0, 0.99, 0.62),
-        AccountAddressPriorRegion = new NormRegion(0.0, 0.28, 0.80, 0.72)
+        AccountAddressPriorRegion = new NormRegion(0.0, 0.22, 0.90, 0.74)
     };
 
     public static readonly CheckOcrParsingProfile Default = CreateDefault();

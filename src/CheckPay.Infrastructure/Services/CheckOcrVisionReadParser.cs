@@ -999,28 +999,52 @@ internal static class CheckOcrVisionReadParser
         if (regionLines.Count == 0)
             return (null, 0.1);
 
-        var scored = regionLines
-            .Select(line => (line.Text, ScoreAddressCandidate(line.Text)))
-            .Where(x => x.Item2 > 0.38)
-            .OrderByDescending(x => x.Item2)
+        var scoredLines = regionLines
+            .Select(line => (line, score: ScoreAddressCandidate(line.Text)))
+            .Where(x => x.score > 0.32)
             .ToList();
-        if (scored.Count == 0)
+        if (scoredLines.Count == 0)
             return (null, 0.1);
 
-        var top = scored[0].Text;
-        var topNorm = regionLines.FirstOrDefault(l => string.Equals(l.Text, top, StringComparison.Ordinal));
-        if (topNorm is null)
-            return (NormalizeSpaces(top), Math.Clamp(scored[0].Item2, 0.2, 0.84));
+        var seed = scoredLines
+            .OrderByDescending(x => x.score >= 0.38 ? 1 : 0)
+            .ThenByDescending(x => x.score)
+            .First();
 
-        var block = regionLines
-            .Where(l => Math.Abs(l.NormCenterY - topNorm.NormCenterY) <= 0.12)
+        const double yLink = 0.28;
+        var pool = scoredLines.Select(x => x.line).ToList();
+        var cluster = new List<ReadOcrLine> { seed.line };
+        var queued = new HashSet<ReadOcrLine>();
+        queued.Add(seed.line);
+        var q = new Queue<ReadOcrLine>();
+        q.Enqueue(seed.line);
+        while (q.Count > 0)
+        {
+            var cur = q.Dequeue();
+            foreach (var other in pool)
+            {
+                if (queued.Contains(other))
+                    continue;
+                if (Math.Abs(other.NormCenterY - cur.NormCenterY) > yLink)
+                    continue;
+                queued.Add(other);
+                cluster.Add(other);
+                q.Enqueue(other);
+            }
+        }
+
+        var block = cluster
             .Where(l => ShouldIncludeInAddressBlock(l.Text))
-            .Select(l => l.Text)
             .Distinct()
-            .Take(3)
+            .OrderBy(l => l.NormTop)
+            .Take(4)
+            .Select(l => l.Text)
             .ToList();
+        if (block.Count == 0)
+            return (null, 0.1);
+
         var merged = NormalizeSpaces(string.Join(", ", block));
-        return (merged, Math.Clamp(scored[0].Item2 + (block.Count > 1 ? 0.06 : 0.0), 0.22, 0.88));
+        return (merged, Math.Clamp(seed.score + (block.Count > 1 ? 0.06 : 0.0), 0.22, 0.88));
     }
 
     private static bool ShouldIncludeInAddressBlock(string text)
@@ -1223,6 +1247,9 @@ internal static class CheckOcrVisionReadParser
         var normalized = NormalizeSpaces(text);
         var lower = normalized.ToLowerInvariant();
         var score = 0.26;
+        // 印刷商号（INC/LLC…）常命中门牌形 AddressLineRegex，勿当地址种子
+        if (GetCorporateLegalSuffixBump(normalized) >= 0.44)
+            score -= 0.62;
         if (AddressLineRegex.IsMatch(normalized))
             score += 0.36;
         if (AddressStreetTokens.Any(token => Regex.IsMatch(lower, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase)))

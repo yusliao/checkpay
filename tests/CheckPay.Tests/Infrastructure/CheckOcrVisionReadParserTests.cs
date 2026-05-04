@@ -135,6 +135,38 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseAccountAddress_MergesStreetAndCityZipWithWiderNormYGap()
+    {
+        // Read 两行地址 normCenterY 间距可超过旧逻辑 0.12，仍应并成一条
+        var lines = new[]
+        {
+            new ReadOcrLine("1033 RANDOLPH ST STE 9", 0.22, 0.36, 0.34, 0.38, 0.10, 0.48),
+            new ReadOcrLine("THOMASVILLE NC 27360-5731", 0.22, 0.55, 0.52, 0.58, 0.10, 0.48)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (address, _) = CheckOcrVisionReadParser.ParseAccountAddress(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("1033 RANDOLPH ST STE 9, THOMASVILLE NC 27360-5731", address);
+    }
+
+    [Fact]
+    public void ParseAccountAddress_SkipsIncCompanyLineAndMergesStreetCityZip()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("168 CHINA GARDEN INC.", 0.22, 0.32, 0.30, 0.34, 0.10, 0.48),
+            new ReadOcrLine("1033 RANDOLPH ST STE 9", 0.22, 0.42, 0.40, 0.44, 0.10, 0.48),
+            new ReadOcrLine("THOMASVILLE NC 27360-5731", 0.22, 0.52, 0.50, 0.54, 0.10, 0.48)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (address, _) = CheckOcrVisionReadParser.ParseAccountAddress(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("1033 RANDOLPH ST STE 9, THOMASVILLE NC 27360-5731", address);
+    }
+
+    [Fact]
     public void ParseCompanyName_PrefersLineWithIncOverWeakerGroupStyleName()
     {
         var lines = new[]

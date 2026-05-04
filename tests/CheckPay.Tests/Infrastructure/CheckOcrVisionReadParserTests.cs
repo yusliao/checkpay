@@ -183,6 +183,34 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseCompanyName_FallbackFindsIncLineWhenOutsideTemplateCompanyBand()
+    {
+        // 票型把 company 带缩得过窄时，上半张回退仍应命中 INC 抬头
+        var narrowCompanyBand = CheckOcrParsingProfile.MergeDefaults(new CheckOcrParsingProfile
+        {
+            CompanyNamePriorRegion = new NormRegion(0.0, 0.0, 0.45, 0.62)
+        });
+        var lines = new[]
+        {
+            new ReadOcrLine("168 CHINA GARDEN INC.", 0.72, 0.15, 0.13, 0.17, 0.55, 0.88)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (company, _) = CheckOcrVisionReadParser.ParseCompanyName(layout, narrowCompanyBand);
+
+        Assert.Equal("168 CHINA GARDEN INC.", company);
+    }
+
+    [Fact]
+    public void ShouldSkipDiPayerNameForAccountHolder_WhenBankBrandingOrSameAsBank()
+    {
+        Assert.True(CheckOcrVisionReadParser.ShouldSkipDiPayerNameForAccountHolder("BANK OF AMERICA", "Bank Of America"));
+        Assert.True(CheckOcrVisionReadParser.ShouldSkipDiPayerNameForAccountHolder("  bank of america  ", null));
+        Assert.False(CheckOcrVisionReadParser.ShouldSkipDiPayerNameForAccountHolder("168 CHINA GARDEN INC.", "BANK OF AMERICA"));
+        Assert.False(CheckOcrVisionReadParser.ShouldSkipDiPayerNameForAccountHolder("Allance food Group", "BANK OF AMERICA"));
+    }
+
+    [Fact]
     public void ParseCompanyName_RejectsPlainStreetLineWithoutLegalSuffix()
     {
         var lines = new[]

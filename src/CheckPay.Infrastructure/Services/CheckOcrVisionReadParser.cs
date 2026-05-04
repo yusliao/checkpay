@@ -915,15 +915,15 @@ internal static class CheckOcrVisionReadParser
         if (region is null)
             return (null, 0.1);
 
-        var candidates = layout.Lines
-            .Where(line => region.Contains(line.NormCenterX, line.NormCenterY))
-            .Select(line => (line, score: ScoreCompanyNameCandidate(line)))
-            .Where(x => x.score > 0.30)
-            .OrderByDescending(x => x.score)
-            .ThenByDescending(x => GetCorporateLegalSuffixBump(x.line.Text))
-            .ThenByDescending(x => x.line.Text.Length)
-            .ThenBy(x => x.line.NormCenterY)
-            .ToList();
+        var candidates = RankCompanyNameCandidates(layout.Lines.Where(line => region.Contains(line.NormCenterX, line.NormCenterY)));
+        // 模板/几何把抬头挤出默认带时，在上半张（避开 MICR）再扫一遍
+        if (candidates.Count == 0)
+        {
+            candidates = RankCompanyNameCandidates(
+                layout.Lines.Where(line =>
+                    line.NormCenterY is >= 0.0 and <= 0.64
+                    && line.NormCenterX is >= 0.0 and <= 0.995));
+        }
 
         if (candidates.Count == 0)
             return (null, 0.1);
@@ -939,6 +939,30 @@ internal static class CheckOcrVisionReadParser
 
         return (NormalizeSpaces(best.line.Text), Math.Clamp(best.score, 0.22, 0.88));
     }
+
+    /// <summary>prebuilt-check.us 的 PayerName 常与付款行/Bank 混淆，勿覆盖 Vision 解析出的持有人。</summary>
+    internal static bool ShouldSkipDiPayerNameForAccountHolder(string? payerName, string? mergedBankName)
+    {
+        if (string.IsNullOrWhiteSpace(payerName))
+            return false;
+        var p = NormalizeSpaces(payerName.Trim());
+        if (LooksLikeDraweeInstitutionBrandingLine(p))
+            return true;
+        if (!string.IsNullOrWhiteSpace(mergedBankName)
+            && string.Equals(NormalizeSpaces(mergedBankName.Trim()), p, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
+    }
+
+    private static List<(ReadOcrLine line, double score)> RankCompanyNameCandidates(IEnumerable<ReadOcrLine> lines) =>
+        lines
+            .Select(line => (line, score: ScoreCompanyNameCandidate(line)))
+            .Where(x => x.score > 0.30)
+            .OrderByDescending(x => x.score)
+            .ThenByDescending(x => GetCorporateLegalSuffixBump(x.line.Text))
+            .ThenByDescending(x => x.line.Text.Length)
+            .ThenBy(x => x.line.NormCenterY)
+            .ToList();
 
     public static (string? accountAddress, double confidence) ParseAccountAddress(ReadOcrLayout layout, CheckOcrParsingProfile profile)
     {
@@ -1130,7 +1154,7 @@ internal static class CheckOcrVisionReadParser
             score -= 0.12;
 
         var cy = line.NormCenterY;
-        if (cy is >= 0.10 and <= 0.55)
+        if (cy is >= 0.10 and <= 0.62)
             score += 0.06;
         if (t.Length is >= 4 and <= 72)
             score += 0.04;

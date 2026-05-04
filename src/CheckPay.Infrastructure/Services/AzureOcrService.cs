@@ -462,8 +462,12 @@ public class AzureOcrService : IOcrService
 
         if (!string.IsNullOrWhiteSpace(di.PayerName))
         {
-            accountHolder = di.PayerName.Trim();
-            accountHolderConf = Math.Clamp(Math.Max(accountHolderConf, 0.68), 0.52, 0.88);
+            var payer = di.PayerName.Trim();
+            if (!CheckOcrVisionReadParser.ShouldSkipDiPayerNameForAccountHolder(payer, bankName))
+            {
+                accountHolder = payer;
+                accountHolderConf = Math.Clamp(Math.Max(accountHolderConf, 0.68), 0.52, 0.88);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(di.PayerAddress))

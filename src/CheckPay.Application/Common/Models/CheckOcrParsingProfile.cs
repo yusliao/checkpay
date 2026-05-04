@@ -51,7 +51,7 @@ public sealed class CheckOcrParsingProfile
         PrintedCheckPriorRegion = new NormRegion(0.52, 0.0, 1.0, 0.42),
         BankNamePriorRegion = new NormRegion(0.0, 0.0, 0.62, 0.28),
         AccountHolderPriorRegion = new NormRegion(0.0, 0.22, 0.76, 0.62),
-        CompanyNamePriorRegion = new NormRegion(0.0, 0.0, 0.88, 0.55),
+        CompanyNamePriorRegion = new NormRegion(0.0, 0.0, 0.99, 0.62),
         AccountAddressPriorRegion = new NormRegion(0.0, 0.28, 0.80, 0.72)
     };
 

@@ -915,16 +915,24 @@ internal static class CheckOcrVisionReadParser
         if (region is null)
             return (null, 0.1);
 
-        var candidates = RankCompanyNameCandidates(layout.Lines.Where(line => region.Contains(line.NormCenterX, line.NormCenterY)));
-        // 模板/几何把抬头挤出默认带时，在上半张（避开 MICR）再扫一遍
-        if (candidates.Count == 0)
-        {
-            candidates = RankCompanyNameCandidates(
-                layout.Lines.Where(line =>
-                    line.NormCenterY is >= 0.0 and <= 0.64
-                    && line.NormCenterX is >= 0.0 and <= 0.995));
-        }
+        // 区域带 ∪ 上半张：避免票型 region 过窄或 Read 将抬头行 normY 标到偏下时漏选
+        var inRegion = layout.Lines.Where(line => region.Contains(line.NormCenterX, line.NormCenterY));
+        var upperBand = layout.Lines.Where(line =>
+            line.NormCenterY is >= 0.0 and <= 0.64 && line.NormCenterX is >= 0.0 and <= 0.995);
+        var fromGeom = TrySelectAcceptedCompanyName(inRegion.Concat(upperBand).Distinct());
+        if (fromGeom.name != null)
+            return fromGeom;
 
+        // 最后按 FullText 行序构造伪几何再跑同一套打分（与真实 bbox 解耦）
+        if (!string.IsNullOrWhiteSpace(layout.FullText))
+            return TrySelectAcceptedCompanyName(BuildSyntheticCompanyLinesFromFullText(layout.FullText));
+
+        return (null, 0.1);
+    }
+
+    private static (string? name, double conf) TrySelectAcceptedCompanyName(IEnumerable<ReadOcrLine> lines)
+    {
+        var candidates = RankCompanyNameCandidates(lines);
         if (candidates.Count == 0)
             return (null, 0.1);
 
@@ -938,6 +946,24 @@ internal static class CheckOcrVisionReadParser
             return (null, 0.1);
 
         return (NormalizeSpaces(best.line.Text), Math.Clamp(best.score, 0.22, 0.88));
+    }
+
+    /// <summary>按 Read 拼接全文行序生成居中伪行，供公司名在几何失效时仍能从「1675 上一行 / INC 行」命中。</summary>
+    private static IEnumerable<ReadOcrLine> BuildSyntheticCompanyLinesFromFullText(string fullText)
+    {
+        var segments = fullText
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => s.Length >= 2)
+            .Take(48)
+            .ToList();
+        var y = 0.09;
+        foreach (var seg in segments)
+        {
+            yield return new ReadOcrLine(seg, 0.48, y, y - 0.009, y + 0.009, 0.10, 0.86);
+            y += 0.017;
+            if (y > 0.63)
+                break;
+        }
     }
 
     /// <summary>prebuilt-check.us 的 PayerName 常与付款行/Bank 混淆，勿覆盖 Vision 解析出的持有人。</summary>

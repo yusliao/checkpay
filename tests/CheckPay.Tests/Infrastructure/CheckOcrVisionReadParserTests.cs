@@ -211,6 +211,31 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseCompanyName_UsesFullTextLineOrderWhenGeometryExcludesIncLine()
+    {
+        // 真实 Read 偶发把抬头行 normY 标到偏下，几何 ∪ 上半带仍够不到时，应回退到 FullText 行序
+        var fullText = """
+1675
+168 CHINA GARDEN INC.
+1033 RANDOLPH ST STE 9
+BANK OF AMERICA
+⑈001675⑈ ⑆053000196⑆ 237051731175⑈
+""";
+        var badLines = new[]
+        {
+            new ReadOcrLine("1675", 0.5, 0.88, 0.86, 0.90, 0.4, 0.6),
+            new ReadOcrLine("168 CHINA GARDEN INC.", 0.5, 0.82, 0.80, 0.84, 0.4, 0.6),
+            new ReadOcrLine("BANK OF AMERICA", 0.5, 0.48, 0.46, 0.50, 0.2, 0.7),
+            new ReadOcrLine("⑈001675⑈ ⑆053000196⑆ 237051731175⑈", 0.5, 0.92, 0.90, 0.94, 0.1, 0.9)
+        };
+        var layout = new ReadOcrLayout(fullText, badLines, 1000, 1000);
+
+        var (company, _) = CheckOcrVisionReadParser.ParseCompanyName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("168 CHINA GARDEN INC.", company);
+    }
+
+    [Fact]
     public void ParseCompanyName_RejectsPlainStreetLineWithoutLegalSuffix()
     {
         var lines = new[]

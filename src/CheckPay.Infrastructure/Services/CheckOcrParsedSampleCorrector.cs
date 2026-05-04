@@ -327,6 +327,11 @@ public sealed class CheckOcrParsedSampleCorrector(
         else if (!routing.All(char.IsDigit))
             routing = current.RoutingNumber;
 
+        var mergedBankStrong = pick(cAch?.BankName, current.BankName);
+        var mergedCompanyStrong = pick(cAch?.CompanyName, current.CompanyName);
+        if (CheckOcrVisionReadParser.ShouldSkipDiPayerNameForAccountHolder(mergedCompanyStrong, mergedBankStrong))
+            mergedCompanyStrong = current.CompanyName;
+
         return new OcrResultDto(
             CheckNumber: checkNumber,
             Amount: amount,
@@ -334,7 +339,7 @@ public sealed class CheckOcrParsedSampleCorrector(
             ConfidenceScores: BoostConfidenceForTrainingMerge(current.ConfidenceScores),
             RoutingNumber: routing,
             AccountNumber: pick(cAch?.AccountNumber, current.AccountNumber),
-            BankName: pick(cAch?.BankName, current.BankName),
+            BankName: mergedBankStrong,
             AccountHolderName: pick(cAch?.AccountHolderName, current.AccountHolderName),
             AccountAddress: pick(cAch?.AccountAddress, current.AccountAddress),
             AccountType: pick(cAch?.AccountType, current.AccountType),
@@ -343,7 +348,7 @@ public sealed class CheckOcrParsedSampleCorrector(
             MicrLineRaw: pick(cAch?.MicrLineRaw, current.MicrLineRaw),
             CheckNumberMicr: pick(cAch?.CheckNumberMicr, current.CheckNumberMicr),
             MicrFieldOrderNote: pick(cAch?.MicrFieldOrderNote, current.MicrFieldOrderNote),
-            CompanyName: pick(cAch?.CompanyName, current.CompanyName),
+            CompanyName: mergedCompanyStrong,
             ExtractedText: current.ExtractedText,
             Iban: current.Iban,
             Bic: current.Bic,
@@ -461,7 +466,11 @@ public sealed class CheckOcrParsedSampleCorrector(
             micrFieldOrderNote = pick(cAch.MicrFieldOrderNote, current.MicrFieldOrderNote);
             Track("MicrFieldOrderNote", current.MicrFieldOrderNote, micrFieldOrderNote);
 
-            companyName = pick(cAch.CompanyName, current.CompanyName);
+            var proposedCompany = pick(cAch.CompanyName, current.CompanyName);
+            // 训练样本里 CompanyName 误存为付款行时，勿覆盖当前解析
+            if (CheckOcrVisionReadParser.ShouldSkipDiPayerNameForAccountHolder(proposedCompany, bankName))
+                proposedCompany = current.CompanyName;
+            companyName = proposedCompany;
             Track("CompanyName", current.CompanyName, companyName);
         }
 

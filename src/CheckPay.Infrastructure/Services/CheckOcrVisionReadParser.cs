@@ -1008,8 +1008,47 @@ internal static class CheckOcrVisionReadParser
         return Regex.IsMatch(t, @"(?i)^(pay(\s+to(\s+the)?)?|to\s+the|order\s+of)\b");
     }
 
+    /// <summary>FOR INV、ACH RT 等备忘/对账行，勿进 account_address。</summary>
+    private static bool LooksLikeInvoiceReferenceOrBankingMemoLine(string text)
+    {
+        var t = NormalizeSpaces(text);
+        if (t.Length == 0)
+            return false;
+        if (Regex.IsMatch(t, @"(?i)\bfor\s+inv\b"))
+            return true;
+        if (Regex.IsMatch(t, @"(?i)\binv(?:oice)?\s*[#.]"))
+            return true;
+        if (Regex.IsMatch(t, @"(?i)\bach\s+rt\b"))
+            return true;
+        if (Regex.IsMatch(t, @"(?i)\bdeposit\s*!?\s*$"))
+            return true;
+        return false;
+    }
+
+    private static bool HasUsCityStateZipSignal(string text) =>
+        Regex.IsMatch(NormalizeSpaces(text), @"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b");
+
+    private static bool HasStreetAddressSignal(string text)
+    {
+        var t = NormalizeSpaces(text);
+        var lower = t.ToLowerInvariant();
+        var hasStreetCue = AddressStreetTokens.Any(token =>
+            Regex.IsMatch(lower, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase));
+        return hasStreetCue && AddressLineRegex.IsMatch(t);
+    }
+
+    private static int AddressStreetOrZipRankHint(string text)
+    {
+        if (HasUsCityStateZipSignal(text))
+            return 2;
+        if (HasStreetAddressSignal(text))
+            return 1;
+        return 0;
+    }
+
     /// <summary>
-    /// 印刷商号行正下方、与商号同一左栏内的门牌+城市邮编（Read 常把街道行 normY 标在默认 accountAddressPriorRegion 上沿外）。
+    /// 印刷商号行正下方、与商号同一左栏内的门牌+城市邮编（Read 常把街道行 normY 标到带外或与商号 X 偏差大）。
+    /// 用「商号下窄纵向窗」排除中下部的 FOR INV / 付款人名 / 磁墨行。
     /// </summary>
     private static (string? address, double confidence) TryParseAccountAddressAnchoredBelowCompany(
         ReadOcrLayout layout,
@@ -1019,18 +1058,33 @@ internal static class CheckOcrVisionReadParser
         if (companyLine is null)
             return (null, 0.1);
 
-        // FullText 伪几何行宽度假大，不能用来锚定纵向邻行
-        if (companyLine.NormRight - companyLine.NormLeft > 0.62)
-            return (null, 0.1);
+        // FullText 伪几何行宽度假大：仍可用「左半幅 + 商号下窄纵带」取印刷地址
+        var wideCompanyBox = companyLine.NormRight - companyLine.NormLeft > 0.58;
 
         // 仅处理票面上方印刷块（避免把中部 Pay to 附近误当地址）
-        if (companyLine.NormCenterY > 0.44 || companyLine.NormCenterX > 0.64)
+        if (companyLine.NormCenterY > 0.44 || companyLine.NormCenterX > 0.68)
             return (null, 0.1);
 
-        const double xAlign = 0.32;
+        // 印刷地址几乎总在商号下很短一截内；过大则并到中下部 FOR INV / 付款行 / MICR
+        var maxBandTop = Math.Min(companyLine.NormBottom + (wideCompanyBox ? 0.36 : 0.34), 0.52);
+
+        bool RowInPrintedBand(ReadOcrLine l) =>
+            l.NormTop >= companyLine.NormBottom - 0.03
+            && l.NormTop <= maxBandTop;
+
+        bool RowHorizontallyPlausible(ReadOcrLine l)
+        {
+            if (l.NormCenterX > 0.62)
+                return false;
+            if (wideCompanyBox)
+                return l.NormCenterX <= 0.52;
+            return Math.Abs(l.NormCenterX - companyLine.NormCenterX) <= 0.44
+                   || (l.NormLeft <= companyLine.NormRight + 0.06 && l.NormRight >= companyLine.NormLeft - 0.06);
+        }
+
         var ordered = layout.Lines
-            .Where(l => l.NormTop >= companyLine.NormBottom - 0.03)
-            .Where(l => Math.Abs(l.NormCenterX - companyLine.NormCenterX) <= xAlign)
+            .Where(RowInPrintedBand)
+            .Where(RowHorizontallyPlausible)
             .OrderBy(l => l.NormTop)
             .ToList();
 
@@ -1048,20 +1102,26 @@ internal static class CheckOcrVisionReadParser
                 break;
             if (LooksLikePayToOrderBandLine(l.Text))
                 break;
+            if (LooksLikeInvoiceReferenceOrBankingMemoLine(l.Text))
+                break;
 
             var t = NormalizeSpaces(l.Text);
             var sc = ScoreAddressCandidate(t);
-            var isZipLine = Regex.IsMatch(t, @"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b");
+            var isZipLine = HasUsCityStateZipSignal(t);
             var lower = t.ToLowerInvariant();
             var hasStreetCue = AddressStreetTokens.Any(token =>
                 Regex.IsMatch(lower, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase));
             var doorPlate = AddressLineRegex.IsMatch(t);
+            var plausibleStart = isZipLine
+                                   || (doorPlate && hasStreetCue)
+                                   || (doorPlate && Regex.IsMatch(t, @"^\d{1,6}\s"));
 
             if (sc <= 0.32 && !isZipLine && !(doorPlate && hasStreetCue))
             {
                 if (block.Count > 0)
                     break;
-                continue;
+                if (!plausibleStart)
+                    continue;
             }
 
             if (!ShouldIncludeInAddressBlock(t))
@@ -1075,6 +1135,10 @@ internal static class CheckOcrVisionReadParser
         }
 
         if (block.Count == 0)
+            return (null, 0.1);
+
+        // 至少一行像「门牌+街道」或「州 邮编」，避免并到无关备忘行后仍返回
+        if (!block.Any(b => HasUsCityStateZipSignal(b.Text) || HasStreetAddressSignal(b.Text)))
             return (null, 0.1);
 
         var seedLine = block.MaxBy(x => ScoreAddressCandidate(x.Text))!;
@@ -1091,6 +1155,8 @@ internal static class CheckOcrVisionReadParser
 
         var regionLines = layout.Lines
             .Where(line => profile.AccountAddressPriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+            .Where(line => !LooksLikeMicrInkLine(line.Text))
+            .Where(line => !LooksLikeInvoiceReferenceOrBankingMemoLine(line.Text))
             .OrderBy(line => line.NormTop)
             .ToList();
         if (regionLines.Count == 0)
@@ -1103,9 +1169,13 @@ internal static class CheckOcrVisionReadParser
         if (scoredLines.Count == 0)
             return (null, 0.1);
 
-        var seed = scoredLines
-            .OrderByDescending(x => x.score >= 0.38 ? 1 : 0)
-            .ThenByDescending(x => x.score)
+        // 在「像地址」的行里优先高分种子，避免纯「州 邮编」行作种子后置信度被拉低、或与上门牌 Y 距偏大
+        var hinted = scoredLines.Where(x => AddressStreetOrZipRankHint(x.line.Text) > 0).ToList();
+        var seed = (hinted.Count > 0
+                ? hinted
+                    .OrderByDescending(x => x.score)
+                    .ThenBy(x => x.line.NormTop)
+                : scoredLines.OrderByDescending(x => x.score))
             .First();
 
         const double yLink = 0.36;
@@ -1148,6 +1218,10 @@ internal static class CheckOcrVisionReadParser
     {
         var normalized = NormalizeSpaces(text);
         if (normalized.Length < 3)
+            return false;
+        if (LooksLikeMicrInkLine(normalized))
+            return false;
+        if (LooksLikeInvoiceReferenceOrBankingMemoLine(normalized))
             return false;
         if (LooksLikeAmountWordsOnly(normalized))
             return false;
@@ -1342,6 +1416,10 @@ internal static class CheckOcrVisionReadParser
         if (string.IsNullOrWhiteSpace(text))
             return 0.0;
         var normalized = NormalizeSpaces(text);
+        if (LooksLikeMicrInkLine(normalized))
+            return 0.0;
+        if (LooksLikeInvoiceReferenceOrBankingMemoLine(normalized))
+            return 0.0;
         var lower = normalized.ToLowerInvariant();
         var score = 0.26;
         // 印刷商号（INC/LLC…）常命中门牌形 AddressLineRegex，勿当地址种子

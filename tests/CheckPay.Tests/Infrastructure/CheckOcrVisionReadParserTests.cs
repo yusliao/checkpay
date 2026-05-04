@@ -186,6 +186,26 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseAccountAddress_RejectsForInvPayeeAndMicrOutsidePrintedBand()
+    {
+        // 真实版式：印刷地址在左上；中下 FOR INV / 付款人 / 底部 MICR 不应并入 account_address
+        var lines = new[]
+        {
+            new ReadOcrLine("168 CHINA GARDEN INC.", 0.42, 0.14, 0.12, 0.16, 0.08, 0.78),
+            new ReadOcrLine("1033 RANDOLPH ST STE 9", 0.42, 0.20, 0.18, 0.22, 0.08, 0.78),
+            new ReadOcrLine("THOMASVILLE NC 27360-5731", 0.42, 0.27, 0.24, 0.30, 0.08, 0.78),
+            new ReadOcrLine("FOR INV # 2203920 2207975", 0.40, 0.62, 0.58, 0.66, 0.12, 0.68),
+            new ReadOcrLine("Allance food Group", 0.38, 0.70, 0.66, 0.74, 0.14, 0.62),
+            new ReadOcrLine("⑈001675⑈ ⑆053000196⑆ 237051731175⑈", 0.50, 0.92, 0.88, 0.96, 0.08, 0.92)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (address, _) = CheckOcrVisionReadParser.ParseAccountAddress(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("1033 RANDOLPH ST STE 9, THOMASVILLE NC 27360-5731", address);
+    }
+
+    [Fact]
     public void ParseCompanyName_PrefersLineWithIncOverWeakerGroupStyleName()
     {
         var lines = new[]

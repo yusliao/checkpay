@@ -11,7 +11,7 @@ namespace CheckPay.Infrastructure.Services;
 
 /// <summary>
 /// Azure AI Vision OCR 服务（使用 Read API 提取文字，正则解析支票字段）
-/// 注意：Azure AI Vision 是通用 OCR，无支票预生成模型，需自行解析文字；可选主路径融合 DI <c>prebuilt-check.us</c>；金额二次校验亦使用同一模型（REST 2024-11-30）。
+/// 注意：Azure AI Vision 是通用 OCR，无支票预生成模型，需自行解析文字；可选主路径融合 DI <c>prebuilt-check.us</c>；当 Vision 未解析出可信金额时可单独再调 DI 用 <c>NumberAmount</c> 兜底；金额二次校验亦使用同一模型（REST 2024-11-30）。
 /// </summary>
 public class AzureOcrService : IOcrService
 {
@@ -24,6 +24,7 @@ public class AzureOcrService : IOcrService
     private readonly ICheckOcrParsedSampleCorrector _parsedSampleCorrector;
     private readonly ILogger<AzureOcrService> _logger;
     private readonly bool _prebuiltCheckEnrichPrimary;
+    private readonly bool _amountFallbackWhenVisionFails;
     private readonly bool _micrBottomBandSecondPassEnabled;
     private readonly double _micrBottomBandMinNormCenterY;
 
@@ -56,6 +57,10 @@ public class AzureOcrService : IOcrService
         _prebuiltCheckEnrichPrimary = string.Equals(
             configuration["Ocr:PrebuiltCheck:EnrichPrimaryResult"],
             "true",
+            StringComparison.OrdinalIgnoreCase);
+        _amountFallbackWhenVisionFails = !string.Equals(
+            configuration["Ocr:PrebuiltCheck:AmountFallbackWhenVisionFails"],
+            "false",
             StringComparison.OrdinalIgnoreCase);
         _micrBottomBandSecondPassEnabled = !string.Equals(
             configuration["Ocr:Micr:BottomBandSecondPassEnabled"],
@@ -127,6 +132,8 @@ public class AzureOcrService : IOcrService
 
         var diFields = PrebuiltCheckStructuredFields.Empty;
         var prebuiltStatus = "skipped";
+        string? amountFallbackOutcome = null;
+
         if (_prebuiltCheckEnrichPrimary)
         {
             try
@@ -146,6 +153,43 @@ public class AzureOcrService : IOcrService
                 prebuiltStatus = "failed";
             }
         }
+        else if (_amountFallbackWhenVisionFails && ShouldInvokeDiAmountFallback(amount, amountConf))
+        {
+            try
+            {
+                memoryStream.Position = 0;
+                var operation = await _documentIntelligenceClient.AnalyzeDocumentAsync(
+                    WaitUntil.Completed,
+                    BankCheckModelId,
+                    BinaryData.FromStream(memoryStream),
+                    cancellationToken);
+                var fallbackDi = PrebuiltCheckStructuredExtractor.TryExtract(operation.Value);
+                if (fallbackDi.NumberAmount is { } na
+                    && na > 0m
+                    && fallbackDi.NumberAmountConfidence >= 0.6)
+                {
+                    amount = na;
+                    amountConf = Math.Clamp(fallbackDi.NumberAmountConfidence, 0.55, 0.92);
+                    amountFallbackOutcome = "applied";
+                    _logger.LogInformation(
+                        "prebuilt-check.us 金额兜底: Vision 金额不足信，采用 DI NumberAmount={Amount}（置信度 {Conf:F2}）",
+                        amount,
+                        amountConf);
+                }
+                else
+                    amountFallbackOutcome = "empty";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "prebuilt-check.us 金额兜底失败，继续使用 Vision Read 金额");
+                amountFallbackOutcome = "failed";
+            }
+        }
+
+        var amountFallbackDiag = FormatAmountFallbackDiagnostic(
+            _amountFallbackWhenVisionFails,
+            _prebuiltCheckEnrichPrimary,
+            amountFallbackOutcome);
 
         var mergedCheck = checkNumber;
         var mergedCheckConf = checkConf;
@@ -207,6 +251,7 @@ public class AzureOcrService : IOcrService
             ["micr_bottom_band_second_pass_applied"] = micrSecondPassApplied.ToString(),
             ["micr_bottom_band_min_norm_center_y"] = _micrBottomBandMinNormCenterY.ToString("F2"),
             ["prebuilt_check_primary"] = prebuiltStatus,
+            ["prebuilt_check_amount_fallback"] = amountFallbackDiag,
             ["eu_iban_present"] = (iban != null).ToString(),
             ["eu_bic_present"] = (bic != null).ToString(),
             ["bank_name_source"] = bankName is null ? "none" : (diFields.BankName is not null ? "prebuilt_or_merged" : "vision_region"),
@@ -301,6 +346,16 @@ public class AzureOcrService : IOcrService
             return 0.78;
         return Math.Clamp(v, 0.6, 0.95);
     }
+
+    /// <summary>Vision 金额是否弱到需要尝试 DI <c>NumberAmount</c> 兜底（与主路径融合中的覆盖阈值对齐）。</summary>
+    internal static bool ShouldInvokeDiAmountFallback(decimal visionAmount, double visionAmountConf) =>
+        visionAmount <= 0m || visionAmountConf < 0.52;
+
+    private static string FormatAmountFallbackDiagnostic(
+        bool fallbackEnabled,
+        bool enrichPrimary,
+        string? outcome) =>
+        !fallbackEnabled ? "off" : enrichPrimary ? "skipped" : outcome ?? "skipped";
 
     private static void MergePrebuiltStructuredFields(
         PrebuiltCheckStructuredFields di,

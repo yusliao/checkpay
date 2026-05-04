@@ -225,7 +225,7 @@
         @* 草稿：补全 ACH 并正式提交（与上传页「提交入库」校验一致） *@
         @if (_selectedRecord.SubmittedAt == null)
         {
-            <AuthorizeView Roles="Sales,Admin">
+            <AuthorizeView Roles="Sales,USFinance,Admin">
                 <Authorized>
                     <MudPaper Class="ma-4 pa-3" Elevation="0" Outlined="true">
                         <MudText Typo="Typo.subtitle2" Class="mb-2">草稿 — 提交入库</MudText>

@@ -1,6 +1,6 @@
 @page "/checks/review/{Id:guid}"
 @page "/checks/draft/{DraftId:guid}"
-@attribute [Authorize(Roles = "Sales,Admin")]
+@attribute [Authorize(Roles = "Sales,USFinance,Admin")]
 @using CheckPay.Application.Common.Interfaces
 @using Microsoft.Extensions.Logging
 @using CheckPay.Application.Common.Models
@@ -151,9 +151,8 @@ else if (ShowCheckEditForm())
                 <MudTextField @bind-Value="_accountAddress" Label="Account Address" Variant="Variant.Outlined" Class="mb-2"
                               Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
                 <MudSelect T="string" @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined"
-                           Class="mb-2" Clearable="true"
+                           Class="mb-2"
                            Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")">
-                    <MudSelectItem T="string" Value="@("")">（请选择）</MudSelectItem>
                     <MudSelectItem T="string" Value="@CheckAccountTypeCatalog.BusinessChecking">
                         @CheckAccountTypeCatalog.BusinessChecking
                     </MudSelectItem>
@@ -174,7 +173,7 @@ else if (ShowCheckEditForm())
                                Variant="Variant.Outlined"
                                Class="mb-2"
                                Placeholder="与支票账号一致，支持新建"
-                               OnBlur="@OnCustomerAccountBlur" />
+                               OnBlur="@OnCustomerAccountBlurAsync" />
                 <MudTextField @bind-Value="_customerPhone"
                                Label="客户手机号"
                                Required="true"
@@ -302,14 +301,15 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
     private DateTime? _checkDate;
     private string _customerCode = string.Empty;
     private string _customerPhone = string.Empty;
+    private string? _lastCustomerCodeForAutoPhone;
     private string _notes = string.Empty;
     private string _routingNumber = "";
     private string _accountNumber = "";
     private string _bankName = "";
     private string _accountHolderName = "";
     private string _accountAddress = "";
-    private string _accountType = "";
-    private string _payToOrderOf = "";
+    private string _accountType = CheckAccountTypeCatalog.BusinessChecking;
+    private string _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
     private string _forMemo = "";
     private string _micrLineRaw = "";
     private string _checkNumberMicr = "";
@@ -399,6 +399,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
                 .ToListAsync();
 
             ApplyCheckRecordToForm(draft);
+            await SyncCustomerPhoneFromMasterAsync();
             RefreshConfidenceFromSelectedOcrEngine();
         }
         finally
@@ -419,7 +420,11 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         _accountHolderName = c.AccountHolderName ?? string.Empty;
         _accountAddress = c.AccountAddress ?? string.Empty;
         _accountType = c.AccountType ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(_accountType))
+            _accountType = CheckAccountTypeCatalog.BusinessChecking;
         _payToOrderOf = c.PayToOrderOf ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(_payToOrderOf))
+            _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
         _forMemo = c.ForMemo ?? string.Empty;
         _micrLineRaw = c.MicrLineRaw ?? string.Empty;
         _checkNumberMicr = c.CheckNumberMicr ?? string.Empty;
@@ -429,6 +434,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         _customerCode = c.Customer?.CustomerCode ?? string.Empty;
         _customerPhone = c.Customer?.MobilePhone ?? string.Empty;
         _prefilledFromOcr = true;
+        _lastCustomerCodeForAutoPhone = string.IsNullOrWhiteSpace(_customerCode) ? null : _customerCode.Trim();
     }
 
     private void RefreshConfidenceFromSelectedOcrEngine()
@@ -456,14 +462,12 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
             .ToListAsync();
 
         if (_ocrResult?.Status == OcrStatus.Completed && PrimaryCheckOcrPayload(_ocrResult) != null)
-        {
-            PopulateFromStoredResult();
-        }
+            await PopulateFromStoredResultAsync();
 
         _loading = false;
     }
 
-    private void PopulateFromStoredResult(bool force = false)
+    private async Task PopulateFromStoredResultAsync(bool force = false)
     {
         if (_prefilledFromOcr && !force) return;
 
@@ -474,8 +478,11 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
 
         if (force)
         {
+            _lastCustomerCodeForAutoPhone = null;
             _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
-            _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
+            _accountType = CheckAccountTypeCatalog.BusinessChecking;
+            _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
+            _forMemo = _micrLineRaw = _checkNumberMicr = "";
             _companyName = "";
             _customerCode = "";
             _customerPhone = "";
@@ -507,67 +514,67 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         Pull("AccountAddress", ref _accountAddress);
         var acctTypeV = ExtractString(root, "AccountType");
         if (!string.IsNullOrEmpty(acctTypeV))
-            _accountType = CheckAccountTypeCatalog.MatchSalesSelectable(acctTypeV) ?? "";
+        {
+            var mappedAcct = CheckAccountTypeCatalog.MatchSalesSelectable(acctTypeV);
+            if (mappedAcct != null)
+                _accountType = mappedAcct;
+            else if (string.IsNullOrWhiteSpace(_accountType)
+                     || string.Equals(_accountType, CheckAccountTypeCatalog.BusinessChecking, StringComparison.Ordinal))
+                _accountType = CheckAccountTypeCatalog.BusinessChecking;
+        }
+
         Pull("PayToOrderOf", ref _payToOrderOf);
+        var canonicalPayTo = PayToOrderOfCatalog.MatchCanonical(_payToOrderOf);
+        if (canonicalPayTo != null)
+            _payToOrderOf = canonicalPayTo;
+        else if (string.IsNullOrWhiteSpace(_payToOrderOf))
+            _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
         Pull("ForMemo", ref _forMemo);
         Pull("MicrLineRaw", ref _micrLineRaw);
         Pull("CheckNumberMicr", ref _checkNumberMicr);
         ApplyOcrMergedHolderCompany(root, force);
 
         _prefilledFromOcr = true;
-        SyncCustomerPhoneFromMasterIfNeeded();
+        await SyncCustomerPhoneFromMasterAsync();
     }
 
-    private void OnCustomerAccountBlur(FocusEventArgs _)
-        => SyncCustomerPhoneFromMasterIfNeeded();
+    private async Task OnCustomerAccountBlurAsync(FocusEventArgs _)
+        => await SyncCustomerPhoneFromMasterAsync();
 
-    private void SyncCustomerPhoneFromMasterIfNeeded()
+    /// <summary>客户账号有值时，从客户主数据（库内）带出手机号；OCR 写入账号或账号变更时也会触发。</summary>
+    private async Task SyncCustomerPhoneFromMasterAsync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(_customerCode) || !string.IsNullOrWhiteSpace(_customerPhone)) return;
-        var code = _customerCode.Trim();
-        var c = _customers.FirstOrDefault(x => x.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
-        if (c != null && !string.IsNullOrWhiteSpace(c.MobilePhone))
-            _customerPhone = c.MobilePhone;
-    }
-
-    /// <summary>采用指定引擎的结果覆盖表单字段</summary>
-    private void ApplyOcrResult(JsonDocument? rawResult, JsonDocument? confidenceScores)
-    {
-        if (rawResult == null) return;
-        var root = rawResult.RootElement;
-
-        var recognizedNumber = ExtractString(root, "CheckNumber");
-        var recognizedAmount = ExtractDecimal(root, "Amount");
-        var recognizedDate   = ExtractDate(root, "Date");
-
-        if (!string.IsNullOrEmpty(recognizedNumber)) _checkNumber = recognizedNumber;
-        if (recognizedAmount > 0) _amount = recognizedAmount;
-        if (recognizedDate.HasValue) _checkDate = recognizedDate;
-
-        void Pull2(string jsonProp, ref string target)
+        if (string.IsNullOrWhiteSpace(_customerCode))
         {
-            var v = ExtractString(root, jsonProp);
-            if (!string.IsNullOrEmpty(v)) target = v;
+            _lastCustomerCodeForAutoPhone = null;
+            return;
         }
 
-        Pull2("RoutingNumber", ref _routingNumber);
-        Pull2("AccountNumber", ref _accountNumber);
-        var acctForCustomer2 = ExtractString(root, "AccountNumber");
-        if (!string.IsNullOrEmpty(acctForCustomer2) && string.IsNullOrWhiteSpace(_customerCode))
-            _customerCode = acctForCustomer2;
-        Pull2("BankName", ref _bankName);
-        Pull2("AccountAddress", ref _accountAddress);
-        var acctTypeV2 = ExtractString(root, "AccountType");
-        if (!string.IsNullOrEmpty(acctTypeV2))
-            _accountType = CheckAccountTypeCatalog.MatchSalesSelectable(acctTypeV2) ?? "";
-        Pull2("PayToOrderOf", ref _payToOrderOf);
-        Pull2("ForMemo", ref _forMemo);
-        Pull2("MicrLineRaw", ref _micrLineRaw);
-        Pull2("CheckNumberMicr", ref _checkNumberMicr);
-        ApplyOcrMergedHolderCompany(root, force: false);
+        var code = _customerCode.Trim();
+        var lower = code.ToLowerInvariant();
+        var row = await DbContext.Customers
+            .AsNoTracking()
+            .Where(c => c.IsActive && c.CustomerCode.ToLower() == lower)
+            .Select(c => new { c.MobilePhone })
+            .FirstOrDefaultAsync(cancellationToken);
 
-        // 同步置信度颜色
-        _confidenceScores = ExtractConfidenceScoresFrom(confidenceScores);
+        if (row == null || string.IsNullOrWhiteSpace(row.MobilePhone))
+        {
+            if (_lastCustomerCodeForAutoPhone != null
+                && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase))
+                _customerPhone = string.Empty;
+            _lastCustomerCodeForAutoPhone = null;
+            return;
+        }
+
+        var codeChangedVsTracked = _lastCustomerCodeForAutoPhone != null
+            && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase);
+        var shouldApply = string.IsNullOrWhiteSpace(_customerPhone) || codeChangedVsTracked;
+        if (!shouldApply)
+            return;
+
+        _customerPhone = row.MobilePhone.Trim();
+        _lastCustomerCodeForAutoPhone = code;
     }
 
     /// <summary>渲染 OCR 单元格内容（字段值 + 置信度色标）</summary>
@@ -941,6 +948,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
 
     private void ResetRecognizedFields()
     {
+        _lastCustomerCodeForAutoPhone = null;
         _checkNumber = string.Empty;
         _amount = 0m;
         _checkDate = null;
@@ -948,7 +956,9 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         _customerPhone = string.Empty;
         _notes = string.Empty;
         _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
-        _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
+        _accountType = CheckAccountTypeCatalog.BusinessChecking;
+        _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
+        _forMemo = _micrLineRaw = _checkNumberMicr = "";
         _invoiceNumbers = _paymentPeriodText = "";
         _companyName = "";
         _confidenceScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);

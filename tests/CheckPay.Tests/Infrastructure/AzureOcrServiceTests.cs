@@ -75,4 +75,14 @@ public class AzureOcrServiceTests
             TemplateResolver(),
             Corrector());
     }
+
+    [Theory]
+    [InlineData(0, 0.1, true)]
+    [InlineData(0, 0.88, true)]
+    [InlineData(100, 0.51, true)]
+    [InlineData(100, 0.52, false)]
+    [InlineData(100, 0.9, false)]
+    [InlineData(0.01, 0.9, false)]
+    public void ShouldInvokeDiAmountFallback_MatchesVisionWeakThreshold(decimal amount, double conf, bool expected) =>
+        Assert.Equal(expected, AzureOcrService.ShouldInvokeDiAmountFallback(amount, conf));
 }

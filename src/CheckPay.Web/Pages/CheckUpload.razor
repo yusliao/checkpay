@@ -1,5 +1,5 @@
 @page "/checks/upload"
-@attribute [Authorize(Roles = "Sales,Admin")]
+@attribute [Authorize(Roles = "Sales,USFinance,Admin")]
 @using CheckPay.Application.Common.Interfaces
 @using Microsoft.Extensions.Logging
 @using CheckPay.Domain.Entities
@@ -53,7 +53,7 @@ else
             @foreach (var item in _uploadQueue)
             {
                 <div style="position:relative;width:100px">
-                    <MudPaper @onclick="() => SelectItem(item)"
+                    <MudPaper @onclick="async () => await SelectItemAsync(item)"
                               Elevation="item == _current ? 4 : 1"
                               Class="pa-2 text-center"
                               Style="@($"width:100px;cursor:pointer;border:2px solid {(item == _current ? "#1976d2" : item.Done ? "#4caf50" : "#e0e0e0")}")">
@@ -72,7 +72,7 @@ else
                                            Size="Size.Small"
                                            Color="Color.Error"
                                            Style="background:white;padding:2px;width:20px;height:20px;min-width:0"
-                                           OnClick="() => RemoveItem(item)" />
+                                           OnClick="async () => await RemoveItemAsync(item)" />
                         </span>
                     }
                 </div>
@@ -280,9 +280,8 @@ else
                         <MudTextField @bind-Value="_accountAddress" Label="Account Address" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
                         <MudSelect T="string" @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined"
-                                   Class="mb-2" Clearable="true"
+                                   Class="mb-2"
                                    Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")">
-                            <MudSelectItem T="string" Value="@("")">（请选择）</MudSelectItem>
                             <MudSelectItem T="string" Value="@CheckAccountTypeCatalog.BusinessChecking">
                                 @CheckAccountTypeCatalog.BusinessChecking
                             </MudSelectItem>
@@ -291,9 +290,8 @@ else
                             </MudSelectItem>
                         </MudSelect>
                         <MudSelect T="string" @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined"
-                                   Class="mb-2" Clearable="true"
+                                   Class="mb-2"
                                    Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")">
-                            <MudSelectItem T="string" Value="@("")">（请选择）</MudSelectItem>
                             <MudSelectItem T="string" Value="@PayToOrderOfCatalog.CheungKongAllianceFood">
                                 @PayToOrderOfCatalog.CheungKongAllianceFood
                             </MudSelectItem>
@@ -313,7 +311,7 @@ else
                                       Variant="Variant.Outlined"
                                       Class="mb-2"
                                       Placeholder="与支票账号一致，支持新建"
-                                      OnBlur="@OnCustomerAccountBlur" />
+                                      OnBlur="@OnCustomerAccountBlurAsync" />
                         <MudTextField @bind-Value="_customerPhone"
                                       Label="客户手机号"
                                       Required="true"
@@ -439,14 +437,16 @@ else
     private DateTime? _checkDate;
     private string _customerCode = "";
     private string _customerPhone = "";
+    /// <summary>最近一次从客户主数据自动带出手机号时对应的客户账号，用于避免覆盖用户手工改过的手机号。</summary>
+    private string? _lastCustomerCodeForAutoPhone;
     private string _notes = "";
     private string _routingNumber = "";
     private string _accountNumber = "";
     private string _bankName = "";
     private string _accountHolderName = "";
     private string _accountAddress = "";
-    private string _accountType = "";
-    private string _payToOrderOf = "";
+    private string _accountType = CheckAccountTypeCatalog.BusinessChecking;
+    private string _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
     private string _forMemo = "";
     private string _micrLineRaw = "";
     private string _checkNumberMicr = "";
@@ -558,13 +558,14 @@ else
                     if (_current == item)
                         _ocrResult = result;
 
-                    // 当前选中且表单还是空的，自动预填
-                    if (_current == item && IsFormEmpty())
-                        PrefillForm(item);
-                    if (_current == item)
-                        RefreshOcrCopyPanelText();
-
-                    await InvokeAsync(StateHasChanged);
+                    await InvokeAsync(async () =>
+                    {
+                        if (_current == item && IsFormEmpty())
+                            await PrefillFormAsync(item);
+                        if (_current == item)
+                            RefreshOcrCopyPanelText();
+                        StateHasChanged();
+                    });
                     break;
                 }
 
@@ -593,7 +594,7 @@ else
     private Dictionary<string, double> GetPreferredConfidenceScores(QueueItem item) => item.ConfidenceScores;
 
     /// <summary>将识别结果预填到当前表单</summary>
-    private void PrefillForm(QueueItem item, bool force = false)
+    private async Task PrefillFormAsync(QueueItem item, bool force = false)
     {
         var rawResult = GetPreferredOcrDocument(item);
         if (rawResult == null) return;
@@ -630,15 +631,22 @@ else
         PrefillStr("BankName", ref _bankName);
         PrefillStr("AccountAddress", ref _accountAddress);
         var acctTypeRaw = ExtractString(root, "AccountType");
-        if (!string.IsNullOrEmpty(acctTypeRaw) && (force || string.IsNullOrEmpty(_accountType)))
+        if (!string.IsNullOrEmpty(acctTypeRaw))
         {
             var mapped = CheckAccountTypeCatalog.MatchSalesSelectable(acctTypeRaw);
-            if (mapped != null)
+            if (mapped != null && (force || string.IsNullOrEmpty(_accountType)
+                    || string.Equals(_accountType, CheckAccountTypeCatalog.BusinessChecking, StringComparison.Ordinal)))
                 _accountType = mapped;
         }
+
         var rawPayTo = ExtractString(root, "PayToOrderOf");
-        if (!string.IsNullOrEmpty(rawPayTo) && (force || string.IsNullOrEmpty(_payToOrderOf)))
-            _payToOrderOf = PayToOrderOfCatalog.MatchCanonical(rawPayTo) ?? "";
+        if (!string.IsNullOrEmpty(rawPayTo))
+        {
+            var canonicalPayTo = PayToOrderOfCatalog.MatchCanonical(rawPayTo);
+            if (canonicalPayTo != null && (force || string.IsNullOrEmpty(_payToOrderOf)
+                    || string.Equals(_payToOrderOf, PayToOrderOfCatalog.CheungKongAllianceFood, StringComparison.Ordinal)))
+                _payToOrderOf = canonicalPayTo;
+        }
         PrefillStr("ForMemo", ref _forMemo);
         PrefillStr("MicrLineRaw", ref _micrLineRaw);
         PrefillStr("CheckNumberMicr", ref _checkNumberMicr);
@@ -672,23 +680,49 @@ else
             }
         }
 
-        SyncCustomerPhoneFromMasterIfNeeded();
+        await SyncCustomerPhoneFromMasterAsync();
     }
 
-    private void OnCustomerAccountBlur(FocusEventArgs _)
-        => SyncCustomerPhoneFromMasterIfNeeded();
+    private async Task OnCustomerAccountBlurAsync(FocusEventArgs _)
+        => await SyncCustomerPhoneFromMasterAsync();
 
-    /// <summary>主数据中已有该账号时，若手机号未填则带出主数据手机号。</summary>
-    private void SyncCustomerPhoneFromMasterIfNeeded()
+    /// <summary>客户账号有值时，从客户主数据（库内）解析手机号并写入；OCR 刚写入账号或账号变更时也会触发。</summary>
+    private async Task SyncCustomerPhoneFromMasterAsync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(_customerCode) || !string.IsNullOrWhiteSpace(_customerPhone)) return;
+        if (string.IsNullOrWhiteSpace(_customerCode))
+        {
+            _lastCustomerCodeForAutoPhone = null;
+            return;
+        }
+
         var code = _customerCode.Trim();
-        var c = _customers.FirstOrDefault(x => x.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
-        if (c != null && !string.IsNullOrWhiteSpace(c.MobilePhone))
-            _customerPhone = c.MobilePhone;
+        var lower = code.ToLowerInvariant();
+        var row = await DbContext.Customers
+            .AsNoTracking()
+            .Where(c => c.IsActive && c.CustomerCode.ToLower() == lower)
+            .Select(c => new { c.MobilePhone })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (row == null || string.IsNullOrWhiteSpace(row.MobilePhone))
+        {
+            if (_lastCustomerCodeForAutoPhone != null
+                && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase))
+                _customerPhone = string.Empty;
+            _lastCustomerCodeForAutoPhone = null;
+            return;
+        }
+
+        var codeChangedVsTracked = _lastCustomerCodeForAutoPhone != null
+            && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase);
+        var shouldApply = string.IsNullOrWhiteSpace(_customerPhone) || codeChangedVsTracked;
+        if (!shouldApply)
+            return;
+
+        _customerPhone = row.MobilePhone.Trim();
+        _lastCustomerCodeForAutoPhone = code;
     }
 
-    private void SelectItem(QueueItem item)
+    private async Task SelectItemAsync(QueueItem item)
     {
         if (item.Done) return;
         _current = item;
@@ -712,7 +746,7 @@ else
 
         // 切换时如果 OCR 已完成，立即预填
         if (item.OcrStatus == CheckOcrStatus.Completed)
-            PrefillForm(item);
+            await PrefillFormAsync(item);
         RefreshOcrCopyPanelText();
         StateHasChanged();
     }
@@ -966,7 +1000,7 @@ else
             _current = _uploadQueue.FirstOrDefault(q => !q.Done);
             ClearForm();
             if (_current?.OcrStatus == CheckOcrStatus.Completed)
-                PrefillForm(_current);
+                await PrefillFormAsync(_current);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -1032,7 +1066,7 @@ else
         => !string.IsNullOrWhiteSpace(_notes)
            && _notes.Contains(OcrAmountValidationNotes.ManualReviewCompleteMarker, StringComparison.Ordinal);
 
-    private void RemoveItem(QueueItem item)
+    private async Task RemoveItemAsync(QueueItem item)
     {
         _uploadQueue.Remove(item);
 
@@ -1042,7 +1076,7 @@ else
             _current = _uploadQueue.FirstOrDefault(q => !q.Done);
             ClearForm();
             if (_current?.OcrStatus == CheckOcrStatus.Completed)
-                PrefillForm(_current);
+                await PrefillFormAsync(_current);
         }
 
         // 队列清空时重置到初始状态
@@ -1211,9 +1245,12 @@ else
         _checkDate = null;
         _customerCode = "";
         _customerPhone = "";
+        _lastCustomerCodeForAutoPhone = null;
         _notes = "";
         _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
-        _accountType = _payToOrderOf = _forMemo = _micrLineRaw = _checkNumberMicr = "";
+        _accountType = CheckAccountTypeCatalog.BusinessChecking;
+        _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
+        _forMemo = _micrLineRaw = _checkNumberMicr = "";
         _invoiceNumbers = _paymentPeriodText = "";
         _companyName = "";
         _confidenceScores = new(StringComparer.OrdinalIgnoreCase);

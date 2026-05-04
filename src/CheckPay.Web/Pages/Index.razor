@@ -88,7 +88,7 @@
 <MudPaper Elevation="1" Class="pa-4 mt-4">
     <MudText Typo="Typo.h6" GutterBottom="true">快捷入口</MudText>
     <MudStack Row="true" Spacing="2">
-        <AuthorizeView Roles="Sales,Admin">
+        <AuthorizeView Roles="Sales,USFinance,Admin">
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                        StartIcon="@Icons.Material.Filled.CloudUpload"
                        OnClick="@(() => Navigation.NavigateTo("/checks/upload"))">

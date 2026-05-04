@@ -1,8 +1,8 @@
 <MudNavMenu>
     <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
 
-    @* 上传支票：销售 + 管理员；导入扣款：美国财务 + 管理员 *@
-    <AuthorizeView Roles="Sales,Admin">
+    @* 上传支票：销售 + 美国财务 + 管理员；导入扣款：美国财务 + 管理员 *@
+    <AuthorizeView Roles="Sales,USFinance,Admin">
         <MudNavLink Href="/checks/upload" Icon="@Icons.Material.Filled.CloudUpload">上传支票</MudNavLink>
     </AuthorizeView>
 

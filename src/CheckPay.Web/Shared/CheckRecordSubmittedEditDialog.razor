@@ -1,0 +1,360 @@
+@using System.Linq
+@using CheckPay.Application.Common
+@using CheckPay.Application.Common.Interfaces
+@using CheckPay.Domain.Entities
+@using CheckPay.Domain.Enums
+@using CheckPay.Web.Common
+@using Microsoft.EntityFrameworkCore
+@inject IApplicationDbContext DbContext
+@inject ISnackbar Snackbar
+@inject IAuditLogService AuditLog
+
+<MudDialog>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Class="mb-4" />
+        }
+        else if (_loadError != null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true">@_loadError</MudAlert>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                仅可编辑<strong>已提交</strong>且<strong>未标记 ACH 扣款成功</strong>的支票票面信息；保存后更新「与客户主数据不一致」等提示字段。
+            </MudAlert>
+            <MudStack Spacing="2" Style="max-height:70vh;overflow:auto">
+                <MudTextField @bind-Value="_checkNumber" Label="支票号" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudNumericField @bind-Value="_checkAmount" Label="支票金额" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 Format="N2" Min="0.01m" Step="0.01m" HideSpinButtons="false" />
+                <MudDatePicker @bind-Date="_checkDate" Label="支票日期" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudSelect T="Guid" Value="_customerId" ValueChanged="OnCustomerIdChangedAsync" Label="客户" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    @foreach (var c in _customers)
+                    {
+                        <MudSelectItem Value="@c.Id">@c.CustomerCode — @c.CustomerName</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudTextField @bind-Value="_customerPhone" Label="客户手机号" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudDivider Class="my-2" />
+                <MudTextField @bind-Value="_routingNumber" Label="Routing Number（9 位）" Variant="Variant.Outlined" Margin="Margin.Dense" MaxLength="9" />
+                <MudTextField @bind-Value="_accountNumber" Label="Account Number" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_bankName" Label="银行名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudSelect T="string" @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelectItem Value="@CheckAccountTypeCatalog.BusinessChecking">@CheckAccountTypeCatalog.BusinessChecking</MudSelectItem>
+                    <MudSelectItem Value="@CheckAccountTypeCatalog.Savings">@CheckAccountTypeCatalog.Savings</MudSelectItem>
+                </MudSelect>
+                <MudTextField @bind-Value="_accountHolderName" Label="账户持有人" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_accountAddress" Label="账户地址" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+                <MudTextField @bind-Value="_companyName" Label="公司名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_payToOrderOf" Label="Pay to the order of（可与目录项一致或保留 OCR 原文）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">目录参考：@PayToOrderOfCatalog.CheungKongAllianceFood；@PayToOrderOfCatalog.MaxwellExcelFood</MudText>
+                <MudTextField @bind-Value="_forMemo" Label="Memo" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_micrLineRaw" Label="MICR 行（原文）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+                <MudTextField @bind-Value="_checkNumberMicr" Label="支票号（MICR）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_invoiceNumbers" Label="发票号（英文逗号分隔）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_paymentPeriodText" Label="支付期间" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_notes" Label="备注" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="3" />
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CancelAsync" Disabled="_saving">取消</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync"
+                   Disabled="@(_loading || _loadError != null || _saving)">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            保存
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public Guid CheckRecordId { get; set; }
+
+    private bool _loading = true;
+    private string? _loadError;
+    private bool _saving;
+
+    private List<Customer> _customers = new();
+
+    private string _checkNumber = "";
+    private decimal _checkAmount;
+    private DateTime? _checkDate;
+    private Guid _customerId;
+    private string _customerPhone = "";
+    private string _routingNumber = "";
+    private string _accountNumber = "";
+    private string _bankName = "";
+    private string _accountType = CheckAccountTypeCatalog.BusinessChecking;
+    private string _accountHolderName = "";
+    private string _accountAddress = "";
+    private string _companyName = "";
+    private string _payToOrderOf = "";
+    private string _forMemo = "";
+    private string _micrLineRaw = "";
+    private string _checkNumberMicr = "";
+    private string _invoiceNumbers = "";
+    private string _paymentPeriodText = "";
+    private string _notes = "";
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _customers = await DbContext.Customers
+                .Where(c => c.IsActive)
+                .Include(c => c.CompanyNames)
+                .OrderBy(c => c.CustomerCode)
+                .ToListAsync();
+
+            var record = await DbContext.CheckRecords
+                .Include(c => c.Customer)
+                .ThenInclude(cu => cu!.CompanyNames)
+                .FirstOrDefaultAsync(c => c.Id == CheckRecordId);
+
+            if (record == null)
+            {
+                _loadError = "记录不存在";
+                return;
+            }
+
+            if (record.SubmittedAt is null)
+            {
+                _loadError = "仅已提交入库的支票可在此编辑；草稿请使用「编辑草稿」。";
+                return;
+            }
+
+            if (record.AchDebitSucceeded)
+            {
+                _loadError = "已标记 ACH 扣款成功的支票不允许修改票面信息。";
+                return;
+            }
+
+            _checkNumber = record.CheckNumber;
+            _checkAmount = record.CheckAmount;
+            _checkDate = record.CheckDate;
+            _customerId = record.CustomerId;
+            _customerPhone = record.Customer?.MobilePhone ?? "";
+            _routingNumber = record.RoutingNumber ?? "";
+            _accountNumber = record.AccountNumber ?? "";
+            _bankName = record.BankName ?? "";
+            _accountType = string.IsNullOrWhiteSpace(record.AccountType)
+                ? CheckAccountTypeCatalog.BusinessChecking
+                : CheckAccountTypeCatalog.MatchSalesSelectable(record.AccountType) ?? record.AccountType.Trim();
+            _accountHolderName = record.AccountHolderName ?? "";
+            _accountAddress = record.AccountAddress ?? "";
+            _companyName = record.CompanyName ?? "";
+            _payToOrderOf = record.PayToOrderOf ?? "";
+            _forMemo = record.ForMemo ?? "";
+            _micrLineRaw = record.MicrLineRaw ?? "";
+            _checkNumberMicr = record.CheckNumberMicr ?? "";
+            _invoiceNumbers = record.InvoiceNumbers ?? "";
+            _paymentPeriodText = record.PaymentPeriodText ?? "";
+            _notes = record.Notes ?? "";
+
+            if (!_customers.Any(c => c.Id == _customerId))
+            {
+                var cur = record.Customer;
+                if (cur != null)
+                    _customers = _customers.Append(cur).OrderBy(c => c.CustomerCode).ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"加载失败：{ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnCustomerIdChangedAsync(Guid id)
+    {
+        _customerId = id;
+        var c = _customers.FirstOrDefault(x => x.Id == id);
+        if (c != null)
+            _customerPhone = c.MobilePhone ?? "";
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    private async Task SaveAsync()
+    {
+        if (_loadError != null) return;
+
+        var err = await ValidateAsync();
+        if (err != null)
+        {
+            Snackbar.Add(err, Severity.Error);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var tracked = await DbContext.CheckRecords
+                .Include(c => c.Customer)
+                .ThenInclude(cu => cu!.CompanyNames)
+                .FirstOrDefaultAsync(c => c.Id == CheckRecordId);
+
+            if (tracked == null)
+            {
+                Snackbar.Add("记录不存在", Severity.Error);
+                MudDialog.Cancel();
+                return;
+            }
+
+            if (tracked.SubmittedAt is null || tracked.AchDebitSucceeded)
+            {
+                Snackbar.Add("当前状态不允许保存（需已提交且未 ACH 扣款成功）。", Severity.Warning);
+                await LoadAsync();
+                return;
+            }
+
+            var customer = await DbContext.Customers
+                .Include(c => c.CompanyNames)
+                .FirstOrDefaultAsync(c => c.Id == _customerId);
+            if (customer == null)
+            {
+                Snackbar.Add("所选客户不存在", Severity.Error);
+                return;
+            }
+
+            var phone = _customerPhone.Trim();
+            if (!string.Equals(customer.MobilePhone, phone, StringComparison.Ordinal))
+            {
+                customer.MobilePhone = phone;
+                customer.UpdatedAt = DateTime.UtcNow;
+            }
+
+            var normalizedCheck = CheckNumberGuard.Normalize(_checkNumber);
+            var normalizedRouting = CheckNumberGuard.NormalizeRouting(_routingNumber);
+            var payCanonical = PayToOrderOfCatalog.MatchCanonical(_payToOrderOf);
+            var payToFinal = payCanonical ?? NullIfEmpty(_payToOrderOf);
+            var acctType = CheckAccountTypeCatalog.MatchSalesSelectable(_accountType) ?? CheckAccountTypeCatalog.BusinessChecking;
+
+            var mismatch = CheckMasterDataComparer.HasMismatch(
+                customer,
+                NullIfEmpty(_bankName),
+                NullIfEmpty(_accountHolderName),
+                NullIfEmpty(_companyName),
+                NullIfEmpty(_accountNumber),
+                NullIfEmpty(_accountAddress));
+            var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
+            var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
+
+            var before = new
+            {
+                tracked.CheckNumber,
+                tracked.CheckAmount,
+                tracked.CustomerId,
+                tracked.RoutingNumber
+            };
+
+            tracked.CheckNumber = normalizedCheck;
+            tracked.CheckAmount = _checkAmount;
+            tracked.CheckDate = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
+            tracked.CustomerId = customer.Id;
+            tracked.RoutingNumber = normalizedRouting;
+            tracked.AccountNumber = NullIfEmpty(_accountNumber);
+            tracked.BankName = NullIfEmpty(_bankName);
+            tracked.AccountType = acctType;
+            tracked.AccountHolderName = NullIfEmpty(_accountHolderName);
+            tracked.AccountAddress = NullIfEmpty(_accountAddress);
+            tracked.CompanyName = NullIfEmpty(_companyName);
+            tracked.PayToOrderOf = payToFinal;
+            tracked.ForMemo = NullIfEmpty(_forMemo);
+            tracked.MicrLineRaw = NullIfEmpty(_micrLineRaw);
+            tracked.CheckNumberMicr = NullIfEmpty(_checkNumberMicr);
+            tracked.InvoiceNumbers = NullIfEmpty(_invoiceNumbers);
+            tracked.PaymentPeriodText = NullIfEmpty(_paymentPeriodText);
+            tracked.Notes = NullIfEmpty(_notes);
+            tracked.CustomerMasterMismatchWarning = mismatch;
+            tracked.CustomerCompanyNewRelationshipWarning = companyWarn;
+            tracked.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                await DbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Snackbar.Add("数据已被其他用户修改，请关闭后重试。", Severity.Error);
+                return;
+            }
+            catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
+            {
+                Snackbar.Add($"同银行下支票号 {normalizedCheck} 已存在", Severity.Error);
+                return;
+            }
+
+            if (mismatch)
+                Snackbar.Add("已保存。与客户主数据期望字段不一致，已标记警告。", Severity.Warning);
+            else
+                Snackbar.Add("已保存。", Severity.Success);
+
+            await AuditLog.LogAsync(
+                AuditAction.Update,
+                "CheckRecord",
+                tracked.Id,
+                before,
+                new
+                {
+                    tracked.CheckNumber,
+                    tracked.CheckAmount,
+                    tracked.CustomerId,
+                    tracked.RoutingNumber,
+                    Note = "收款记录-票面编辑"
+                });
+
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task<string?> ValidateAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_checkNumber))
+            return "支票号不能为空";
+        if (_checkAmount <= 0)
+            return "支票金额须大于 0";
+        if (!_checkDate.HasValue)
+            return "请选择支票日期";
+        if (_customerId == Guid.Empty)
+            return "请选择客户";
+        if (string.IsNullOrWhiteSpace(_customerPhone))
+            return "请填写客户手机号";
+        if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
+            return "Routing Number 须为 9 位数字";
+        if (string.IsNullOrWhiteSpace(_accountNumber))
+            return "请填写 Account Number";
+
+        var num = CheckNumberGuard.Normalize(_checkNumber);
+        var routing = CheckNumberGuard.NormalizeRouting(_routingNumber);
+        _checkNumber = num;
+        _routingNumber = routing;
+
+        if (await CheckNumberGuard.ExistsAsync(DbContext, num, routing, CheckRecordId))
+            return $"同银行下支票号 {num} 已存在";
+
+        return null;
+    }
+
+    private void CancelAsync() => MudDialog.Cancel();
+}

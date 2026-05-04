@@ -908,6 +908,37 @@ internal static class CheckOcrVisionReadParser
         return (NormalizeSpaces(candidates[0].Text), Math.Clamp(candidates[0].Item2, 0.2, 0.88));
     }
 
+    /// <summary>从版式「公司名优先带」抽取印刷商号/法人名（常见 INC./LLC/CORP 等后缀加权）。</summary>
+    public static (string? companyName, double confidence) ParseCompanyName(ReadOcrLayout layout, CheckOcrParsingProfile profile)
+    {
+        var region = profile.CompanyNamePriorRegion;
+        if (region is null)
+            return (null, 0.1);
+
+        var candidates = layout.Lines
+            .Where(line => region.Contains(line.NormCenterX, line.NormCenterY))
+            .Select(line => (line, score: ScoreCompanyNameCandidate(line)))
+            .Where(x => x.score > 0.30)
+            .OrderByDescending(x => x.score)
+            .ThenByDescending(x => GetCorporateLegalSuffixBump(x.line.Text))
+            .ThenByDescending(x => x.line.Text.Length)
+            .ToList();
+
+        if (candidates.Count == 0)
+            return (null, 0.1);
+
+        var best = candidates[0];
+        var bump = GetCorporateLegalSuffixBump(best.line.Text);
+        var accepted = best.score >= 0.54
+                       || (bump >= 0.44 && best.score >= 0.40)
+                       || (bump is >= 0.18 and < 0.44 && best.score >= 0.52);
+
+        if (!accepted)
+            return (null, 0.1);
+
+        return (NormalizeSpaces(best.line.Text), Math.Clamp(best.score, 0.22, 0.88));
+    }
+
     public static (string? accountAddress, double confidence) ParseAccountAddress(ReadOcrLayout layout, CheckOcrParsingProfile profile)
     {
         var regionLines = layout.Lines
@@ -1032,6 +1063,72 @@ internal static class CheckOcrVisionReadParser
         return score;
     }
 
+    /// <summary>美式商号/法人后缀强度：高档（INC/LLC/CORP…）与低档（GROUP/HOLDING…），用于公司名与持有人行加权。</summary>
+    private static double GetCorporateLegalSuffixBump(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0.0;
+        var t = text.Trim();
+        if (Regex.IsMatch(
+                t,
+                @"(?i)\b(inc\.?|llc\.?|l\.?\s*l\.?\s*c\.?|corp\.?|corporation|ltd\.?|limited|lp\b|pllc|p\.c\.)\b"))
+            return 0.44;
+        if (Regex.IsMatch(
+                t,
+                @"(?i)\b(company|co\.|holdings?|holding|enterprises?|enterprise|group|assoc\.?|association|intl\.?|international|partners?|trust|dba)\b"))
+            return 0.18;
+        return 0.0;
+    }
+
+    private static double ScoreCompanyNameCandidate(ReadOcrLine line)
+    {
+        if (string.IsNullOrWhiteSpace(line.Text))
+            return 0.0;
+        var t = NormalizeSpaces(line.Text);
+        var lower = t.ToLowerInvariant();
+        if (Regex.IsMatch(t, @"(?i)^(pay(\s+to(\s+the)?)?|to\s+the|order\s+of|for|memo)\b"))
+            return 0.0;
+        if (lower.Contains("pay to the order", StringComparison.Ordinal))
+            return 0.0;
+        if (LooksLikeMicrInkLine(t))
+            return 0.0;
+
+        if (lower.Contains("bank", StringComparison.Ordinal) && GetCorporateLegalSuffixBump(t) < 0.44)
+        {
+            if (lower.Contains("national", StringComparison.Ordinal) || lower.Contains("credit union", StringComparison.Ordinal)
+                                                                       || lower.Contains("trust", StringComparison.Ordinal))
+                return 0.06;
+            return 0.1;
+        }
+
+        var score = 0.28;
+        score += GetCorporateLegalSuffixBump(t);
+
+        var tokenCount = NameTokenRegex.Matches(t).Count;
+        if (tokenCount >= 2)
+            score += 0.10;
+        if (tokenCount >= 3)
+            score += 0.06;
+
+        if (AddressLineRegex.IsMatch(t) && GetCorporateLegalSuffixBump(t) < 0.2)
+            score -= 0.30;
+        else if (Regex.IsMatch(t, @"^\d{1,6}\s", RegexOptions.None)
+                 && AddressStreetTokens.Any(st =>
+                     Regex.IsMatch(lower, $@"\b{Regex.Escape(st)}\b", RegexOptions.IgnoreCase)))
+            score -= 0.22;
+
+        if (Regex.IsMatch(t, @"\d{5,}"))
+            score -= 0.12;
+
+        var cy = line.NormCenterY;
+        if (cy is >= 0.20 and <= 0.52)
+            score += 0.06;
+        if (t.Length is >= 4 and <= 72)
+            score += 0.04;
+
+        return score;
+    }
+
     private static double ScoreAccountHolderCandidate(string text, double normY)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -1046,6 +1143,7 @@ internal static class CheckOcrVisionReadParser
             score += 0.26;
         if (tokenCount >= 3)
             score += 0.08;
+        score += GetCorporateLegalSuffixBump(normalized) * 0.42;
         if (AddressLineRegex.IsMatch(normalized))
             score -= 0.24;
         if (Regex.IsMatch(normalized, @"\d{3,}"))

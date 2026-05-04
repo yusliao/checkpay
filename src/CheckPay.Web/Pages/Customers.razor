@@ -44,7 +44,7 @@
     </MudStack>
 </MudStack>
 
-<MudTable Items="@_customers" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="Customer">
+<MudTable Items="@_customers" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="Customer" Dense="true">
     <HeaderContent>
         <MudTh>客户账号</MudTh>
         <MudTh>客户名称</MudTh>
@@ -118,8 +118,33 @@
     </RowTemplate>
 </MudTable>
 
+<MudStack Spacing="1" Class="mt-2 mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.body2" Color="Color.Secondary">共 @_totalCustomers 条</MudText>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">每页</MudText>
+            <MudSelect T="int" Value="_customerPageSize" ValueChanged="OnCustomerPageSizeChangedAsync" Dense="true" Style="min-width:88px">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="20">20</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+            </MudSelect>
+        </MudStack>
+    </MudStack>
+    @if (_customerTotalPages > 1)
+    {
+        <MudStack Row="true" Justify="Justify.Center" Class="pt-1">
+            <MudPagination Count="_customerTotalPages" Selected="_customerPage" SelectedChanged="OnCustomerPageChangedAsync"
+                           ShowFirstButton="true" ShowLastButton="true" BoundaryCount="1" MiddleCount="3" />
+        </MudStack>
+    }
+</MudStack>
+
 @code {
     private List<Customer> _customers = new();
+    private int _totalCustomers;
+    private int _customerPage = 1;
+    private int _customerPageSize = 20;
+    private int _customerTotalPages => Math.Max(1, (int)Math.Ceiling(_totalCustomers / (double)Math.Max(1, _customerPageSize)));
     private bool _loading = true;
     private bool _importing;
 
@@ -276,12 +301,39 @@
     private async Task LoadData()
     {
         _loading = true;
-        // 显示全部（含停用），管理员需要看到
-        _customers = await DbContext.Customers
-            .Include(c => c.CompanyNames)
-            .OrderBy(c => c.CustomerCode)
-            .ToListAsync();
-        _loading = false;
+        try
+        {
+            var query = DbContext.Customers
+                .Include(c => c.CompanyNames)
+                .OrderBy(c => c.CustomerCode);
+            _totalCustomers = await query.CountAsync();
+            if (_customerPage > _customerTotalPages)
+                _customerPage = _customerTotalPages;
+            if (_customerPage < 1)
+                _customerPage = 1;
+            var skip = (_customerPage - 1) * _customerPageSize;
+            _customers = await query
+                .Skip(skip)
+                .Take(_customerPageSize)
+                .ToListAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnCustomerPageChangedAsync(int page)
+    {
+        _customerPage = page;
+        await LoadData();
+    }
+
+    private async Task OnCustomerPageSizeChangedAsync(int size)
+    {
+        _customerPageSize = size;
+        _customerPage = 1;
+        await LoadData();
     }
 
     private async Task OpenAddDialogAsync()

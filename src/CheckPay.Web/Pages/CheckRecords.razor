@@ -46,9 +46,9 @@
     </MudGrid>
 </MudPaper>
 
-@* 记录表格 *@
+@* 记录表格（服务端分页：Count + Skip/Take） *@
 <MudTable Items="@_records" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading"
-          OnRowClick="OnRowClick" T="CheckRecord" RowClass="cursor-pointer">
+          OnRowClick="OnRowClick" T="CheckRecord" RowClass="cursor-pointer" Dense="true">
     <HeaderContent>
         <MudTh>支票号</MudTh>
         <MudTh>客户</MudTh>
@@ -59,6 +59,7 @@
         <MudTh>扣款金额</MudTh>
         <MudTh>日期</MudTh>
         <MudTh>状态</MudTh>
+        <MudTh Style="width:88px">操作</MudTh>
     </HeaderContent>
     <RowTemplate>
         <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
@@ -92,13 +93,41 @@
                 @GetStatusText(context.Status)
             </MudChip>
         </MudTd>
-    </RowTemplate>
-    <FooterContent>
-        <MudTd colspan="9">
-            <MudText Typo="Typo.caption">共 @_records.Count 条记录</MudText>
+        <MudTd DataLabel="操作" @onclick:stopPropagation="true">
+            @if (CanEditSubmittedCheck(context))
+            {
+                <AuthorizeView Roles="Sales,USFinance,Admin">
+                    <Authorized Context="authRow">
+                        <MudIconButton Icon="@Icons.Material.Filled.EditNote" Color="Color.Primary" Size="Size.Small"
+                                       title="编辑票面信息（已提交且未 ACH 扣款成功）"
+                                       OnClick="@(() => OpenSubmittedEditDialogAsync(context))" />
+                    </Authorized>
+                </AuthorizeView>
+            }
         </MudTd>
-    </FooterContent>
+    </RowTemplate>
 </MudTable>
+
+<MudStack Spacing="1" Class="mt-2 mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.body2" Color="Color.Secondary">共 @_totalCheckRecords 条</MudText>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">每页</MudText>
+            <MudSelect T="int" Value="_checkPageSize" ValueChanged="OnCheckPageSizeChangedAsync" Dense="true" Style="min-width:88px">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="20">20</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+            </MudSelect>
+        </MudStack>
+    </MudStack>
+    @if (_checkTotalPages > 1)
+    {
+        <MudStack Row="true" Justify="Justify.Center" Class="pt-1">
+            <MudPagination Count="_checkTotalPages" Selected="_checkPage" SelectedChanged="OnCheckPageChangedAsync"
+                           ShowFirstButton="true" ShowLastButton="true" BoundaryCount="1" MiddleCount="3" />
+        </MudStack>
+    }
+</MudStack>
 
 @* 右侧 Drawer 详情 *@
 <MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.End" Elevation="2" Variant="DrawerVariant.Temporary" Width="400px">
@@ -260,6 +289,26 @@
             </AuthorizeView>
         }
 
+        @* 已提交：票面信息修正（未 ACH 扣款成功） *@
+        @if (CanEditSubmittedCheck(_selectedRecord))
+        {
+            <AuthorizeView Roles="Sales,USFinance,Admin">
+                <Authorized Context="authSubmittedEdit">
+                    <MudPaper Class="ma-4 pa-3" Elevation="0" Outlined="true">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">票面信息</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2" Style="display:block">
+                            已提交入库后可在此修正支票号、金额、客户、ACH 与抬头等；<strong>标记 ACH 扣款成功后不可再改</strong>。
+                        </MudText>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                                   StartIcon="@Icons.Material.Filled.EditNote"
+                                   OnClick="@(() => OpenSubmittedEditDialogAsync(_selectedRecord!))">
+                            编辑票面信息
+                        </MudButton>
+                    </MudPaper>
+                </Authorized>
+            </AuthorizeView>
+        }
+
         @* 状态变更按钮（待核查时显示） *@
         @if (_selectedRecord.Status == CheckStatus.PendingReview)
         {
@@ -307,6 +356,10 @@
 
 @code {
     private List<CheckRecord> _records = new();
+    private int _totalCheckRecords;
+    private int _checkPage = 1;
+    private int _checkPageSize = 20;
+    private int _checkTotalPages => Math.Max(1, (int)Math.Ceiling(_totalCheckRecords / (double)Math.Max(1, _checkPageSize)));
     private bool _loading = true;
     private bool _drawerOpen;
     private CheckRecord? _selectedRecord;
@@ -335,15 +388,9 @@
         await LoadRecords();
     }
 
-    private async Task LoadRecords()
+    private IQueryable<CheckRecord> BuildCheckRecordsFilterQuery()
     {
-        _loading = true;
-        var query = DbContext.CheckRecords
-            .Include(c => c.Customer)
-            .ThenInclude(cu => cu.CompanyNames)
-            .Include(c => c.DebitRecord)
-            .AsQueryable();
-
+        var query = DbContext.CheckRecords.AsQueryable();
         if (_filterStatus.HasValue)
             query = query.Where(c => c.Status == _filterStatus.Value);
         if (!string.IsNullOrWhiteSpace(_filterCheckNumber))
@@ -352,12 +399,65 @@
             query = query.Where(c => c.CheckDate >= DateTime.SpecifyKind(_filterDateFrom.Value, DateTimeKind.Utc));
         if (_filterDateTo.HasValue)
             query = query.Where(c => c.CheckDate <= DateTime.SpecifyKind(_filterDateTo.Value.AddDays(1).AddTicks(-1), DateTimeKind.Utc));
-
-        _records = await query.OrderByDescending(c => c.CreatedAt).ToListAsync();
-        _loading = false;
+        return query;
     }
 
-    private async Task ApplyFilter() => await LoadRecords();
+    private IQueryable<CheckRecord> BuildCheckRecordsListQuery() =>
+        BuildCheckRecordsFilterQuery()
+            .Include(c => c.Customer)
+            .ThenInclude(cu => cu.CompanyNames)
+            .Include(c => c.DebitRecord);
+
+    private async Task LoadRecords()
+    {
+        _loading = true;
+        try
+        {
+            _totalCheckRecords = await BuildCheckRecordsFilterQuery().CountAsync();
+            if (_checkPage > _checkTotalPages)
+                _checkPage = _checkTotalPages;
+            if (_checkPage < 1)
+                _checkPage = 1;
+
+            var skip = (_checkPage - 1) * _checkPageSize;
+            _records = await BuildCheckRecordsListQuery()
+                .OrderByDescending(c => c.CreatedAt)
+                .Skip(skip)
+                .Take(_checkPageSize)
+                .ToListAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnCheckPageChangedAsync(int page)
+    {
+        _checkPage = page;
+        await LoadRecords();
+    }
+
+    private async Task OnCheckPageSizeChangedAsync(int size)
+    {
+        _checkPageSize = size;
+        _checkPage = 1;
+        await LoadRecords();
+    }
+
+    private async Task RefreshSelectedRecordAsync(Guid checkId)
+    {
+        _selectedRecord = await BuildCheckRecordsListQuery()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == checkId);
+        InitDraftEditFields();
+    }
+
+    private async Task ApplyFilter()
+    {
+        _checkPage = 1;
+        await LoadRecords();
+    }
 
     private async Task ClearFilter()
     {
@@ -365,6 +465,7 @@
         _filterCheckNumber = "";
         _filterDateFrom = null;
         _filterDateTo = null;
+        _checkPage = 1;
         await LoadRecords();
     }
 
@@ -373,6 +474,29 @@
         _selectedRecord = args.Item;
         InitDraftEditFields();
         _drawerOpen = true;
+    }
+
+    private static bool CanEditSubmittedCheck(CheckRecord? c) =>
+        c is { SubmittedAt: not null, AchDebitSucceeded: false };
+
+    private async Task OpenSubmittedEditDialogAsync(CheckRecord record)
+    {
+        if (!CanEditSubmittedCheck(record))
+            return;
+
+        var parameters = new DialogParameters<CheckRecordSubmittedEditDialog>
+        {
+            { x => x.CheckRecordId, record.Id }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<CheckRecordSubmittedEditDialog>("编辑支票信息", parameters, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            await LoadRecords();
+            if (_drawerOpen && _selectedRecord?.Id == record.Id)
+                await RefreshSelectedRecordAsync(record.Id);
+        }
     }
 
     private void InitDraftEditFields()
@@ -426,8 +550,7 @@
             {
                 Snackbar.Add("该记录已提交", Severity.Info);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -444,15 +567,13 @@
             {
                 Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
             Snackbar.Add("草稿已正式提交入库", Severity.Success);
             await LoadRecords();
-            _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-            InitDraftEditFields();
+            await RefreshSelectedRecordAsync(checkId);
         }
         finally
         {
@@ -501,8 +622,7 @@
             {
                 Snackbar.Add("已提交的记录不能作为草稿删除", Severity.Warning);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -510,8 +630,7 @@
             {
                 Snackbar.Add("仅允许删除未关联扣款、且状态为待扣款的草稿", Severity.Warning);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -547,8 +666,7 @@
             {
                 Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -605,8 +723,7 @@
             {
                 Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -614,8 +731,7 @@
             {
                 Snackbar.Add(result.ErrorMessage ?? "无法撤销", Severity.Warning);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -626,8 +742,7 @@
 
             Snackbar.Add("已撤销扣款成功标记", Severity.Success);
             await LoadRecords();
-            _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-            InitDraftEditFields();
+            await RefreshSelectedRecordAsync(checkId);
         }
         finally
         {
@@ -661,8 +776,7 @@
             {
                 Snackbar.Add("数据已被其他用户修改，请刷新后重试", Severity.Error);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -670,8 +784,7 @@
             {
                 Snackbar.Add(result.ErrorMessage ?? "无法撤销", Severity.Warning);
                 await LoadRecords();
-                _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-                InitDraftEditFields();
+                await RefreshSelectedRecordAsync(checkId);
                 return;
             }
 
@@ -688,8 +801,7 @@
 
             Snackbar.Add("已撤销扣款关联", Severity.Success);
             await LoadRecords();
-            _selectedRecord = _records.FirstOrDefault(c => c.Id == checkId);
-            InitDraftEditFields();
+            await RefreshSelectedRecordAsync(checkId);
             if (_selectedRecord == null)
                 _drawerOpen = false;
         }

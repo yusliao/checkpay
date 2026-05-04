@@ -7,7 +7,7 @@
 - **前端**: Blazor Server + MudBlazor
 - **后端**: ASP.NET Core 10 + EF Core 10
 - **数据库**: PostgreSQL 16
-- **OCR**: Azure Vision Read 主识别；可选 `Ocr:PrebuiltCheck:EnrichPrimaryResult=true` 再调 **prebuilt-check.us** 与 Read 全量融合；未开该项时默认 **`Ocr:PrebuiltCheck:AmountFallbackWhenVisionFails`**（`OCR_PREBUILT_CHECK_AMOUNT_FALLBACK_WHEN_VISION_FAILS`）在 Vision 金额弱时再调 DI，仅用 **`NumberAmount`** 兜底；金额低于置信度阈值时触发 DI 手写金额校验；同时对 `BankName` / `AccountHolderName` / `AccountAddress` 增加版式区域锚点解析（可由票型 profile 覆盖）并融合 prebuilt 字段；`RoutingNumber/MICR` 解析增加“底部区域优先 + OCR易错字符归一化（O/0, I/1 等）”；配置节沿用 `Azure:DocumentIntelligence`；结果写入 `ocr_results.raw_result`（含 `Diagnostics` 诊断键值），金额校验写入 `amount_validation_*`。支票 **提交入库**（非草稿）可按 `Ocr:Training:AutoSampleOnCheckSubmit` 自动写入训练样本表。排查见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
+- **OCR**: Azure Vision Read 主识别；可选 `Ocr:PrebuiltCheck:EnrichPrimaryResult=true` 再调 **prebuilt-check.us** 与 Read 全量融合；未开该项时默认 **`Ocr:PrebuiltCheck:AmountFallbackWhenVisionFails`**（`OCR_PREBUILT_CHECK_AMOUNT_FALLBACK_WHEN_VISION_FAILS`）在 Vision 金额弱时再调 DI，仅用 **`NumberAmount`** 兜底；金额低于置信度阈值时触发 DI 手写金额校验；同时对 `BankName` / `AccountHolderName` / `AccountAddress` / `CompanyName`（`companyNamePriorRegion` + INC./LLC 等法人后缀加权）增加版式区域锚点解析（可由票型 `parsing_profile_json` 覆盖）并融合 prebuilt 字段；`RoutingNumber/MICR` 解析增加“底部区域优先 + OCR易错字符归一化（O/0, I/1 等）”；配置节沿用 `Azure:DocumentIntelligence`；结果写入 `ocr_results.raw_result`（含 `Diagnostics` 诊断键值），金额校验写入 `amount_validation_*`。支票 **提交入库**（非草稿）可按 `Ocr:Training:AutoSampleOnCheckSubmit` 自动写入训练样本表。排查见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
 - **存储**: MinIO（S3 兼容，Docker Compose 默认）
 - **部署**: Docker Compose（推荐，应用 + PostgreSQL + MinIO）
 - **客户主数据**: 支票上传/复核在「客户账号」由 OCR 写入或用户修改后，若 **客户管理** 中已存在该 `customer_code` 且登记了手机号，表单会从数据库 `customers` 自动带出（不覆盖用户已为同一账号手工填写的手机号）。支票上传与复核路由授权角色为 **销售 + 美国财务 + 管理员**（`Sales,USFinance,Admin`）。
@@ -20,7 +20,7 @@
 
 | 阶段 | 内容 |
 |------|------|
-| ✅ | Solution、EF Core、`docker-compose`、MinIO、Azure Vision OCR、图片代理、认证（Cookie + BCrypt）、主要 Blazor 页面与 Web 内嵌 OCR Worker 等 |
+| ✅ | Solution、EF Core、`docker-compose`、MinIO、Azure Vision OCR、图片代理、认证（Cookie + BCrypt）、主要 Blazor 页面（收款记录 `/records`：已提交且未 ACH 扣款成功时弹框编辑票面；客户管理 `/customers` 等列表支持数据库分页）与 Web 内嵌 OCR Worker 等 |
 
 ## 默认账号
 

@@ -133,4 +133,35 @@ public class CheckOcrVisionReadParserTests
 
         Assert.Equal("123 Main Street, New York NY 10001", address);
     }
+
+    [Fact]
+    public void ParseCompanyName_PrefersLineWithIncOverWeakerGroupStyleName()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("ALLIANCE FOOD GROUP", 0.20, 0.36, 0.34, 0.38, 0.08, 0.42),
+            new ReadOcrLine("168 CHINA GARDEN INC.", 0.22, 0.42, 0.40, 0.44, 0.10, 0.48)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (company, confidence) = CheckOcrVisionReadParser.ParseCompanyName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("168 CHINA GARDEN INC.", company);
+        Assert.True(confidence >= 0.5);
+    }
+
+    [Fact]
+    public void ParseCompanyName_RejectsPlainStreetLineWithoutLegalSuffix()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("456 Oak Avenue", 0.30, 0.40, 0.38, 0.42, 0.08, 0.45)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (company, confidence) = CheckOcrVisionReadParser.ParseCompanyName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Null(company);
+        Assert.True(confidence < 0.2);
+    }
 }

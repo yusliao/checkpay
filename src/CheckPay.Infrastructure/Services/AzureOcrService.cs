@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Azure;
 using Azure.AI.DocumentIntelligence;
 using Azure.AI.Vision.ImageAnalysis;
+using CheckPay.Application.Common;
 using CheckPay.Application.Common.Interfaces;
 using CheckPay.Application.Common.Models;
 using Microsoft.Extensions.Configuration;
@@ -97,6 +98,7 @@ public class AzureOcrService : IOcrService
         var (date, dateConf) = CheckOcrVisionReadParser.ParseDate(layout, profile);
         var (parsedBankName, parsedBankConf) = CheckOcrVisionReadParser.ParseBankName(layout, profile);
         var (parsedHolderName, parsedHolderConf) = CheckOcrVisionReadParser.ParseAccountHolderName(layout, profile);
+        var (parsedCompanyName, parsedCompanyConf) = CheckOcrVisionReadParser.ParseCompanyName(layout, profile);
         var (parsedAddress, parsedAddressConf) = CheckOcrVisionReadParser.ParseAccountAddress(layout, profile);
 
         _logger.LogInformation(
@@ -232,6 +234,18 @@ public class AzureOcrService : IOcrService
                 ref accountAddress,
                 ref accountAddressConf);
 
+        var companyName = !string.IsNullOrWhiteSpace(parsedCompanyName)
+            ? parsedCompanyName.Trim()
+            : OcrCheckCustomerFields.MergeHolderCompanyDisplayName(null, accountHolder, mergedPayTo);
+        var companyConf = ResolveCompanyNameConfidence(
+            parsedCompanyName,
+            parsedCompanyConf,
+            companyName,
+            accountHolder,
+            accountHolderConf,
+            mergedPayTo,
+            mergedPayToConf);
+
         var diagnostics = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["full_text_chars"] = rawText.Length.ToString(),
@@ -256,7 +270,10 @@ public class AzureOcrService : IOcrService
             ["eu_bic_present"] = (bic != null).ToString(),
             ["bank_name_source"] = bankName is null ? "none" : (diFields.BankName is not null ? "prebuilt_or_merged" : "vision_region"),
             ["account_holder_source"] = accountHolder is null ? "none" : (diFields.PayerName is not null ? "prebuilt_or_merged" : "vision_region"),
-            ["account_address_source"] = accountAddress is null ? "none" : "vision_region"
+            ["account_address_source"] = accountAddress is null ? "none" : "vision_region",
+            ["company_name_source"] = !string.IsNullOrWhiteSpace(parsedCompanyName)
+                ? "vision_company_region"
+                : (companyName is null ? "none" : "merged_holder_payto")
         };
         if (resolution.TemplateId.HasValue)
             diagnostics["template_id"] = resolution.TemplateId.Value.ToString("D");
@@ -301,7 +318,7 @@ public class AzureOcrService : IOcrService
             ["AccountAddress"] = accountAddress != null ? accountAddressConf : 0.1,
             ["AccountType"] = 0.1,
             ["PayToOrderOf"] = mergedPayToConf,
-            ["CompanyName"] = mergedPayToConf,
+            ["CompanyName"] = companyConf,
             ["ForMemo"] = 0.1,
             ["MicrLineRaw"] = micConf
         };
@@ -322,7 +339,7 @@ public class AzureOcrService : IOcrService
             AccountHolderName: accountHolder,
             AccountAddress: accountAddress,
             PayToOrderOf: mergedPayTo,
-            CompanyName: mergedPayTo,
+            CompanyName: companyName,
             MicrLineRaw: micrLineRaw,
             CheckNumberMicr: _prebuiltCheckEnrichPrimary ? diFields.CheckNumberMicr : null,
             ExtractedText: rawText,
@@ -356,6 +373,30 @@ public class AzureOcrService : IOcrService
         bool enrichPrimary,
         string? outcome) =>
         !fallbackEnabled ? "off" : enrichPrimary ? "skipped" : outcome ?? "skipped";
+
+    private static double ResolveCompanyNameConfidence(
+        string? parsedCompanyName,
+        double parsedCompanyConf,
+        string? companyName,
+        string? accountHolder,
+        double accountHolderConf,
+        string? mergedPayTo,
+        double mergedPayToConf)
+    {
+        if (!string.IsNullOrWhiteSpace(parsedCompanyName))
+            return parsedCompanyConf;
+
+        if (string.IsNullOrWhiteSpace(companyName))
+            return 0.1;
+
+        var c = companyName.Trim();
+        if (accountHolder != null && string.Equals(c, accountHolder.Trim(), StringComparison.Ordinal))
+            return accountHolderConf;
+        if (mergedPayTo != null && string.Equals(c, mergedPayTo.Trim(), StringComparison.Ordinal))
+            return mergedPayToConf;
+
+        return Math.Clamp(Math.Max(mergedPayToConf, accountHolderConf) * 0.92, 0.12, 0.72);
+    }
 
     private static void MergePrebuiltStructuredFields(
         PrebuiltCheckStructuredFields di,

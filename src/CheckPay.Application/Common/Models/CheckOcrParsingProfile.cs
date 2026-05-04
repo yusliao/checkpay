@@ -53,7 +53,8 @@ public sealed class CheckOcrParsingProfile
         BankNamePriorRegion = new NormRegion(0.0, 0.0, 0.62, 0.28),
         AccountHolderPriorRegion = new NormRegion(0.0, 0.22, 0.76, 0.62),
         CompanyNamePriorRegion = new NormRegion(0.0, 0.0, 0.99, 0.62),
-        AccountAddressPriorRegion = new NormRegion(0.0, 0.22, 0.90, 0.74)
+        // minNormY 需覆盖「商号行 normY 仍较靠上」时紧接其下的门牌街道行（常见 <0.22），否则街道行会整行掉出地址带
+        AccountAddressPriorRegion = new NormRegion(0.0, 0.06, 0.90, 0.74)
     };
 
     public static readonly CheckOcrParsingProfile Default = CreateDefault();

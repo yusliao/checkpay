@@ -911,30 +911,42 @@ internal static class CheckOcrVisionReadParser
     /// <summary>从版式「公司名优先带」抽取印刷商号/法人名（常见 INC./LLC/CORP 等后缀加权）。</summary>
     public static (string? companyName, double confidence) ParseCompanyName(ReadOcrLayout layout, CheckOcrParsingProfile profile)
     {
+        var (name, conf, _) = ResolveAcceptedCompanyNameLine(layout, profile);
+        return (name, conf);
+    }
+
+    /// <summary>与 <see cref="ParseCompanyName"/> 相同判定，额外返回命中行供「商号下方印刷地址」锚定。</summary>
+    internal static ReadOcrLine? TryGetAcceptedCompanyNameLine(ReadOcrLayout layout, CheckOcrParsingProfile profile) =>
+        ResolveAcceptedCompanyNameLine(layout, profile).line;
+
+    private static (string? name, double conf, ReadOcrLine? line) ResolveAcceptedCompanyNameLine(
+        ReadOcrLayout layout,
+        CheckOcrParsingProfile profile)
+    {
         var region = profile.CompanyNamePriorRegion;
         if (region is null)
-            return (null, 0.1);
+            return (null, 0.1, null);
 
         // 区域带 ∪ 上半张：避免票型 region 过窄或 Read 将抬头行 normY 标到偏下时漏选
         var inRegion = layout.Lines.Where(line => region.Contains(line.NormCenterX, line.NormCenterY));
         var upperBand = layout.Lines.Where(line =>
             line.NormCenterY is >= 0.0 and <= 0.64 && line.NormCenterX is >= 0.0 and <= 0.995);
-        var fromGeom = TrySelectAcceptedCompanyName(inRegion.Concat(upperBand).Distinct());
+        var fromGeom = TrySelectAcceptedCompanyNameWithLine(inRegion.Concat(upperBand).Distinct());
         if (fromGeom.name != null)
-            return fromGeom;
+            return (fromGeom.name, fromGeom.conf, fromGeom.line);
 
         // 最后按 FullText 行序构造伪几何再跑同一套打分（与真实 bbox 解耦）
         if (!string.IsNullOrWhiteSpace(layout.FullText))
-            return TrySelectAcceptedCompanyName(BuildSyntheticCompanyLinesFromFullText(layout.FullText));
+            return TrySelectAcceptedCompanyNameWithLine(BuildSyntheticCompanyLinesFromFullText(layout.FullText));
 
-        return (null, 0.1);
+        return (null, 0.1, null);
     }
 
-    private static (string? name, double conf) TrySelectAcceptedCompanyName(IEnumerable<ReadOcrLine> lines)
+    private static (string? name, double conf, ReadOcrLine? line) TrySelectAcceptedCompanyNameWithLine(IEnumerable<ReadOcrLine> lines)
     {
         var candidates = RankCompanyNameCandidates(lines);
         if (candidates.Count == 0)
-            return (null, 0.1);
+            return (null, 0.1, null);
 
         var best = candidates[0];
         var bump = GetCorporateLegalSuffixBump(best.line.Text);
@@ -943,9 +955,9 @@ internal static class CheckOcrVisionReadParser
                        || (bump is >= 0.18 and < 0.44 && best.score >= 0.52);
 
         if (!accepted)
-            return (null, 0.1);
+            return (null, 0.1, null);
 
-        return (NormalizeSpaces(best.line.Text), Math.Clamp(best.score, 0.22, 0.88));
+        return (NormalizeSpaces(best.line.Text), Math.Clamp(best.score, 0.22, 0.88), best.line);
     }
 
     /// <summary>按 Read 拼接全文行序生成居中伪行，供公司名在几何失效时仍能从「1675 上一行 / INC 行」命中。</summary>
@@ -990,8 +1002,93 @@ internal static class CheckOcrVisionReadParser
             .ThenBy(x => x.line.NormCenterY)
             .ToList();
 
+    private static bool LooksLikePayToOrderBandLine(string text)
+    {
+        var t = NormalizeSpaces(text);
+        return Regex.IsMatch(t, @"(?i)^(pay(\s+to(\s+the)?)?|to\s+the|order\s+of)\b");
+    }
+
+    /// <summary>
+    /// 印刷商号行正下方、与商号同一左栏内的门牌+城市邮编（Read 常把街道行 normY 标在默认 accountAddressPriorRegion 上沿外）。
+    /// </summary>
+    private static (string? address, double confidence) TryParseAccountAddressAnchoredBelowCompany(
+        ReadOcrLayout layout,
+        CheckOcrParsingProfile profile)
+    {
+        var companyLine = TryGetAcceptedCompanyNameLine(layout, profile);
+        if (companyLine is null)
+            return (null, 0.1);
+
+        // FullText 伪几何行宽度假大，不能用来锚定纵向邻行
+        if (companyLine.NormRight - companyLine.NormLeft > 0.62)
+            return (null, 0.1);
+
+        // 仅处理票面上方印刷块（避免把中部 Pay to 附近误当地址）
+        if (companyLine.NormCenterY > 0.44 || companyLine.NormCenterX > 0.64)
+            return (null, 0.1);
+
+        const double xAlign = 0.32;
+        var ordered = layout.Lines
+            .Where(l => l.NormTop >= companyLine.NormBottom - 0.03)
+            .Where(l => Math.Abs(l.NormCenterX - companyLine.NormCenterX) <= xAlign)
+            .OrderBy(l => l.NormTop)
+            .ToList();
+
+        var block = new List<ReadOcrLine>();
+        foreach (var l in ordered)
+        {
+            if (ReferenceEquals(l, companyLine))
+                continue;
+            if (string.Equals(
+                    NormalizeSpaces(l.Text),
+                    NormalizeSpaces(companyLine.Text),
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (LooksLikeMicrInkLine(l.Text))
+                break;
+            if (LooksLikePayToOrderBandLine(l.Text))
+                break;
+
+            var t = NormalizeSpaces(l.Text);
+            var sc = ScoreAddressCandidate(t);
+            var isZipLine = Regex.IsMatch(t, @"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b");
+            var lower = t.ToLowerInvariant();
+            var hasStreetCue = AddressStreetTokens.Any(token =>
+                Regex.IsMatch(lower, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase));
+            var doorPlate = AddressLineRegex.IsMatch(t);
+
+            if (sc <= 0.32 && !isZipLine && !(doorPlate && hasStreetCue))
+            {
+                if (block.Count > 0)
+                    break;
+                continue;
+            }
+
+            if (!ShouldIncludeInAddressBlock(t))
+                continue;
+
+            block.Add(l);
+            if (block.Count >= 4)
+                break;
+            if (isZipLine)
+                break;
+        }
+
+        if (block.Count == 0)
+            return (null, 0.1);
+
+        var seedLine = block.MaxBy(x => ScoreAddressCandidate(x.Text))!;
+        var seedScore = ScoreAddressCandidate(seedLine.Text);
+        var merged = NormalizeSpaces(string.Join(", ", block.OrderBy(x => x.NormTop).Select(x => x.Text)));
+        return (merged, Math.Clamp(seedScore + (block.Count > 1 ? 0.06 : 0.0), 0.22, 0.88));
+    }
+
     public static (string? accountAddress, double confidence) ParseAccountAddress(ReadOcrLayout layout, CheckOcrParsingProfile profile)
     {
+        var anchored = TryParseAccountAddressAnchoredBelowCompany(layout, profile);
+        if (anchored.address != null)
+            return (anchored.address, anchored.confidence);
+
         var regionLines = layout.Lines
             .Where(line => profile.AccountAddressPriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
             .OrderBy(line => line.NormTop)
@@ -1011,7 +1108,7 @@ internal static class CheckOcrVisionReadParser
             .ThenByDescending(x => x.score)
             .First();
 
-        const double yLink = 0.28;
+        const double yLink = 0.36;
         var pool = scoredLines.Select(x => x.line).ToList();
         var cluster = new List<ReadOcrLine> { seed.line };
         var queued = new HashSet<ReadOcrLine>();

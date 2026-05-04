@@ -2,7 +2,7 @@
 
 ## 变更记录 (Changelog)
 
-- **2026-05-04** - 支票 **`account_address`**（`ParseAccountAddress`）：`ScoreAddressCandidate` 对含 **INC/LLC…** 高档法人后缀行强降权，避免把印刷商号当门牌地址；地址行在 `accountAddressPriorRegion` 内按 **NormCenterY≤0.28** 做连通聚类后按 `NormTop` 合并（最多 4 行），替代「仅与种子行 ΔY≤0.12」以覆盖「街道 + 城市 ST 邮编」较大行距；默认 `accountAddressPriorRegion` 略上扩（`minNormY≈0.22`）与右扩；单测 `ParseAccountAddress_MergesStreetAndCityZipWithWiderNormYGap`、`ParseAccountAddress_SkipsIncCompanyLineAndMergesStreetCityZip`
+- **2026-05-04** - 支票 **`account_address`**（`ParseAccountAddress`）：**INC/LLC…** 行地址分降权；命中 **印刷商号真实几何行**（排除 FullText 伪 bbox 宽行）且位于票面上方时，优先 **商号下方与商号 X 对齐** 的连续门牌/州邮编行（遇 `PAY TO`/`ORDER OF`/磁墨停）；默认 `accountAddressPriorRegion.minNormY` **0.06**；区域内纵向聚类 **yLink 0.36**；单测含 `ParseAccountAddress_CompanyAnchoredWhenStreetCenterYBelow022`、`ParseAccountAddress_MergesStreetAndCityZipWithWiderNormYGap`、`ParseAccountAddress_SkipsIncCompanyLineAndMergesStreetCityZip`
 - **2026-05-04** - **复制到剪贴板**（支票上传 / 扣款导入「复制全部」）：`navigator.clipboard` 在非 HTTPS（如内网 `http://host:8080`）下不可用；`_Layout.cshtml` 新增 `checkPayCopyText`，优先 `clipboard.writeText`，失败则 `textarea` + `document.execCommand('copy')` 降级；`CheckUpload` / `DebitImport` 改为调用该函数
 - **2026-05-04** - **ACH 支票导出**（`/reports/ach-us`）：表格首列行复选 + 表头 `TriState` 全选（仅当前查询结果中尚未 `AchDebitSucceeded` 的行）；「批量标为扣款成功」二次确认后批量写 `ach_debit_succeeded=Y` 与时间戳，并逐条 `AuditLog`（`BatchAchMark=true`）；查询刷新时自动剔除已不在结果或已标 Y 的勾选
 - **2026-05-04** - **收款记录**已提交票面编辑：`CheckRecordSubmittedEditDialog` 弹框编辑支票号/金额/日期/客户与手机号/ACH 与抬头等（与上传入库字段对齐）；**仅** `SubmittedAt` 已填且 **`AchDebitSucceeded` 为 false** 时可编辑；`Sales,USFinance,Admin`；同银行支票号唯一校验、主数据与公司名警告重算、`AuditLog` 更新；列表「操作」列与抽屉「编辑票面信息」入口；设计文档 [docs/收款系统_页面交互设计_V1.0.md](docs/收款系统_页面交互设计_V1.0.md) 增补 4.2.1

@@ -167,6 +167,25 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseAccountAddress_CompanyAnchoredWhenStreetCenterYBelow022()
+    {
+        // 商号行很靠上时，街道行 normCenterY 常 <0.22（旧默认 accountAddressPriorRegion 下沿），须靠「商号下方左栏」锚定
+        var lines = new[]
+        {
+            new ReadOcrLine("1675", 0.88, 0.08, 0.06, 0.10, 0.72, 0.96),
+            new ReadOcrLine("168 CHINA GARDEN INC.", 0.42, 0.14, 0.12, 0.16, 0.08, 0.78),
+            new ReadOcrLine("1033 RANDOLPH ST STE 9", 0.42, 0.185, 0.17, 0.20, 0.08, 0.78),
+            new ReadOcrLine("THOMASVILLE NC 27360-5731", 0.42, 0.255, 0.24, 0.27, 0.08, 0.78),
+            new ReadOcrLine("BANK OF AMERICA", 0.35, 0.46, 0.44, 0.48, 0.12, 0.58)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (address, _) = CheckOcrVisionReadParser.ParseAccountAddress(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("1033 RANDOLPH ST STE 9, THOMASVILLE NC 27360-5731", address);
+    }
+
+    [Fact]
     public void ParseCompanyName_PrefersLineWithIncOverWeakerGroupStyleName()
     {
         var lines = new[]

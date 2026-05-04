@@ -151,6 +151,38 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseCompanyName_IncludesTopPrintedIncAboveOldMinNormY()
+    {
+        // 旧默认 minNormY=0.20 会漏掉支票号下方、几何更靠上的一行商号
+        var lines = new[]
+        {
+            new ReadOcrLine("1675", 0.88, 0.08, 0.06, 0.10, 0.72, 0.96),
+            new ReadOcrLine("168 CHINA GARDEN INC.", 0.42, 0.14, 0.12, 0.16, 0.08, 0.78),
+            new ReadOcrLine("BANK OF AMERICA", 0.35, 0.46, 0.44, 0.48, 0.12, 0.58)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (company, _) = CheckOcrVisionReadParser.ParseCompanyName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("168 CHINA GARDEN INC.", company);
+    }
+
+    [Fact]
+    public void ParseAccountHolderName_RejectsBankBrandingPreferringPayeeLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("BANK OF AMERICA", 0.40, 0.40, 0.38, 0.42, 0.10, 0.70),
+            new ReadOcrLine("Allance food Group", 0.42, 0.48, 0.46, 0.50, 0.10, 0.72)
+        };
+        var layout = new ReadOcrLayout("x", lines, 1000, 1000);
+
+        var (holder, _) = CheckOcrVisionReadParser.ParseAccountHolderName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("Allance food Group", holder);
+    }
+
+    [Fact]
     public void ParseCompanyName_RejectsPlainStreetLineWithoutLegalSuffix()
     {
         var lines = new[]

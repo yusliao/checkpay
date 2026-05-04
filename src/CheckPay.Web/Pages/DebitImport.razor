@@ -516,7 +516,7 @@ else
         if (string.IsNullOrEmpty(_debitOcrCopyPanelText)) return;
         try
         {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _debitOcrCopyPanelText);
+            await JS.InvokeVoidAsync("checkPayCopyText", _debitOcrCopyPanelText);
             Snackbar.Add("已复制到剪贴板", Severity.Success);
         }
         catch (Exception ex)

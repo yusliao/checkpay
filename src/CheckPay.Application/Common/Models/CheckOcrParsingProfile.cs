@@ -36,7 +36,7 @@ public sealed class CheckOcrParsingProfile
     [JsonPropertyName("accountHolderPriorRegion")]
     public NormRegion? AccountHolderPriorRegion { get; set; }
 
-    /// <summary>票面印刷公司名/商号常见区域（Pay to 上方一行，多含 INC./LLC 等后缀）。未配置时默认取账户持有人带上方的窄带。</summary>
+    /// <summary>票面印刷公司名/商号常见区域（支票号下方至 Pay to 上方，多含 INC./LLC 等后缀）。未配置时默认含页面上部窄带（含 normY 较低的一行商号）。</summary>
     [JsonPropertyName("companyNamePriorRegion")]
     public NormRegion? CompanyNamePriorRegion { get; set; }
 
@@ -51,7 +51,7 @@ public sealed class CheckOcrParsingProfile
         PrintedCheckPriorRegion = new NormRegion(0.52, 0.0, 1.0, 0.42),
         BankNamePriorRegion = new NormRegion(0.0, 0.0, 0.62, 0.28),
         AccountHolderPriorRegion = new NormRegion(0.0, 0.22, 0.76, 0.62),
-        CompanyNamePriorRegion = new NormRegion(0.0, 0.20, 0.78, 0.50),
+        CompanyNamePriorRegion = new NormRegion(0.0, 0.0, 0.88, 0.55),
         AccountAddressPriorRegion = new NormRegion(0.0, 0.28, 0.80, 0.72)
     };
 

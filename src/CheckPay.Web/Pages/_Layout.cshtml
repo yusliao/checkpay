@@ -51,6 +51,39 @@
 
             window.localStorage.setItem(key, value);
         };
+
+        /** 复制文本：优先 Clipboard API（需 HTTPS/localhost）；否则 textarea + execCommand，兼容 HTTP 内网部署。 */
+        window.checkPayCopyText = async function (text) {
+            var s = text === null || text === undefined ? '' : String(text);
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                try {
+                    await navigator.clipboard.writeText(s);
+                    return;
+                } catch (e) {
+                    /* 权限失败或非安全上下文等，走降级 */
+                }
+            }
+            var ta = document.createElement('textarea');
+            ta.value = s;
+            ta.setAttribute('readonly', 'readonly');
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.top = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, s.length);
+            var ok = false;
+            try {
+                ok = document.execCommand('copy');
+            } catch (e2) {
+                ok = false;
+            }
+            document.body.removeChild(ta);
+            if (!ok) {
+                throw new Error('当前浏览器无法写入剪贴板（请使用 HTTPS，或手动全选复制下方文本）');
+            }
+        };
     </script>
 </body>
 </html>

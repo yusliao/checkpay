@@ -922,6 +922,7 @@ internal static class CheckOcrVisionReadParser
             .OrderByDescending(x => x.score)
             .ThenByDescending(x => GetCorporateLegalSuffixBump(x.line.Text))
             .ThenByDescending(x => x.line.Text.Length)
+            .ThenBy(x => x.line.NormCenterY)
             .ToList();
 
         if (candidates.Count == 0)
@@ -1080,6 +1081,19 @@ internal static class CheckOcrVisionReadParser
         return 0.0;
     }
 
+    /// <summary>付款行/储蓄机构印刷品牌行（非 Pay to 抬头）。含高档法人后缀（如 Foo Bank LLC）则不排除。</summary>
+    private static bool LooksLikeDraweeInstitutionBrandingLine(string normalized)
+    {
+        if (string.IsNullOrWhiteSpace(normalized))
+            return false;
+        if (GetCorporateLegalSuffixBump(normalized) >= 0.44)
+            return false;
+        var lower = normalized.ToLowerInvariant();
+        if (lower.Contains("credit union", StringComparison.Ordinal))
+            return true;
+        return lower.Contains("bank", StringComparison.Ordinal);
+    }
+
     private static double ScoreCompanyNameCandidate(ReadOcrLine line)
     {
         if (string.IsNullOrWhiteSpace(line.Text))
@@ -1093,13 +1107,8 @@ internal static class CheckOcrVisionReadParser
         if (LooksLikeMicrInkLine(t))
             return 0.0;
 
-        if (lower.Contains("bank", StringComparison.Ordinal) && GetCorporateLegalSuffixBump(t) < 0.44)
-        {
-            if (lower.Contains("national", StringComparison.Ordinal) || lower.Contains("credit union", StringComparison.Ordinal)
-                                                                       || lower.Contains("trust", StringComparison.Ordinal))
-                return 0.06;
-            return 0.1;
-        }
+        if (LooksLikeDraweeInstitutionBrandingLine(t))
+            return 0.0;
 
         var score = 0.28;
         score += GetCorporateLegalSuffixBump(t);
@@ -1121,7 +1130,7 @@ internal static class CheckOcrVisionReadParser
             score -= 0.12;
 
         var cy = line.NormCenterY;
-        if (cy is >= 0.20 and <= 0.52)
+        if (cy is >= 0.10 and <= 0.55)
             score += 0.06;
         if (t.Length is >= 4 and <= 72)
             score += 0.04;
@@ -1137,6 +1146,8 @@ internal static class CheckOcrVisionReadParser
         var lower = normalized.ToLowerInvariant();
         var score = 0.3;
         if (lower.Contains("pay to the order", StringComparison.Ordinal) || lower.Contains("memo", StringComparison.Ordinal))
+            return 0.0;
+        if (LooksLikeDraweeInstitutionBrandingLine(normalized))
             return 0.0;
         var tokenCount = NameTokenRegex.Matches(normalized).Count;
         if (tokenCount >= 2)

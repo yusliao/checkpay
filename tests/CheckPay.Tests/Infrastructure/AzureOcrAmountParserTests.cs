@@ -10,6 +10,7 @@ public class AzureOcrAmountParserTests
     [InlineData("Twenty-five and 01/100", 25.01)]
     [InlineData("One million and 00/100 dollars", 1000000.00)]
     [InlineData("Six Hundred Eightysix 25!", 686.25)]
+    [InlineData("Two thousandh forty six dollar & 3.9 /00", 2046.39)]
     public void TryParseAmountFromWords_ShouldParseExpectedAmount(string input, decimal expected)
     {
         var ok = AzureOcrService.TryParseAmountFromWords(input, out var actual);

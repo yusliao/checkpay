@@ -387,6 +387,26 @@ public class CheckOcrRoutingMicrEuTests
         Assert.Equal("1023", cn);
     }
 
+    /// <summary>Navy Federal：<c>⑆ABA⑆0511⑉7208453105⑈001</c>（⑉ 常为 Read 替代 on-us）；勿取长账号作支票号。</summary>
+    [Fact]
+    public void ParseCheckNumber_NavyFedTransit0511DelimiterLongAccount_AlignsPrinted511()
+    {
+        const char transit = '\u2446';
+        const char delimAux = '\u2449'; // 「⑉」
+        const char onUs = '\u2448';
+        var micrOneLine = $"{transit}256074974{transit}0511{delimAux}7208453105{onUs}001";
+        var lines = new[]
+        {
+            new ReadOcrLine("TD9 LLC", 0.22, 0.06, 0.05, 0.07, 0.08, 0.72),
+            new ReadOcrLine("511", 0.18, 0.09, 0.08, 0.10, 0.08, 0.22),
+            new ReadOcrLine(micrOneLine, 0.5, 0.90, 0.88, 0.92, 0.04, 0.96),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("511", cn);
+    }
+
     [Fact]
     public void ParseCheckNumber_TransitFragmentMerge_Printed535WhenPureMicrCheckRowOutsideMicrSlice()
     {

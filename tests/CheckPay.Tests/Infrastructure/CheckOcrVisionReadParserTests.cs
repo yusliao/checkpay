@@ -52,6 +52,19 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseAmount_DollarCommaDecimal2046_AlignsEuropeanStyleOcr()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("$ 2046,39", 0.82, 0.14, 0.10, 0.18, 0.70, 0.94),
+            new ReadOcrLine("Other noise", 0.50, 0.90, 0.86, 0.94, 0.40, 0.60)
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1000, 1000);
+        var (amount, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal(2046.39m, amount);
+    }
+
+    [Fact]
     public void ParseDate_PrefersLineInDatePriorRegion()
     {
         var lines = new[]

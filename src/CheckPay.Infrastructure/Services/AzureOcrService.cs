@@ -740,23 +740,34 @@ public class AzureOcrService : IOcrService
         var lower = working.ToLowerInvariant();
 
         var cents = 0;
-        var fracMatch = Regex.Match(lower, @"(\d{1,2})\s*/\s*100");
-        if (fracMatch.Success)
+        var ampFrac = Regex.Match(lower, @"&\s*(\d)\.(\d)\s*/\s*00");
+        if (ampFrac.Success)
         {
-            cents = int.Parse(fracMatch.Groups[1].Value);
-            working = working.Remove(fracMatch.Index, fracMatch.Length).TrimEnd();
+            cents = int.Parse(ampFrac.Groups[1].Value) * 10 + int.Parse(ampFrac.Groups[2].Value);
+            working = working.Remove(ampFrac.Index, ampFrac.Length).TrimEnd();
+            lower = working.ToLowerInvariant();
         }
         else
         {
-            var trail = Regex.Match(lower, @"(?<=[a-z])\s+(\d{1,2})\s*!*\s*$");
-            if (trail.Success)
+            var fracMatch = Regex.Match(lower, @"(\d{1,2})\s*/\s*100");
+            if (fracMatch.Success)
             {
-                cents = int.Parse(trail.Groups[1].Value);
-                working = working.Remove(trail.Index, trail.Length).TrimEnd();
+                cents = int.Parse(fracMatch.Groups[1].Value);
+                working = working.Remove(fracMatch.Index, fracMatch.Length).TrimEnd();
+            }
+            else
+            {
+                var trail = Regex.Match(lower, @"(?<=[a-z])\s+(\d{1,2})\s*!*\s*$");
+                if (trail.Success)
+                {
+                    cents = int.Parse(trail.Groups[1].Value);
+                    working = working.Remove(trail.Index, trail.Length).TrimEnd();
+                }
             }
         }
 
         var text = working.ToLowerInvariant();
+        text = Regex.Replace(text, @"(?i)\bthousandh\b", "thousand");
         text = Regex.Replace(text, @"(?i)\beightysix\b", "eighty six");
         text = Regex.Replace(text, @"(?i)\bninetysix\b", "ninety six");
         text = Regex.Replace(text, @"(?i)\bfortyfive\b", "forty five");

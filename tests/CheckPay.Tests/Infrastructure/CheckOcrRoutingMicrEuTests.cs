@@ -347,6 +347,46 @@ public class CheckOcrRoutingMicrEuTests
         Assert.Equal("535", cn);
     }
 
+    /// <summary><c>⑆ABA⑆ account⑈</c> 下一行纯数字磁墨支票序（如 <c>02728</c>），勿将 <c>21035555⑈</c> 当支票号。</summary>
+    [Fact]
+    public void ParseCheckNumber_TransitClosedAccountThenDigitLine02728_AlignsPrinted2728()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{transit}053104568{transit} 21035555{onUs}";
+        var micrLine2 = "02728";
+        var lines = new[]
+        {
+            new ReadOcrLine("YU LIN", 0.2, 0.05, 0.04, 0.06, 0.1, 0.4),
+            new ReadOcrLine("2728", 0.15, 0.08, 0.07, 0.09, 0.1, 0.2),
+            new ReadOcrLine(micrLine1, 0.5, 0.88, 0.86, 0.90, 0.05, 0.95),
+            new ReadOcrLine(micrLine2, 0.5, 0.91, 0.90, 0.92, 0.05, 0.95),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("2728", cn);
+    }
+
+    /// <summary>Wells 类单行 MICR：<c>⑆ABA⑆ account⑈ 01023</c>，勿将账号当作支票号。</summary>
+    [Fact]
+    public void ParseCheckNumber_WellsMicrSameLine01023_AlignsPrinted1023()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrOneLine = $"{transit}061000227{transit} 2710753324{onUs} 01023";
+        var lines = new[]
+        {
+            new ReadOcrLine("WINGS SPOT INC", 0.22, 0.06, 0.05, 0.07, 0.08, 0.72),
+            new ReadOcrLine("1023", 0.18, 0.09, 0.08, 0.10, 0.08, 0.22),
+            new ReadOcrLine(micrOneLine, 0.5, 0.90, 0.88, 0.92, 0.04, 0.96),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("1023", cn);
+    }
+
     [Fact]
     public void ParseCheckNumber_TransitFragmentMerge_Printed535WhenPureMicrCheckRowOutsideMicrSlice()
     {

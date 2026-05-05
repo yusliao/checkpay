@@ -45,6 +45,13 @@ internal static class CheckOcrVisionReadParser
         @"⑆\s*(?<rt>\d{9})\s*⑆\s*(?<p1>\d{2,8})\s*\r?\n\s*(?<mid>\d{4,11})\s*⑈(?:\s*\r?\n\s*(?<chk>\d{3,8})\s*)?",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
+    /// <summary>
+    /// <c>⑆ABA⑆ account⑈</c> 同行以单个 ⑈ 结束账号（≥8 位），其後 **换行或同行空格** 再接磁墨支票序（如下行 <c>02728</c>、同行 <c>01023</c>）；勿将账号误作 <see cref="MicrCheckTrailingOnUsRegex"/> 支票序。
+    /// </summary>
+    private static readonly Regex TransitClosedAccountThenDigitsCheckRegex = new(
+        @"⑆\s*(?<rt>\d{9})\s*⑆\s*(?<acct>\d{8,17})⑈(?:\s*\r?\n\s*|\s+)(?<chk>\d{3,8})\b",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     /// <summary>「州 + 5 位邮编 + 可选 ZIP+4」行；其中 5 位/后 4 位易被误当成支票号。</summary>
     private static readonly Regex UsStateZipLineRegex = new(
         @"(?i)\b[A-Z]{2}\s+(?<zip>\d{5})(?:-(?<zip4>\d{4}))?\b",
@@ -307,6 +314,38 @@ internal static class CheckOcrVisionReadParser
         return true;
     }
 
+    /// <summary>
+    /// <c>⑆ABA⑆</c> 后「长账号 + ⑈」再 **换行或同行空格** 接磁墨支票序（FIRST BANK 断行 / Wells Fargo 同行 <c>01023</c>）。
+    /// </summary>
+    private static bool TryRecoverMicrCheckTransitClosedAccountFollowedByDigits(string micrCorpus, out string? checkDigits)
+    {
+        checkDigits = null;
+        if (string.IsNullOrWhiteSpace(micrCorpus))
+            return false;
+
+        var t = NormalizeMicrLikeText(CollapseSpacesBetweenDigitsOnMicrInkLines(micrCorpus.Trim()));
+        var m = TransitClosedAccountThenDigitsCheckRegex.Match(t);
+        if (!m.Success)
+            return false;
+
+        if (!AbaRoutingNumberValidator.IsValid(m.Groups["rt"].Value))
+            return false;
+
+        var acct = m.Groups["acct"].Value;
+        var chk = m.Groups["chk"].Value.Trim();
+        if (chk.Length is < 3 or > 8)
+            return false;
+
+        if (string.Equals(chk, acct, StringComparison.Ordinal))
+            return false;
+        // 避免误把账号后缀当成支票序
+        if (chk.Length >= 4 && acct.EndsWith(chk, StringComparison.Ordinal))
+            return false;
+
+        checkDigits = chk;
+        return true;
+    }
+
     /// <summary>从 MICR 文本中解析「磁墨支票号」（不含印刷号通道）；命中 ⑆…⑆ 两侧 on-us 时优先于末段 ⑈ 启发式。</summary>
     private static string? TryExtractMicrCheckBracketedAroundTransit(string? micrText)
     {
@@ -543,6 +582,17 @@ internal static class CheckOcrVisionReadParser
 
         if (micrNumber is null)
         {
+            string? closedChk = null;
+            if (!TryRecoverMicrCheckTransitClosedAccountFollowedByDigits(micrNorm, out closedChk))
+                TryRecoverMicrCheckTransitClosedAccountFollowedByDigits(
+                    NormalizeMicrLikeText(CollapseSpacesBetweenDigitsOnMicrInkLines(layout.FullText)),
+                    out closedChk);
+            if (!string.IsNullOrEmpty(closedChk))
+                micrNumber = closedChk;
+        }
+
+        if (micrNumber is null)
+        {
             var micrMatch = MicrCheckNumberRegex.Match(micrNorm);
             if (micrMatch.Success)
                 micrNumber = micrMatch.Groups[1].Value.Trim();
@@ -605,6 +655,17 @@ internal static class CheckOcrVisionReadParser
         var micrNumber = micrBracketedFt;
         if (micrNumber is null && !string.IsNullOrEmpty(fragChkFt))
             micrNumber = fragChkFt;
+
+        if (micrNumber is null)
+        {
+            string? closedChkFt = null;
+            if (!TryRecoverMicrCheckTransitClosedAccountFollowedByDigits(norm, out closedChkFt))
+                TryRecoverMicrCheckTransitClosedAccountFollowedByDigits(
+                    NormalizeMicrLikeText(CollapseSpacesBetweenDigitsOnMicrInkLines(text)),
+                    out closedChkFt);
+            if (!string.IsNullOrEmpty(closedChkFt))
+                micrNumber = closedChkFt;
+        }
 
         if (micrNumber is null)
         {

@@ -442,7 +442,7 @@ public class AzureOcrService : IOcrService
             }
         }
 
-        if (di.CheckNumberMicr is string dc && dc.Length is >= 4 and <= 9 && di.CheckNumberConfidence >= 0.62)
+        if (di.CheckNumberMicr is string dc && dc.Length is >= 3 and <= 9 && di.CheckNumberConfidence >= 0.62)
         {
             checkNumber = dc;
             checkConf = Math.Clamp(Math.Max(checkConf, di.CheckNumberConfidence), 0.58, 0.9);
@@ -621,14 +621,25 @@ public class AzureOcrService : IOcrService
                 return (raw, amount, confidence, null);
         }
 
-        var line = result.Content?
+        var dollarLine = result.Content?
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(x => x.Contains("dollar", StringComparison.OrdinalIgnoreCase));
 
-        if (!string.IsNullOrWhiteSpace(line) && TryParseAmountFromWords(line, out var parsed))
-            return (line, parsed, 0.35, "从全文 Dollar 行启发式解析");
+        if (!string.IsNullOrWhiteSpace(dollarLine) && TryParseAmountFromWords(dollarLine, out var parsedDollar))
+            return (dollarLine, parsedDollar, 0.35, "从全文 Dollar 行启发式解析");
 
-        return (line, null, 0.1, "未找到可解析的手写金额字段");
+        if (!string.IsNullOrWhiteSpace(result.Content))
+        {
+            foreach (var rawLine in result.Content.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!LooksLikeWrittenAmountScanLine(rawLine))
+                    continue;
+                if (TryParseAmountFromWords(rawLine, out var lineAmt))
+                    return (rawLine, lineAmt, 0.32, "从全文金额措辞行启发式解析");
+            }
+        }
+
+        return (dollarLine, null, 0.1, "未找到可解析的手写金额字段");
     }
 
     private static bool TryGetAmountFromDiV4Field(DocumentField field, out decimal amount, out string raw)
@@ -669,6 +680,15 @@ public class AzureOcrService : IOcrService
         }
 
         return false;
+    }
+
+    /// <summary>DI <see cref="AnalyzeResult.Content"/> 逐行兜底：过滤明显非「英文大写金额」行。</summary>
+    private static bool LooksLikeWrittenAmountScanLine(string line)
+    {
+        if (line.Length > 260 || line.Contains('$', StringComparison.Ordinal))
+            return false;
+
+        return Regex.IsMatch(line, @"(?i)\b(hundred|thousand|million)\b");
     }
 
     private static readonly Dictionary<string, int> NumberWords = new(StringComparer.OrdinalIgnoreCase)
@@ -716,9 +736,37 @@ public class AzureOcrService : IOcrService
         if (string.IsNullOrWhiteSpace(source))
             return false;
 
-        var text = source.ToLowerInvariant();
-        var fracMatch = Regex.Match(text, @"(\d{1,2})\s*/\s*100");
-        var cents = fracMatch.Success ? int.Parse(fracMatch.Groups[1].Value) : 0;
+        var working = source.Trim();
+        var lower = working.ToLowerInvariant();
+
+        var cents = 0;
+        var fracMatch = Regex.Match(lower, @"(\d{1,2})\s*/\s*100");
+        if (fracMatch.Success)
+        {
+            cents = int.Parse(fracMatch.Groups[1].Value);
+            working = working.Remove(fracMatch.Index, fracMatch.Length).TrimEnd();
+        }
+        else
+        {
+            var trail = Regex.Match(lower, @"(?<=[a-z])\s+(\d{1,2})\s*!*\s*$");
+            if (trail.Success)
+            {
+                cents = int.Parse(trail.Groups[1].Value);
+                working = working.Remove(trail.Index, trail.Length).TrimEnd();
+            }
+        }
+
+        var text = working.ToLowerInvariant();
+        text = Regex.Replace(text, @"(?i)\beightysix\b", "eighty six");
+        text = Regex.Replace(text, @"(?i)\bninetysix\b", "ninety six");
+        text = Regex.Replace(text, @"(?i)\bfortyfive\b", "forty five");
+        text = Regex.Replace(text, @"(?i)\btwentyfive\b", "twenty five");
+        text = Regex.Replace(text, @"(?i)\bthirtyfive\b", "thirty five");
+        text = Regex.Replace(text, @"(?i)\bfiftyfive\b", "fifty five");
+        text = Regex.Replace(text, @"(?i)\bsixtyfive\b", "sixty five");
+        text = Regex.Replace(text, @"(?i)\bseventyfive\b", "seventy five");
+        text = Regex.Replace(text, @"(?i)\beightyfive\b", "eighty five");
+        text = Regex.Replace(text, @"(?i)\bninetyfive\b", "ninety five");
 
         text = Regex.Replace(text, @"[^a-z\s\-]", " ");
         text = Regex.Replace(text, @"\b(and|dollars?|only)\b", " ");

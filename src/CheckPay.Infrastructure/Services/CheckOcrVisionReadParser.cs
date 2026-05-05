@@ -37,6 +37,14 @@ internal static class CheckOcrVisionReadParser
 
     private static readonly Regex MicrCheckTrailingOnUsRegex = new(@"(\d{4,17})⑈", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Vision 将路由同行账号前缀与下行「719 1⑈」（折叠后为 7191⑈）拆开，支票序号再在下一行纯数字且无 ⑈ 时，
+    /// <see cref="TryAssignMicrCheckVsAccountByLength"/> 无法生效；用于拼回账号并在下行取支票磁墨序号。
+    /// </summary>
+    private static readonly Regex TransitFragmentMicrSplitRegex = new(
+        @"⑆\s*(?<rt>\d{9})\s*⑆\s*(?<p1>\d{2,8})\s*\r?\n\s*(?<mid>\d{4,11})\s*⑈(?:\s*\r?\n\s*(?<chk>\d{3,8})\s*)?",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     /// <summary>「州 + 5 位邮编 + 可选 ZIP+4」行；其中 5 位/后 4 位易被误当成支票号。</summary>
     private static readonly Regex UsStateZipLineRegex = new(
         @"(?i)\b[A-Z]{2}\s+(?<zip>\d{5})(?:-(?<zip4>\d{4}))?\b",
@@ -52,6 +60,11 @@ internal static class CheckOcrVisionReadParser
 
     private static readonly Regex AmountRegex = new(
         @"\$\s*([\d,]+\.\d{2})\b|([\d,]{1,10}\.\d{2})\b",
+        RegexOptions.Compiled);
+
+    /// <summary>票面印刷金额：<c>$ 686-25</c>（美元整数 + 连字符 + 两位分）。</summary>
+    private static readonly Regex AmountDollarHyphenCentsRegex = new(
+        @"\$\s*([\d,]{1,9})\s*[-–]\s*(\d{2})\b",
         RegexOptions.Compiled);
 
     private static readonly Regex DateRegex = new(
@@ -262,6 +275,38 @@ internal static class CheckOcrVisionReadParser
         return !string.IsNullOrEmpty(checkDigits);
     }
 
+    /// <summary>
+    /// 路由 <c>⑆ABA⑆</c> 后账号被切成「同行前缀 + 下行 mid⑈」，支票序号为再下行纯数字（常无 ⑈）时的合并提取。
+    /// </summary>
+    private static bool TryRecoverTransitFragmentMicrSplit(string micrCorpus, out string? accountDigits, out string? checkDigits)
+    {
+        accountDigits = null;
+        checkDigits = null;
+        if (string.IsNullOrWhiteSpace(micrCorpus))
+            return false;
+
+        var t = NormalizeMicrLikeText(CollapseSpacesBetweenDigitsOnMicrInkLines(micrCorpus.Trim()));
+        var m = TransitFragmentMicrSplitRegex.Match(t);
+        if (!m.Success)
+            return false;
+
+        var rt = m.Groups["rt"].Value;
+        if (!AbaRoutingNumberValidator.IsValid(rt))
+            return false;
+
+        var p1 = m.Groups["p1"].Value;
+        var mid = m.Groups["mid"].Value;
+        var merged = string.Concat(p1, mid);
+        if (merged.Length < 8)
+            return false;
+
+        accountDigits = merged;
+        if (m.Groups["chk"].Success)
+            checkDigits = m.Groups["chk"].Value.Trim();
+
+        return true;
+    }
+
     /// <summary>从 MICR 文本中解析「磁墨支票号」（不含印刷号通道）；命中 ⑆…⑆ 两侧 on-us 时优先于末段 ⑈ 启发式。</summary>
     private static string? TryExtractMicrCheckBracketedAroundTransit(string? micrText)
     {
@@ -382,9 +427,26 @@ internal static class CheckOcrVisionReadParser
                 ink = ExpandMicrInkLinesByVerticalProximity(ink, filtered, maxNormCenterYDelta: 0.14);
         }
 
+        var chosen = new HashSet<ReadOcrLine>(ink);
+        if (routingNumber is { Length: 9 })
+        {
+            foreach (var line in layout.Lines)
+            {
+                if (chosen.Contains(line))
+                    continue;
+                var t = line.Text.Trim();
+                if (!Regex.IsMatch(t, @"^\d{3,8}$"))
+                    continue;
+                var cy = line.NormCenterY;
+                if (!chosen.Any(s => Math.Abs(s.NormCenterY - cy) <= 0.16))
+                    continue;
+                chosen.Add(line);
+            }
+        }
+
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var parts = new List<string>();
-        foreach (var line in ink)
+        foreach (var line in chosen.OrderBy(l => l.NormCenterY).ThenBy(l => l.NormLeft))
         {
             var t = line.Text.Trim();
             if (t.Length == 0 || !seen.Add(t))
@@ -470,24 +532,47 @@ internal static class CheckOcrVisionReadParser
         if (string.IsNullOrWhiteSpace(printedText))
             printedText = layout.FullText;
 
-        var micrNorm = NormalizeMicrLikeText(micrText);
+        var micrNorm = NormalizeMicrLikeText(CollapseSpacesBetweenDigitsOnMicrInkLines(micrText));
+        _ = TryRecoverTransitFragmentMicrSplit(micrText, out var fragAcctDigits, out var fragMicrCheckDigits);
+
         var micrBracketedCheck = TryExtractMicrCheckBracketedAroundTransit(micrNorm)
             ?? TryExtractMicrCheckBracketedAroundTransit(fullNormMicr);
-        var micrNumber = micrBracketedCheck;
+        string? micrNumber = micrBracketedCheck;
+        if (micrNumber is null && !string.IsNullOrEmpty(fragMicrCheckDigits))
+            micrNumber = fragMicrCheckDigits;
+
         if (micrNumber is null)
         {
             var micrMatch = MicrCheckNumberRegex.Match(micrNorm);
-            micrNumber = micrMatch.Success ? micrMatch.Groups[1].Value.Trim() : null;
+            if (micrMatch.Success)
+                micrNumber = micrMatch.Groups[1].Value.Trim();
         }
+
+        if (!string.IsNullOrEmpty(fragAcctDigits) && micrNumber != null && micrBracketedCheck is null
+                                                      && string.IsNullOrEmpty(fragMicrCheckDigits)
+                                                      && fragAcctDigits.StartsWith(micrNumber, StringComparison.Ordinal)
+                                                      && fragAcctDigits.Length >= 8 && micrNumber.Length <= 7)
+            micrNumber = null;
 
         if (micrNumber is null)
         {
-            var onUs = MicrCheckTrailingOnUsRegex.Matches(micrNorm);
-            if (onUs.Count > 0)
-                micrNumber = onUs[^1].Groups[1].Value.Trim();
+            // 碎片账号合并命中且无磁墨支票行时，`(\d+)⑈` 多为下行账号 mid（如 7191⑈），勿当作支票序号。
+            var skipTrailingOnUsAsMicrCheck = !string.IsNullOrEmpty(fragAcctDigits)
+                && string.IsNullOrEmpty(fragMicrCheckDigits)
+                && micrBracketedCheck is null;
+            if (!skipTrailingOnUsAsMicrCheck)
+            {
+                var onUs = MicrCheckTrailingOnUsRegex.Matches(micrNorm);
+                if (onUs.Count > 0)
+                    micrNumber = onUs[^1].Groups[1].Value.Trim();
+            }
         }
 
-        var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText, micrNumber);
+        var printedMicrHint = micrNumber;
+        if (printedMicrHint is null && !string.IsNullOrEmpty(fragMicrCheckDigits))
+            printedMicrHint = fragMicrCheckDigits;
+
+        var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText, printedMicrHint);
         var printedNumber = printedCandidate.number;
         var printedScore = printedCandidate.score;
 
@@ -495,7 +580,7 @@ internal static class CheckOcrVisionReadParser
         {
             if (micrNumber == printedNumber || CanonicalCheckDigitsEqual(micrNumber, printedNumber))
                 return (PreferShorterCanonicallyEqualCheckDigits(micrNumber, printedNumber), 0.94);
-            if (micrBracketedCheck != null)
+            if (micrBracketedCheck != null || !string.IsNullOrEmpty(fragMicrCheckDigits))
                 return (micrNumber, 0.82);
             if (printedScore >= 0.78)
                 return (printedNumber, Math.Clamp(printedScore, 0.66, 0.88));
@@ -513,8 +598,14 @@ internal static class CheckOcrVisionReadParser
 
     private static (string checkNumber, double confidence) ParseCheckNumberFullText(string text)
     {
-        var norm = NormalizeMicrLikeText(text);
-        var micrNumber = TryExtractMicrCheckBracketedAroundTransit(norm);
+        var norm = NormalizeMicrLikeText(CollapseSpacesBetweenDigitsOnMicrInkLines(text));
+        _ = TryRecoverTransitFragmentMicrSplit(text, out var fragAcctFt, out var fragChkFt);
+
+        var micrBracketedFt = TryExtractMicrCheckBracketedAroundTransit(norm);
+        var micrNumber = micrBracketedFt;
+        if (micrNumber is null && !string.IsNullOrEmpty(fragChkFt))
+            micrNumber = fragChkFt;
+
         if (micrNumber is null)
         {
             var micrMatch = MicrCheckNumberRegex.Match(norm);
@@ -522,11 +613,22 @@ internal static class CheckOcrVisionReadParser
                 micrNumber = micrMatch.Groups[1].Value.Trim();
         }
 
+        if (!string.IsNullOrEmpty(fragAcctFt) && micrNumber != null && string.IsNullOrEmpty(fragChkFt)
+                                                               && fragAcctFt.StartsWith(micrNumber, StringComparison.Ordinal)
+                                                               && fragAcctFt.Length >= 8 && micrNumber.Length <= 7)
+            micrNumber = null;
+
         if (micrNumber is null)
         {
-            var onUs = MicrCheckTrailingOnUsRegex.Matches(norm);
-            if (onUs.Count > 0)
-                micrNumber = onUs[^1].Groups[1].Value.Trim();
+            var skipTrailingOnUsAsMicrCheck = !string.IsNullOrEmpty(fragAcctFt)
+                && string.IsNullOrEmpty(fragChkFt)
+                && micrBracketedFt is null;
+            if (!skipTrailingOnUsAsMicrCheck)
+            {
+                var onUs = MicrCheckTrailingOnUsRegex.Matches(norm);
+                if (onUs.Count > 0)
+                    micrNumber = onUs[^1].Groups[1].Value.Trim();
+            }
         }
 
         var printedMatch = PrintedCheckNumberRegex.Match(text);
@@ -570,6 +672,50 @@ internal static class CheckOcrVisionReadParser
 
         foreach (var line in layout.Lines)
         {
+            var lineTrim = line.Text.Trim();
+            if (LooksLikeMicrInkLine(lineTrim))
+                continue;
+            if (LooksLikeInvoiceReferenceOrBankingMemoLine(lineTrim))
+                continue;
+
+            if (Regex.IsMatch(lineTrim, @"^\d{3}$"))
+            {
+                var number = lineTrim;
+                var reject = false;
+                if (UsStateZipLineRegex.Match(line.Text) is { Success: true } zipM)
+                {
+                    if (string.Equals(zipM.Groups["zip"].Value, number, StringComparison.Ordinal))
+                        reject = true;
+                    if (!reject && zipM.Groups["zip4"].Value is { Length: 4 } z4
+                               && string.Equals(z4, number, StringComparison.Ordinal))
+                        reject = true;
+                }
+
+                if (!reject && LooksLikeMisreadRoutingDigits(number, routingMisreadCorpus))
+                    reject = true;
+
+                if (!reject)
+                {
+                    var score = 0.26;
+                    if (printedRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+                        score += 0.22;
+                    if (line.NormCenterX >= 0.70)
+                        score += 0.14;
+                    if (line.NormCenterY <= 0.35)
+                        score += 0.18;
+                    if (Regex.IsMatch(line.Text, @"(?i)\bcheck\s*(?:no\.?|number|#)\b"))
+                        score += 0.14;
+                    if (Regex.IsMatch(line.Text, @"[$]|(?:\d{1,3},)?\d+\.\d{2}"))
+                        score -= 0.26;
+                    if (DateRegex.IsMatch(line.Text))
+                        score -= 0.22;
+                    if (micrRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+                        score -= 0.18;
+
+                    candidates.Add((number, score));
+                }
+            }
+
             foreach (Match match in PrintedCheckNumberLineRegex.Matches(line.Text))
             {
                 if (!match.Success)
@@ -653,10 +799,26 @@ internal static class CheckOcrVisionReadParser
         var scored = new List<(decimal amount, double score)>();
         foreach (var line in layout.Lines)
         {
+            foreach (Match hm in AmountDollarHyphenCentsRegex.Matches(line.Text))
+            {
+                var dollars = hm.Groups[1].Value.Replace(",", "");
+                var centsPart = hm.Groups[2].Value;
+                if (!decimal.TryParse(dollars, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dInt))
+                    continue;
+                if (!int.TryParse(centsPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cents2)
+                    || cents2 is < 0 or > 99)
+                    continue;
+                var v = dInt + cents2 / 100m;
+                if (v <= 0m)
+                    continue;
+                var score = ScoreAmountCandidate(line, hasDollar: true, profile, extraBoost: 0.22);
+                scored.Add((v, score));
+            }
+
             foreach (Match m in AmountRegex.Matches(line.Text))
             {
                 var raw = (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).Replace(",", "");
-                if (!decimal.TryParse(raw, out var v) || v <= 0m)
+                if (!decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var v) || v <= 0m)
                     continue;
 
                 var hasDollar = m.Groups[1].Success;
@@ -683,15 +845,21 @@ internal static class CheckOcrVisionReadParser
         return (best.amount, Math.Clamp(conf, 0.18, 0.94));
     }
 
-    private static double ScoreAmountCandidate(ReadOcrLine line, bool hasDollar, CheckOcrParsingProfile profile)
+    private static double ScoreAmountCandidate(ReadOcrLine line, bool hasDollar, CheckOcrParsingProfile profile, double extraBoost = 0)
     {
-        var s = 0.52;
+        var s = 0.52 + extraBoost;
         if (hasDollar)
             s += 0.12;
         if (profile.AmountPriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
             s += 0.16;
         if (line.NormCenterY < 0.55)
             s += 0.06;
+        // 印刷「付给抬头」旁金额常在左半幅，未必落入默认 AmountPriorRegion（右半）
+        if (hasDollar && line.NormCenterY < 0.42 && line.NormCenterX < 0.78)
+            s += 0.10;
+        if (!hasDollar && Regex.IsMatch(line.Text.Trim(), @"^(?:\d{1,4},)?\d+\.\d{2}$")
+                        && line.NormCenterY < 0.14)
+            s -= 0.20;
         if (profile.MicrPriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
             s -= 0.22;
         return s;
@@ -699,6 +867,17 @@ internal static class CheckOcrVisionReadParser
 
     private static (decimal amount, double confidence) ParseAmountFullText(string text)
     {
+        var hyphen = AmountDollarHyphenCentsRegex.Match(text);
+        if (hyphen.Success
+            && decimal.TryParse(hyphen.Groups[1].Value.Replace(",", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var hd)
+            && int.TryParse(hyphen.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hc)
+            && hc is >= 0 and <= 99)
+        {
+            var hv = hd + hc / 100m;
+            if (hv > 0m)
+                return (hv, 0.70);
+        }
+
         var matches = AmountRegex.Matches(text);
         if (matches.Count == 0)
             return (0m, 0.1);
@@ -708,7 +887,7 @@ internal static class CheckOcrVisionReadParser
             {
                 var raw = (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)
                     .Replace(",", "");
-                return decimal.TryParse(raw, out var v) ? v : 0m;
+                return decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var v) ? v : 0m;
             })
             .Where(v => v > 0)
             .OrderByDescending(v => v)
@@ -829,10 +1008,20 @@ internal static class CheckOcrVisionReadParser
                 transitTailRefinedAccount = true;
             }
 
+            var fragmentAccountMerge = false;
+            if ((account?.Length ?? 0) < 8 && TryRecoverTransitFragmentMicrSplit(text, out var fragAcct, out _)
+                                            && !string.IsNullOrEmpty(fragAcct))
+            {
+                account = fragAcct;
+                fragmentAccountMerge = true;
+                selectionMode = "e13b_transit_fragment_merge";
+            }
+
             var micrRaw = TryBuildMicrLineRawFromPlainText(text);
             micrRaw ??= text.Length <= 160 ? text.Trim() : text[(text.Length - 160)..].Trim();
             var acConf = account != null
-                ? auxiliaryMatched ? 0.56
+                ? fragmentAccountMerge ? 0.54
+                : auxiliaryMatched ? 0.56
                 : transitTailRefinedAccount ? 0.58
                 : 0.68
                 : 0.35;
@@ -1140,6 +1329,9 @@ internal static class CheckOcrVisionReadParser
         if (Regex.IsMatch(t, @"(?i)\bach\s+rt\b"))
             return true;
         if (Regex.IsMatch(t, @"(?i)\bdeposit\s*!?\s*$"))
+            return true;
+        // 「FOR I 1234567」类备忘行上的长数字易被当成印刷支票号
+        if (Regex.IsMatch(t, @"(?i)\bfor\s+i\s+\d{4,}"))
             return true;
         return false;
     }
@@ -1474,7 +1666,7 @@ internal static class CheckOcrVisionReadParser
         var t = text.Trim();
         if (Regex.IsMatch(
                 t,
-                @"(?i)\b(inc\.?|llc\.?|l\.?\s*l\.?\s*c\.?|corp\.?|corporation|ltd\.?|limited|lp\b|pllc|p\.c\.)\b"))
+                @"(?i)\b(inc\.?|llc\.?|lic\.?|l\.?\s*i\.?\s*c\.?|corp\.?|corporation|ltd\.?|limited|lp\b|pllc|p\.c\.)\b"))
             return 0.44;
         if (Regex.IsMatch(
                 t,
@@ -1513,6 +1705,9 @@ internal static class CheckOcrVisionReadParser
             return 0.0;
 
         var score = 0.28;
+        if (Regex.IsMatch(t, @"(?i)\$\s*[\d,]{1,9}\s*[-–]\s*\d{2}\b")
+            || Regex.IsMatch(t, @"(?i)\$\s*[\d,]+\.\d{2}\b"))
+            score -= 0.62;
         score += GetCorporateLegalSuffixBump(t);
 
         var tokenCount = NameTokenRegex.Matches(t).Count;
@@ -1534,6 +1729,8 @@ internal static class CheckOcrVisionReadParser
         var cy = line.NormCenterY;
         if (cy is >= 0.10 and <= 0.62)
             score += 0.06;
+        if (cy <= 0.12)
+            score += 0.10;
         if (t.Length is >= 4 and <= 72)
             score += 0.04;
 

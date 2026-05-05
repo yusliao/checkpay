@@ -267,6 +267,107 @@ public class CheckOcrRoutingMicrEuTests
     }
 
     [Fact]
+    public void ParseMicrHeuristic_TransitFragmentMerge_CommercialBankStyleSplitMicr()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micr = $"{transit}064202983{transit}1630\n719 1{onUs}\n0535";
+        var r = CheckOcrVisionReadParser.ParseMicrHeuristic(micr);
+        Assert.Equal("064202983", r.RoutingNumber);
+        Assert.Equal("16307191", r.AccountNumber);
+        Assert.True(r.RoutingAbaChecksumValid);
+        Assert.Equal("e13b_transit_fragment_merge", r.RoutingSelectionMode);
+    }
+
+    [Fact]
+    public void TryResolveMicrLineRawFromLayout_IncludesAdjacentDigitOnlyMicrBandLine()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{transit}064202983{transit}1630";
+        var micrLine2 = $"719 1{onUs}";
+        var micrLine3 = "0535";
+        var lines = new[]
+        {
+            new ReadOcrLine(micrLine1, 0.5, 0.88, 0.86, 0.90, 0.1, 0.9),
+            new ReadOcrLine(micrLine2, 0.5, 0.91, 0.89, 0.93, 0.1, 0.9),
+            new ReadOcrLine(micrLine3, 0.5, 0.94, 0.93, 0.95, 0.1, 0.9),
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var raw = CheckOcrVisionReadParser.TryResolveMicrLineRawFromLayout(layout, "064202983");
+        Assert.NotNull(raw);
+        Assert.Contains("0535", raw, StringComparison.Ordinal);
+        Assert.Contains("064202983", raw, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseCheckNumber_TransitFragmentMerge_AlignsPrintedThreeDigit535()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{transit}064202983{transit}1630";
+        var micrLine2 = $"719 1{onUs}";
+        var micrLine3 = "0535";
+        var lines = new[]
+        {
+            new ReadOcrLine("Hungry Sumo", 0.3, 0.06, 0.05, 0.07, 0.1, 0.6),
+            new ReadOcrLine("4126.26", 0.18, 0.08, 0.07, 0.09, 0.1, 0.22),
+            new ReadOcrLine("535", 0.15, 0.10, 0.09, 0.11, 0.08, 0.22),
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.05, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.91, 0.89, 0.93, 0.05, 0.92),
+            new ReadOcrLine(micrLine3, 0.48, 0.94, 0.93, 0.95, 0.05, 0.92),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("535", cn);
+    }
+
+    /// <summary>MICR 纯数字支票行未进入 ParseCheckNumber 所用 micr 文本时，勿把下行 mid⑈（7191）当支票号；应收印刷 535。</summary>
+    [Fact]
+    public void ParseCheckNumber_RejectsForMemoSevenDigit_OverPrinted535_WithMicr0535Hint()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{transit}064202983{transit}1630";
+        var micrLine2 = $"719 1{onUs}";
+        var micrLine3 = "0535";
+        var lines = new[]
+        {
+            new ReadOcrLine("Hungry Sumo Hibachi House Lic", 0.22, 0.06, 0.05, 0.07, 0.08, 0.72),
+            new ReadOcrLine("535", 0.18, 0.10, 0.09, 0.11, 0.08, 0.22),
+            new ReadOcrLine("FOR I 2006586", 0.35, 0.52, 0.50, 0.54, 0.08, 0.42),
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.05, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.91, 0.89, 0.93, 0.05, 0.92),
+            new ReadOcrLine(micrLine3, 0.48, 0.94, 0.93, 0.95, 0.05, 0.92),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("535", cn);
+    }
+
+    [Fact]
+    public void ParseCheckNumber_TransitFragmentMerge_Printed535WhenPureMicrCheckRowOutsideMicrSlice()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{transit}064202983{transit}1630";
+        var micrLine2 = $"719 1{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("Hungry Sumo", 0.3, 0.06, 0.05, 0.07, 0.1, 0.6),
+            new ReadOcrLine("535", 0.15, 0.10, 0.09, 0.11, 0.08, 0.22),
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.05, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.91, 0.89, 0.93, 0.05, 0.92),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("535", cn);
+    }
+
+    [Fact]
     public void ParseCheckNumber_SkipsZipAndUsesLastOnUsBlock()
     {
         const char transit = '\u2446';

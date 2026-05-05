@@ -339,4 +339,34 @@ BANK OF AMERICA
         Assert.Null(company);
         Assert.True(confidence < 0.2);
     }
+
+    [Fact]
+    public void ParseAmount_PrefersDollarHyphen686OverTopNoiseDecimal()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Hungry Sumo Hibachi House Lic", 0.22, 0.06, 0.05, 0.07, 0.08, 0.72),
+            new ReadOcrLine("4126.26", 0.22, 0.09, 0.08, 0.10, 0.10, 0.28),
+            new ReadOcrLine("Alliance Food Group $ 686-25", 0.38, 0.22, 0.20, 0.24, 0.12, 0.62),
+            new ReadOcrLine("PAY TO THE", 0.42, 0.34, 0.32, 0.36, 0.12, 0.62),
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var (amount, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal(686.25m, amount);
+    }
+
+    [Fact]
+    public void ParseCompanyName_PrefersTopLicPrintedNameOverPayeeCatalogAmountLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Hungry Sumo Hibachi House Lic", 0.22, 0.06, 0.05, 0.07, 0.08, 0.72),
+            new ReadOcrLine("Alliance Food Group $ 686-25", 0.38, 0.22, 0.20, 0.24, 0.12, 0.62),
+            new ReadOcrLine("Commercial Bank", 0.35, 0.62, 0.60, 0.64, 0.12, 0.58),
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var (company, conf) = CheckOcrVisionReadParser.ParseCompanyName(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("Hungry Sumo Hibachi House Lic", company);
+        Assert.True(conf >= 0.54);
+    }
 }

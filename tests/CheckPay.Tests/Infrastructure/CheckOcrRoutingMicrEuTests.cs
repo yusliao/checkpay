@@ -230,6 +230,43 @@ public class CheckOcrRoutingMicrEuTests
     }
 
     [Fact]
+    public void ParseCheckNumber_MetroCityBankSplitMicr_PrefersLeadingBracketSixOverTrailingSevenDigits()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{onUs}003122{onUs} {transit}061120686{transit}";
+        var micrLine2 = $"2037489{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("3122", 0.12, 0.06, 0.05, 0.07, 0.08, 0.18),
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.08, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.93, 0.92, 0.94, 0.08, 0.92)
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("3122", cn);
+    }
+
+    /// <summary>无版头印刷序号时，磁墨两行「⑥ + ⑦」且 TryAssign 放弃：应取较短 bracket 序号为支票号。</summary>
+    [Fact]
+    public void ParseCheckNumber_MetroCityMicrOnly_ShortBracketSixDigitsBeatsTrailingSevenOnUs()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{onUs}003122{onUs} {transit}061120686{transit}";
+        var micrLine2 = $"2037489{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.08, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.93, 0.92, 0.94, 0.08, 0.92)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("003122", cn);
+    }
+
+    [Fact]
     public void ParseCheckNumber_SkipsZipAndUsesLastOnUsBlock()
     {
         const char transit = '\u2446';

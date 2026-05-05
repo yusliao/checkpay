@@ -230,6 +230,38 @@ internal static class CheckOcrVisionReadParser
         return TryAssignMicrCheckVsAccountByLength(m.Groups[1].Value, m.Groups[2].Value, out checkDigits, out accountDigits);
     }
 
+    /// <summary>
+    /// <c>⑈…⑈ ⑆路由⑆ …⑈</c> 已匹配但 <see cref="TryAssignMicrCheckVsAccountByLength"/> 因 max&lt;10 放弃时，用位数启发式**仅**解析磁墨支票号
+    /// （不充当账号分类，避免影响 <see cref="ParseMicrHeuristic"/>）：max≤7 时较短段多为序号域；max≥8 时较长段多为 on-us。
+    /// </summary>
+    private static bool TryPickBracketedMicrCheckShortPairFallback(string normalizedText, string routing9, out string? checkDigits)
+    {
+        checkDigits = null;
+        if (routing9.Length != 9 || !AbaRoutingNumberValidator.IsValid(routing9))
+            return false;
+
+        var m = Regex.Match(normalizedText, $@"⑈(\d{{4,17}})⑈\s*⑆\s*{Regex.Escape(routing9)}\s*⑆\s*(\d{{4,17}})⑈");
+        if (!m.Success)
+            return false;
+
+        var left = m.Groups[1].Value;
+        var right = m.Groups[2].Value;
+        if (TryAssignMicrCheckVsAccountByLength(left, right, out _, out _))
+            return false;
+
+        var L = left.Length;
+        var R = right.Length;
+        var mx = Math.Max(L, R);
+        if (mx <= 7)
+            checkDigits = L <= R ? left : right;
+        else if (mx >= 8)
+            checkDigits = L > R ? left : right;
+        else
+            return false;
+
+        return !string.IsNullOrEmpty(checkDigits);
+    }
+
     /// <summary>从 MICR 文本中解析「磁墨支票号」（不含印刷号通道）；命中 ⑆…⑆ 两侧 on-us 时优先于末段 ⑈ 启发式。</summary>
     private static string? TryExtractMicrCheckBracketedAroundTransit(string? micrText)
     {
@@ -243,6 +275,8 @@ internal static class CheckOcrVisionReadParser
                 continue;
             if (TryClassifyOnUsDigitsAroundRouting(norm, rt, out var check, out _) && !string.IsNullOrEmpty(check))
                 return check;
+            if (TryPickBracketedMicrCheckShortPairFallback(norm, rt, out var fbCheck) && !string.IsNullOrEmpty(fbCheck))
+                return fbCheck;
         }
 
         return null;

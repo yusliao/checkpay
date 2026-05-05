@@ -13,6 +13,7 @@
 @using Microsoft.JSInterop
 @using System.Text.Json
 @using System.Text.RegularExpressions
+@using System.Threading
 @implements IDisposable
 @inject IBlobStorageService BlobStorage
 @inject IJSRuntime JS
@@ -270,7 +271,8 @@ else
                         <MudDivider Class="my-3" />
                         <MudText Typo="Typo.subtitle2" Class="mb-2">ACH / 票面信息</MudText>
                         <MudTextField @bind-Value="_routingNumber" Label="Routing Number (ABA)" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("routingNumber")" HelperText="@GetFieldHint("routingNumber")" />
+                                      Style="@GetFieldStyle("routingNumber")" HelperText="@GetFieldHint("routingNumber")"
+                                      OnBlur="@OnAchRoutingBlurAsync" />
                         <MudTextField @bind-Value="_accountNumber" Label="Account Number" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("accountNumber")" HelperText="@GetFieldHint("accountNumber")" />
                         <MudTextField @bind-Value="_bankName" Label="Bank Name" Variant="Variant.Outlined" Class="mb-2"
@@ -304,7 +306,7 @@ else
                         <MudTextField @bind-Value="_companyName" Label="公司名称（付款/开票主体）" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")" />
 
-                        @* 客户账号 (customer_code =支票账号)；手机号与客户账号 1 对多（同一手机可对应多个账号） *@
+                        @* 客户账号 (customer_code = 支票账号)；与 Routing Number（9 位 ABA）一起在主数据中唯一；手机号自动带出按二者匹配 *@
                         <MudTextField @bind-Value="_customerCode"
                                       Label="客户账号"
                                       Required="true"
@@ -437,8 +439,9 @@ else
     private DateTime? _checkDate;
     private string _customerCode = "";
     private string _customerPhone = "";
-    /// <summary>最近一次从客户主数据自动带出手机号时对应的客户账号，用于避免覆盖用户手工改过的手机号。</summary>
+    /// <summary>最近一次从客户主数据自动带出手机号时对应的「账号 + ABA 路由键」，用于避免覆盖用户手工改过的手机号。</summary>
     private string? _lastCustomerCodeForAutoPhone;
+    private string? _lastRoutingKeyForAutoPhone;
     private string _notes = "";
     private string _routingNumber = "";
     private string _accountNumber = "";
@@ -463,12 +466,32 @@ else
 
     private readonly CancellationTokenSource _cts = new();
 
+    /// <summary>Scoped DbContext 非线程安全；OCR 轮询与 UI 事件可能并发，序列化全部异步数据库访问。</summary>
+    private readonly SemaphoreSlim _dbGate = new(1, 1);
+
+    private async Task<T> DbSerializedAsync<T>(Func<Task<T>> action, CancellationToken cancellationToken = default)
+    {
+        await _dbGate.WaitAsync(cancellationToken);
+        try { return await action(); }
+        finally { _dbGate.Release(); }
+    }
+
+    private async Task DbSerializedAsync(Func<Task> action, CancellationToken cancellationToken = default)
+    {
+        await _dbGate.WaitAsync(cancellationToken);
+        try { await action(); }
+        finally { _dbGate.Release(); }
+    }
+
     protected override async Task OnInitializedAsync()
     {
-        _customers = await DbContext.Customers
-            .Where(c => c.IsActive)
-            .Include(c => c.CompanyNames)
-            .ToListAsync();
+        _customers = await DbSerializedAsync(async () =>
+            await DbContext.Customers
+                .Where(c => c.IsActive)
+                .Include(c => c.CompanyNames)
+                .OrderBy(c => c.CustomerCode)
+                .ThenBy(c => c.ExpectedRoutingNumber)
+                .ToListAsync());
     }
 
     private async Task OnFilesSelected(InputFileChangeEventArgs e)
@@ -512,8 +535,11 @@ else
                     ImageUrl = item.ImageUrl,
                     Status = OcrStatus.Pending
                 };
-                DbContext.OcrResults.Add(ocrResult);
-                await DbContext.SaveChangesAsync();
+                await DbSerializedAsync(async () =>
+                {
+                    DbContext.OcrResults.Add(ocrResult);
+                    await DbContext.SaveChangesAsync();
+                });
                 await OcrWorker.EnqueueAsync(ocrResult.Id);
                 item.OcrResultId = ocrResult.Id;
 
@@ -541,9 +567,11 @@ else
 
             try
             {
-                var result = await DbContext.OcrResults
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(o => o.Id == item.OcrResultId, ct);
+                var result = await DbSerializedAsync(async () =>
+                        await DbContext.OcrResults
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(o => o.Id == item.OcrResultId!.Value, ct),
+                    ct);
 
                 if (result == null) break;
 
@@ -686,40 +714,57 @@ else
     private async Task OnCustomerAccountBlurAsync(FocusEventArgs _)
         => await SyncCustomerPhoneFromMasterAsync();
 
-    /// <summary>客户账号有值时，从客户主数据（库内）解析手机号并写入；OCR 刚写入账号或账号变更时也会触发。</summary>
+    private Task OnAchRoutingBlurAsync(FocusEventArgs _)
+        => SyncCustomerPhoneFromMasterAsync();
+
+    /// <summary>客户账号有值时，从客户主数据（库内）按「账号 + 9 位 ABA」解析手机号并写入；OCR 写入或变更账号/路由时也会触发。</summary>
     private async Task SyncCustomerPhoneFromMasterAsync(CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(_customerCode))
         {
             _lastCustomerCodeForAutoPhone = null;
+            _lastRoutingKeyForAutoPhone = null;
             return;
         }
 
         var code = _customerCode.Trim();
         var lower = code.ToLowerInvariant();
-        var row = await DbContext.Customers
-            .AsNoTracking()
-            .Where(c => c.IsActive && c.CustomerCode.ToLower() == lower)
-            .Select(c => new { c.MobilePhone })
-            .FirstOrDefaultAsync(cancellationToken);
+        var routingKey = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
 
-        if (row == null || string.IsNullOrWhiteSpace(row.MobilePhone))
+        await DbSerializedAsync(async () =>
         {
-            if (_lastCustomerCodeForAutoPhone != null
-                && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase))
-                _customerPhone = string.Empty;
-            _lastCustomerCodeForAutoPhone = null;
-            return;
-        }
+            var query = DbContext.Customers
+                .AsNoTracking()
+                .Where(c => c.IsActive && c.CustomerCode.ToLower() == lower);
+            if (routingKey.Length == 9)
+                query = query.Where(c => c.ExpectedRoutingNumber == routingKey);
+            else
+                query = query.Where(c => c.ExpectedRoutingNumber == "");
 
-        var codeChangedVsTracked = _lastCustomerCodeForAutoPhone != null
-            && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase);
-        var shouldApply = string.IsNullOrWhiteSpace(_customerPhone) || codeChangedVsTracked;
-        if (!shouldApply)
-            return;
+            var row = await query.Select(c => new { c.MobilePhone }).FirstOrDefaultAsync(cancellationToken);
 
-        _customerPhone = row.MobilePhone.Trim();
-        _lastCustomerCodeForAutoPhone = code;
+            if (row == null || string.IsNullOrWhiteSpace(row.MobilePhone))
+            {
+                if (_lastCustomerCodeForAutoPhone != null
+                    && (!string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(_lastRoutingKeyForAutoPhone ?? "", routingKey, StringComparison.Ordinal)))
+                    _customerPhone = string.Empty;
+                _lastCustomerCodeForAutoPhone = null;
+                _lastRoutingKeyForAutoPhone = null;
+                return;
+            }
+
+            var compositeChanged = _lastCustomerCodeForAutoPhone != null
+                                   && (!string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase)
+                                       || !string.Equals(_lastRoutingKeyForAutoPhone ?? "", routingKey, StringComparison.Ordinal));
+            var shouldApply = string.IsNullOrWhiteSpace(_customerPhone) || compositeChanged;
+            if (!shouldApply)
+                return;
+
+            _customerPhone = row.MobilePhone.Trim();
+            _lastCustomerCodeForAutoPhone = code;
+            _lastRoutingKeyForAutoPhone = routingKey;
+        }, cancellationToken);
     }
 
     private async Task SelectItemAsync(QueueItem item)
@@ -731,16 +776,13 @@ else
         // 异步加载 OCR 结果
         if (item.OcrResultId.HasValue)
         {
-            _ = Task.Run(async () =>
+            await DbSerializedAsync(async () =>
             {
                 var result = await DbContext.OcrResults
                     .AsNoTracking()
-                    .FirstOrDefaultAsync(o => o.Id == item.OcrResultId.Value);
+                    .FirstOrDefaultAsync(o => o.Id == item.OcrResultId!.Value);
                 if (result != null)
-                {
                     _ocrResult = result;
-                    await InvokeAsync(StateHasChanged);
-                }
             });
         }
 
@@ -785,34 +827,46 @@ else
         _retryingOcr = true;
         try
         {
-            var tracked = await DbContext.OcrResults.FirstOrDefaultAsync(o => o.Id == _current.OcrResultId);
-            if (tracked == null)
+            var ocrId = _current.OcrResultId!.Value;
+            var missing = false;
+            await DbSerializedAsync(async () =>
+            {
+                var tracked = await DbContext.OcrResults.FirstOrDefaultAsync(o => o.Id == ocrId);
+                if (tracked == null)
+                {
+                    missing = true;
+                    return;
+                }
+
+                tracked.Status = OcrStatus.Pending;
+                tracked.ErrorMessage = null;
+                tracked.RawResult?.Dispose();
+                tracked.RawResult = null;
+                tracked.ConfidenceScores?.Dispose();
+                tracked.ConfidenceScores = null;
+                tracked.AzureRawResult?.Dispose();
+                tracked.AzureRawResult = null;
+                tracked.AzureConfidenceScores?.Dispose();
+                tracked.AzureConfidenceScores = null;
+                tracked.AzureStatus = OcrStatus.Pending;
+                tracked.AzureErrorMessage = null;
+                tracked.AmountValidationResult?.Dispose();
+                tracked.AmountValidationResult = null;
+                tracked.AmountValidationStatus = AmountValidationStatus.Pending;
+                tracked.AmountValidationErrorMessage = null;
+                tracked.AmountValidatedAt = null;
+                tracked.UpdatedAt = DateTime.UtcNow;
+
+                await DbContext.SaveChangesAsync();
+            });
+
+            if (missing)
             {
                 Snackbar.Add("未找到 OCR 记录", Severity.Error);
                 return;
             }
 
-            tracked.Status = OcrStatus.Pending;
-            tracked.ErrorMessage = null;
-            tracked.RawResult?.Dispose();
-            tracked.RawResult = null;
-            tracked.ConfidenceScores?.Dispose();
-            tracked.ConfidenceScores = null;
-            tracked.AzureRawResult?.Dispose();
-            tracked.AzureRawResult = null;
-            tracked.AzureConfidenceScores?.Dispose();
-            tracked.AzureConfidenceScores = null;
-            tracked.AzureStatus = OcrStatus.Pending;
-            tracked.AzureErrorMessage = null;
-            tracked.AmountValidationResult?.Dispose();
-            tracked.AmountValidationResult = null;
-            tracked.AmountValidationStatus = AmountValidationStatus.Pending;
-            tracked.AmountValidationErrorMessage = null;
-            tracked.AmountValidatedAt = null;
-            tracked.UpdatedAt = DateTime.UtcNow;
-
-            await DbContext.SaveChangesAsync();
-            await OcrWorker.EnqueueAsync(tracked.Id);
+            await OcrWorker.EnqueueAsync(ocrId);
 
             _current.OcrStatus = CheckOcrStatus.Recognizing;
             _current.RawResult = null;
@@ -847,56 +901,85 @@ else
         _amountValidationRunning = true;
         try
         {
-            var tracked = await DbContext.OcrResults.FirstOrDefaultAsync(x => x.Id == _current.OcrResultId.Value);
-            if (tracked == null)
+            var ocrId = _current.OcrResultId.Value;
+            string? imageUrl = null;
+            await DbSerializedAsync(async () =>
+            {
+                var row = await DbContext.OcrResults.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ocrId);
+                imageUrl = row?.ImageUrl;
+            });
+
+            if (string.IsNullOrEmpty(imageUrl))
             {
                 Snackbar.Add("未找到 OCR 记录", Severity.Error);
                 return;
             }
 
-            var oldStatus = tracked.AmountValidationStatus;
-            var oldError = tracked.AmountValidationErrorMessage;
-            var oldResult = tracked.AmountValidationResult?.RootElement.GetRawText();
+            var diResult = await OcrService.ValidateHandwrittenAmountAsync(imageUrl, _amount);
 
-            var result = await OcrService.ValidateHandwrittenAmountAsync(tracked.ImageUrl, _amount);
-            tracked.AmountValidationResult?.Dispose();
-            tracked.AmountValidationResult = JsonDocument.Parse(JsonSerializer.Serialize(result));
-            tracked.AmountValidationStatus = result.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
-                ? AmountValidationStatus.Completed
-                : result.Status.Equals("skipped", StringComparison.OrdinalIgnoreCase)
-                    ? AmountValidationStatus.Skipped
-                    : AmountValidationStatus.Failed;
-            tracked.AmountValidationErrorMessage = result.Reason;
-            tracked.AmountValidatedAt = DateTime.UtcNow;
-            tracked.UpdatedAt = DateTime.UtcNow;
+            AmountValidationStatus oldStatus = default;
+            string? oldError = null;
+            string? oldResult = null;
+            OcrResult? trackedAfter = null;
 
-            await DbContext.SaveChangesAsync();
+            await DbSerializedAsync(async () =>
+            {
+                var tracked = await DbContext.OcrResults.FirstOrDefaultAsync(x => x.Id == ocrId);
+                if (tracked == null)
+                    return;
+
+                oldStatus = tracked.AmountValidationStatus;
+                oldError = tracked.AmountValidationErrorMessage;
+                oldResult = tracked.AmountValidationResult?.RootElement.GetRawText();
+
+                tracked.AmountValidationResult?.Dispose();
+                tracked.AmountValidationResult = JsonDocument.Parse(JsonSerializer.Serialize(diResult));
+                tracked.AmountValidationStatus = diResult.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
+                    ? AmountValidationStatus.Completed
+                    : diResult.Status.Equals("skipped", StringComparison.OrdinalIgnoreCase)
+                        ? AmountValidationStatus.Skipped
+                        : AmountValidationStatus.Failed;
+                tracked.AmountValidationErrorMessage = diResult.Reason;
+                tracked.AmountValidatedAt = DateTime.UtcNow;
+                tracked.UpdatedAt = DateTime.UtcNow;
+
+                await DbContext.SaveChangesAsync();
+                trackedAfter = tracked;
+            });
+
+            if (trackedAfter == null)
+            {
+                Snackbar.Add("未找到 OCR 记录", Severity.Error);
+                return;
+            }
+
             try
             {
-                await AuditLog.LogAsync(
-                    AuditAction.Update,
-                    "OcrResult",
-                    tracked.Id,
-                    new
-                    {
-                        AmountValidationStatus = oldStatus.ToString(),
-                        AmountValidationErrorMessage = oldError,
-                        AmountValidationResult = oldResult
-                    },
-                    new
-                    {
-                        AmountValidationStatus = tracked.AmountValidationStatus.ToString(),
-                        AmountValidationErrorMessage = tracked.AmountValidationErrorMessage,
-                        AmountValidationResult = tracked.AmountValidationResult?.RootElement.GetRawText(),
-                        Trigger = "Manual"
-                    });
+                await DbSerializedAsync(async () =>
+                    await AuditLog.LogAsync(
+                        AuditAction.Update,
+                        "OcrResult",
+                        trackedAfter.Id,
+                        new
+                        {
+                            AmountValidationStatus = oldStatus.ToString(),
+                            AmountValidationErrorMessage = oldError,
+                            AmountValidationResult = oldResult
+                        },
+                        new
+                        {
+                            AmountValidationStatus = trackedAfter.AmountValidationStatus.ToString(),
+                            AmountValidationErrorMessage = trackedAfter.AmountValidationErrorMessage,
+                            AmountValidationResult = trackedAfter.AmountValidationResult?.RootElement.GetRawText(),
+                            Trigger = "Manual"
+                        }));
             }
             catch (Exception auditEx)
             {
-                Logger.LogWarning(auditEx, "手动金额校验审计日志写入失败，已忽略。OcrResultId={OcrResultId}", tracked.Id);
+                Logger.LogWarning(auditEx, "手动金额校验审计日志写入失败，已忽略。OcrResultId={OcrResultId}", trackedAfter.Id);
             }
 
-            _ocrResult = tracked;
+            _ocrResult = trackedAfter;
             Snackbar.Add("手写金额校验已完成", Severity.Success);
             StateHasChanged();
         }
@@ -917,81 +1000,90 @@ else
 
         try
         {
-            var error = await ValidateFormAsync(submitAsFinal);
-            if (!string.IsNullOrEmpty(error))
+            var validationFailed = false;
+
+            await DbSerializedAsync(async () =>
             {
-                Snackbar.Add(error, Severity.Warning);
+                var error = await ValidateFormAsync(submitAsFinal);
+                if (!string.IsNullOrEmpty(error))
+                {
+                    Snackbar.Add(error, Severity.Warning);
+                    validationFailed = true;
+                    return;
+                }
+
+                var customer = await ResolveCustomerAsync();
+                var mismatch = CheckMasterDataComparer.HasMismatch(
+                    customer,
+                    NullIfEmpty(_bankName),
+                    NullIfEmpty(_accountHolderName),
+                    NullIfEmpty(_companyName),
+                    NullIfEmpty(_accountNumber),
+                    NullIfEmpty(_accountAddress));
+                if (mismatch)
+                    Snackbar.Add("与客户主数据中的期望银行/账号/持有人/公司/地址不一致，已标记警告。", Severity.Warning);
+
+                var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
+                var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
+
+                var normalizedCheckNumber = CheckNumberGuard.Normalize(_checkNumber);
+                var capturedImageUrl = _current.ImageUrl;
+                var capturedOcrResultId = _current.OcrResultId;
+                var checkDateUtc = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
+
+                var check = new CheckRecord
+                {
+                    CheckNumber = normalizedCheckNumber,
+                    CheckAmount = _amount,
+                    CheckDate = checkDateUtc,
+                    Customer = customer,
+                    ImageUrl = capturedImageUrl,
+                    OcrResultId = capturedOcrResultId,
+                    Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
+                    Status = CheckStatus.PendingDebit,
+                    RowVersion = 0,
+                    BankName = NullIfEmpty(_bankName),
+                    RoutingNumber = NullIfEmpty(_routingNumber),
+                    AccountNumber = NullIfEmpty(_accountNumber),
+                    AccountType = NullIfEmpty(_accountType),
+                    AccountHolderName = NullIfEmpty(_accountHolderName),
+                    AccountAddress = NullIfEmpty(_accountAddress),
+                    PayToOrderOf = NullIfEmpty(_payToOrderOf),
+                    ForMemo = NullIfEmpty(_forMemo),
+                    MicrLineRaw = NullIfEmpty(_micrLineRaw),
+                    CheckNumberMicr = NullIfEmpty(_checkNumberMicr),
+                    InvoiceNumbers = NullIfEmpty(_invoiceNumbers),
+                    PaymentPeriodText = NullIfEmpty(_paymentPeriodText),
+                    CompanyName = NullIfEmpty(_companyName),
+                    SubmittedAt = submitAsFinal ? DateTime.UtcNow : null,
+                    CustomerMasterMismatchWarning = mismatch,
+                    CustomerCompanyNewRelationshipWarning = companyWarn
+                };
+
+                DbContext.CheckRecords.Add(check);
+                await DbContext.SaveChangesAsync();
+
+                if (submitAsFinal)
+                {
+                    await CheckSubmitOcrTrainingSamplePageHelper.TryAppendAfterCheckFinalSubmitAsync(
+                        DbContext,
+                        Configuration,
+                        capturedImageUrl,
+                        capturedOcrResultId,
+                        normalizedCheckNumber,
+                        _amount,
+                        checkDateUtc,
+                        BuildSubmittedAchExtensionData(),
+                        check.Id,
+                        CheckOcrTemplateResolver,
+                        Logger);
+                }
+            });
+
+            if (validationFailed)
                 return;
-            }
 
-            var customer = await ResolveCustomerAsync();
-            var mismatch = CheckMasterDataComparer.HasMismatch(
-                customer,
-                NullIfEmpty(_bankName),
-                NullIfEmpty(_accountHolderName),
-                NullIfEmpty(_companyName),
-                NullIfEmpty(_accountNumber),
-                NullIfEmpty(_accountAddress));
-            if (mismatch)
-                Snackbar.Add("与客户主数据中的期望银行/账号/持有人/公司/地址不一致，已标记警告。", Severity.Warning);
-
-            var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
-            var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
-
-            var normalizedCheckNumber = CheckNumberGuard.Normalize(_checkNumber);
-            var capturedImageUrl = _current.ImageUrl;
-            var capturedOcrResultId = _current.OcrResultId;
-            var checkDateUtc = DateTime.SpecifyKind(_checkDate!.Value, DateTimeKind.Utc);
-
-            var check = new CheckRecord
-            {
-                CheckNumber = normalizedCheckNumber,
-                CheckAmount = _amount,
-                CheckDate = checkDateUtc,
-                Customer = customer,
-                ImageUrl = capturedImageUrl,
-                OcrResultId = capturedOcrResultId,
-                Notes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
-                Status = CheckStatus.PendingDebit,
-                RowVersion = 0,
-                BankName = NullIfEmpty(_bankName),
-                RoutingNumber = NullIfEmpty(_routingNumber),
-                AccountNumber = NullIfEmpty(_accountNumber),
-                AccountType = NullIfEmpty(_accountType),
-                AccountHolderName = NullIfEmpty(_accountHolderName),
-                AccountAddress = NullIfEmpty(_accountAddress),
-                PayToOrderOf = NullIfEmpty(_payToOrderOf),
-                ForMemo = NullIfEmpty(_forMemo),
-                MicrLineRaw = NullIfEmpty(_micrLineRaw),
-                CheckNumberMicr = NullIfEmpty(_checkNumberMicr),
-                InvoiceNumbers = NullIfEmpty(_invoiceNumbers),
-                PaymentPeriodText = NullIfEmpty(_paymentPeriodText),
-                CompanyName = NullIfEmpty(_companyName),
-                SubmittedAt = submitAsFinal ? DateTime.UtcNow : null,
-                CustomerMasterMismatchWarning = mismatch,
-                CustomerCompanyNewRelationshipWarning = companyWarn
-            };
-
-            DbContext.CheckRecords.Add(check);
-            await DbContext.SaveChangesAsync();
-
-            if (submitAsFinal)
-            {
-                await CheckSubmitOcrTrainingSamplePageHelper.TryAppendAfterCheckFinalSubmitAsync(
-                    DbContext,
-                    Configuration,
-                    capturedImageUrl,
-                    capturedOcrResultId,
-                    normalizedCheckNumber,
-                    _amount,
-                    checkDateUtc,
-                    BuildSubmittedAchExtensionData(),
-                    check.Id,
-                    CheckOcrTemplateResolver,
-                    Logger);
-            }
-
-            _current.Done = true;
+            _current!.Done = true;
             Snackbar.Add(submitAsFinal
                 ? "支票已提交入库！"
                 : "支票草稿已保存。可稍后在「收款记录」中打开该笔，使用「编辑草稿」继续修改，或在收款记录中补全 Routing / Account 后「提交入库」。",
@@ -1149,7 +1241,10 @@ else
     {
         if (string.IsNullOrWhiteSpace(_customerCode)) return null;
         var code = _customerCode.Trim();
-        return _customers.FirstOrDefault(c => c.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
+        var rk = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
+        return _customers.FirstOrDefault(c =>
+            c.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(c.ExpectedRoutingNumber, rk, StringComparison.Ordinal));
     }
 
     private bool ShowNewCompanyRelationshipWarning()
@@ -1193,9 +1288,10 @@ else
     private async Task<Customer> ResolveCustomerAsync()
     {
         var code = _customerCode.Trim();
+        var routingKey = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
         var existing = await DbContext.Customers
             .Include(c => c.CompanyNames)
-            .FirstOrDefaultAsync(c => c.CustomerCode == code);
+            .FirstOrDefaultAsync(c => c.CustomerCode == code && c.ExpectedRoutingNumber == routingKey);
         if (existing != null)
         {
             var phone = _customerPhone.Trim();
@@ -1217,6 +1313,7 @@ else
         var customer = new Customer
         {
             CustomerCode = code,
+            ExpectedRoutingNumber = routingKey,
             CustomerName = displayName,
             MobilePhone = _customerPhone.Trim(),
             ExpectedBankName = NullIfEmpty(_bankName),
@@ -1246,6 +1343,7 @@ else
         _customerCode = "";
         _customerPhone = "";
         _lastCustomerCodeForAutoPhone = null;
+        _lastRoutingKeyForAutoPhone = null;
         _notes = "";
         _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
         _accountType = CheckAccountTypeCatalog.BusinessChecking;
@@ -1484,5 +1582,9 @@ else
         return $"/api/ImageProxy?url={Uri.EscapeDataString(url)}";
     }
 
-    public void Dispose() => _cts.Cancel();
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _dbGate.Dispose();
+    }
 }

@@ -10,6 +10,8 @@
         <MudStack Spacing="2">
             <MudTextField @bind-Value="_newCode" Label="客户账号" Variant="Variant.Outlined" Margin="Margin.Dense"
                           Placeholder="与支票 OCR 账号一致" />
+            <MudTextField @bind-Value="_newExpectedRouting" Label="ABA 路由号（9 位，可选）" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Placeholder="跨银行账号重复时请填写；留空不按银行区分" MaxLength="20" HelperText="须与支票 Routing Number 一致才能在上传页自动带出手机号" />
             <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_newMobilePhone" Label="手机号（必填）" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_newExpectedBank" Label="关联银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
@@ -42,6 +44,7 @@
     private string _newExpectedBank = "";
     private string _newOcrCompanyName = "";
     private string _newExpectedAddress = "";
+    private string _newExpectedRouting = "";
     private string _newCompaniesRaw = "";
 
     private Task CancelAsync()
@@ -65,21 +68,24 @@
         }
 
         var code = _newCode.Trim();
-        var exists = await DbContext.Customers.AnyAsync(c => c.CustomerCode == code);
+        var rk = CustomerAchRoutingLookup.NormalizeRoutingKey(_newExpectedRouting);
+        var exists = await DbContext.Customers.AnyAsync(c => c.CustomerCode == code && c.ExpectedRoutingNumber == rk);
         if (exists)
         {
-            Snackbar.Add($"客户账号 {code} 已存在", Severity.Error);
+            Snackbar.Add($"客户账号 {code} 与当前 ABA 组合已存在", Severity.Error);
             return;
         }
 
         _saving = true;
         try
         {
+            var now = DateTime.UtcNow;
             var ocrName = string.IsNullOrWhiteSpace(_newOcrCompanyName) ? null : _newOcrCompanyName.Trim();
 
             var customer = new Customer
             {
                 CustomerCode = code,
+                ExpectedRoutingNumber = rk,
                 CustomerName = _newName.Trim(),
                 MobilePhone = _newMobilePhone.Trim(),
                 ExpectedBankName = string.IsNullOrWhiteSpace(_newExpectedBank) ? null : _newExpectedBank.Trim(),
@@ -87,7 +93,9 @@
                 ExpectedCompanyName = ocrName,
                 ExpectedAccountAddress = string.IsNullOrWhiteSpace(_newExpectedAddress) ? null : _newExpectedAddress.Trim(),
                 IsActive = true,
-                IsAuthorized = false
+                IsAuthorized = false,
+                CreatedAt = now,
+                UpdatedAt = now
             };
             DbContext.Customers.Add(customer);
             await DbContext.SaveChangesAsync();

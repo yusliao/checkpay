@@ -7,6 +7,12 @@ public class Customer : BaseEntity
     /// <summary>客户主键业务号：存支票 OCR 的账号 (AccountNumber)，与票面账号一致。</summary>
     public string CustomerCode { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 期望 ABA 路由号（仅数字，通常 9 位）；与 <see cref="CustomerCode"/> 共同区分客户。
+    /// 空字符串表示不按银行区分（兼容旧数据）；同一账号在不同银行应维护不同路由号各行。
+    /// </summary>
+    public string ExpectedRoutingNumber { get; set; } = string.Empty;
+
     public string CustomerName { get; set; } = string.Empty;
 
     /// <summary>客户手机号（业务必填）。同一手机号可对应多个客户账号（1 对多）；每个客户账号下可有多个关联公司名称（1 对多）。</summary>

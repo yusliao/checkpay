@@ -141,7 +141,8 @@ else if (ShowCheckEditForm())
                 <MudDivider Class="my-3" />
                 <MudText Typo="Typo.subtitle2" Class="mb-2">ACH / 票面信息</MudText>
                 <MudTextField @bind-Value="_routingNumber" Label="Routing Number (ABA)" Variant="Variant.Outlined" Class="mb-2"
-                              Style="@GetFieldStyle("routingNumber")" HelperText="@GetFieldHint("routingNumber")" />
+                              Style="@GetFieldStyle("routingNumber")" HelperText="@GetFieldHint("routingNumber")"
+                              OnBlur="@OnAchRoutingBlurAsync" />
                 <MudTextField @bind-Value="_accountNumber" Label="Account Number" Variant="Variant.Outlined" Class="mb-2"
                               Style="@GetFieldStyle("accountNumber")" HelperText="@GetFieldHint("accountNumber")" />
                 <MudTextField @bind-Value="_bankName" Label="Bank Name" Variant="Variant.Outlined" Class="mb-2"
@@ -302,6 +303,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
     private string _customerCode = string.Empty;
     private string _customerPhone = string.Empty;
     private string? _lastCustomerCodeForAutoPhone;
+    private string? _lastRoutingKeyForAutoPhone;
     private string _notes = string.Empty;
     private string _routingNumber = "";
     private string _accountNumber = "";
@@ -396,6 +398,8 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
             _customers = await DbContext.Customers
                 .Where(c => c.IsActive)
                 .Include(c => c.CompanyNames)
+                .OrderBy(c => c.CustomerCode)
+                .ThenBy(c => c.ExpectedRoutingNumber)
                 .ToListAsync();
 
             ApplyCheckRecordToForm(draft);
@@ -435,6 +439,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         _customerPhone = c.Customer?.MobilePhone ?? string.Empty;
         _prefilledFromOcr = true;
         _lastCustomerCodeForAutoPhone = string.IsNullOrWhiteSpace(_customerCode) ? null : _customerCode.Trim();
+        _lastRoutingKeyForAutoPhone = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
     }
 
     private void RefreshConfidenceFromSelectedOcrEngine()
@@ -459,6 +464,8 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         _customers = await DbContext.Customers
             .Where(c => c.IsActive)
             .Include(c => c.CompanyNames)
+            .OrderBy(c => c.CustomerCode)
+            .ThenBy(c => c.ExpectedRoutingNumber)
             .ToListAsync();
 
         if (_ocrResult?.Status == OcrStatus.Completed && PrimaryCheckOcrPayload(_ocrResult) != null)
@@ -479,6 +486,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         if (force)
         {
             _lastCustomerCodeForAutoPhone = null;
+            _lastRoutingKeyForAutoPhone = null;
             _routingNumber = _accountNumber = _bankName = _accountHolderName = _accountAddress = "";
             _accountType = CheckAccountTypeCatalog.BusinessChecking;
             _payToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood;
@@ -541,40 +549,54 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
     private async Task OnCustomerAccountBlurAsync(FocusEventArgs _)
         => await SyncCustomerPhoneFromMasterAsync();
 
-    /// <summary>客户账号有值时，从客户主数据（库内）带出手机号；OCR 写入账号或账号变更时也会触发。</summary>
+    private Task OnAchRoutingBlurAsync(FocusEventArgs _)
+        => SyncCustomerPhoneFromMasterAsync();
+
+    /// <summary>客户账号有值时，从客户主数据（库内）按「账号 + 9 位 ABA」带出手机号；OCR 写入账号/路由或变更时也会触发。</summary>
     private async Task SyncCustomerPhoneFromMasterAsync(CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(_customerCode))
         {
             _lastCustomerCodeForAutoPhone = null;
+            _lastRoutingKeyForAutoPhone = null;
             return;
         }
 
         var code = _customerCode.Trim();
         var lower = code.ToLowerInvariant();
-        var row = await DbContext.Customers
+        var routingKey = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
+
+        var query = DbContext.Customers
             .AsNoTracking()
-            .Where(c => c.IsActive && c.CustomerCode.ToLower() == lower)
-            .Select(c => new { c.MobilePhone })
-            .FirstOrDefaultAsync(cancellationToken);
+            .Where(c => c.IsActive && c.CustomerCode.ToLower() == lower);
+        if (routingKey.Length == 9)
+            query = query.Where(c => c.ExpectedRoutingNumber == routingKey);
+        else
+            query = query.Where(c => c.ExpectedRoutingNumber == "");
+
+        var row = await query.Select(c => new { c.MobilePhone }).FirstOrDefaultAsync(cancellationToken);
 
         if (row == null || string.IsNullOrWhiteSpace(row.MobilePhone))
         {
             if (_lastCustomerCodeForAutoPhone != null
-                && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase))
+                && (!string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(_lastRoutingKeyForAutoPhone ?? "", routingKey, StringComparison.Ordinal)))
                 _customerPhone = string.Empty;
             _lastCustomerCodeForAutoPhone = null;
+            _lastRoutingKeyForAutoPhone = null;
             return;
         }
 
-        var codeChangedVsTracked = _lastCustomerCodeForAutoPhone != null
-            && !string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase);
-        var shouldApply = string.IsNullOrWhiteSpace(_customerPhone) || codeChangedVsTracked;
+        var compositeChanged = _lastCustomerCodeForAutoPhone != null
+                               && (!string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase)
+                                   || !string.Equals(_lastRoutingKeyForAutoPhone ?? "", routingKey, StringComparison.Ordinal));
+        var shouldApply = string.IsNullOrWhiteSpace(_customerPhone) || compositeChanged;
         if (!shouldApply)
             return;
 
         _customerPhone = row.MobilePhone.Trim();
         _lastCustomerCodeForAutoPhone = code;
+        _lastRoutingKeyForAutoPhone = routingKey;
     }
 
     /// <summary>渲染 OCR 单元格内容（字段值 + 置信度色标）</summary>
@@ -949,6 +971,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
     private void ResetRecognizedFields()
     {
         _lastCustomerCodeForAutoPhone = null;
+        _lastRoutingKeyForAutoPhone = null;
         _checkNumber = string.Empty;
         _amount = 0m;
         _checkDate = null;
@@ -1273,7 +1296,10 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
     {
         if (string.IsNullOrWhiteSpace(_customerCode)) return null;
         var code = _customerCode.Trim();
-        return _customers.FirstOrDefault(c => c.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase));
+        var rk = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
+        return _customers.FirstOrDefault(c =>
+            c.CustomerCode.Equals(code, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(c.ExpectedRoutingNumber, rk, StringComparison.Ordinal));
     }
 
     private bool ShowNewCompanyRelationshipWarning()
@@ -1315,9 +1341,10 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
     private async Task<Customer> ResolveCustomerAsync()
     {
         var code = _customerCode.Trim();
+        var routingKey = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
         var existing = await DbContext.Customers
             .Include(c => c.CompanyNames)
-            .FirstOrDefaultAsync(c => c.CustomerCode == code);
+            .FirstOrDefaultAsync(c => c.CustomerCode == code && c.ExpectedRoutingNumber == routingKey);
         if (existing != null)
         {
             var phone = _customerPhone.Trim();
@@ -1339,6 +1366,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         var customer = new Customer
         {
             CustomerCode = code,
+            ExpectedRoutingNumber = routingKey,
             CustomerName = displayName,
             MobilePhone = _customerPhone.Trim(),
             ExpectedBankName = NullIfEmpty(_bankName),

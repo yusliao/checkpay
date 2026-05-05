@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using CheckPay.Application.Common.Models;
 
@@ -73,6 +74,9 @@ internal static class CheckOcrVisionReadParser
         @"(?i)\b(?:dollars?|only|and|thousand|hundred|million|cents?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b",
         RegexOptions.Compiled);
 
+    /// <summary>票面银行法人后缀「, N.A.」（National Association），如 Wells Fargo、Chase Bank。</summary>
+    private static readonly Regex BankNameNationalAssociationSuffixRegex = new(@"(?i),\s*N\.A\.?\s*$", RegexOptions.Compiled);
+
     private static readonly Regex NameTokenRegex = new(
         @"\b[A-Z][A-Za-z'\-]{1,}\b",
         RegexOptions.Compiled);
@@ -89,11 +93,34 @@ internal static class CheckOcrVisionReadParser
         "hwy", "highway", "rte", "route"
     };
 
-    /// <summary>磁墨条上方常见银行名/品牌单行（与左上 <see cref="CheckOcrParsingProfile.BankNamePriorRegion"/> 互补）。</summary>
-    private static readonly NormRegion BankNameMicrAdjacentAuxRegion = new(0.0, 0.40, 1.0, 0.76);
+    /// <summary>磁墨条上方常见银行名/品牌单行（与左上 <see cref="CheckOcrParsingProfile.BankNamePriorRegion"/> 互补；minNormY 与 Prior max 对齐，避免 Chase 等品牌落在 0.28~0.40 断层）。</summary>
+    private static readonly NormRegion BankNameMicrAdjacentAuxRegion = new(0.0, 0.28, 1.0, 0.76);
 
     private static bool LooksLikeMicrInkLine(string text) =>
         text.Contains('⑆', StringComparison.Ordinal) || text.Contains('⑈', StringComparison.Ordinal);
+
+    /// <summary>
+    /// Vision 常在同一磁墨行内把账号数字断开空格；仅在含 ⑈/⑆ 的行内折叠「数字↔数字」间空白，避免破坏正文里的三连 MICR 数字行。
+    /// </summary>
+    private static string CollapseSpacesBetweenDigitsOnMicrInkLines(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.None);
+        var sb = new StringBuilder(text.Length);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (i > 0)
+                sb.Append('\n');
+            var line = lines[i];
+            sb.Append(LooksLikeMicrInkLine(line)
+                ? Regex.Replace(line, @"(?<=\d)\s+(?=\d)", "")
+                : line);
+        }
+
+        return sb.ToString();
+    }
 
     /// <summary>「⑈左段⑈ ⑆路由⑆ 右段⑈」：按位数将较短段视为支票号、较长段（通常 ≥8）视为账号。</summary>
     private static bool TryAssignMicrCheckVsAccountByLength(string leftDigits, string rightDigits, out string? checkDigits, out string? accountDigits)
@@ -173,6 +200,23 @@ internal static class CheckOcrVisionReadParser
             && !string.IsNullOrEmpty(accountDigits);
     }
 
+    /// <summary>
+    /// <c>⑆路由⑆</c> 之后下一片段为「≥7 位数字 + ⑈」（常与左侧 ⑈…⑈ 同行断开），在双侧 bracket 分类失败且无非辅助命中时用尾段作账号。
+    /// </summary>
+    private static bool TryPickMicrAccountAfterTransitTail(string normalizedText, Match lastTransitMatch, out string? accountDigits)
+    {
+        accountDigits = null;
+        var end = lastTransitMatch.Index + lastTransitMatch.Length;
+        if ((uint)end > (uint)normalizedText.Length)
+            return false;
+        var tail = normalizedText[end..];
+        var m = Regex.Match(tail, @"(\d{7,17})⑈");
+        if (!m.Success)
+            return false;
+        accountDigits = m.Groups[1].Value;
+        return true;
+    }
+
     /// <summary>在已归一化文本中，按「⑈…⑈ ⑆9位路由⑆ …⑈」提取支票号（与账号）；路由须通过 ABA。</summary>
     private static bool TryClassifyOnUsDigitsAroundRouting(string text, string routing9, out string? checkDigits, out string? accountDigits)
     {
@@ -241,6 +285,34 @@ internal static class CheckOcrVisionReadParser
         return false;
     }
 
+    /// <summary>
+    /// Vision 将 MICR 切成多行时，含路由的子串过滤会丢掉「仅有 ⑈ 尾段、不含 9 位 ABA」的相邻行；按垂直距离把同属一条磁墨带的行并入。
+    /// </summary>
+    private static List<ReadOcrLine> ExpandMicrInkLinesByVerticalProximity(
+        IReadOnlyList<ReadOcrLine> allInk,
+        IReadOnlyList<ReadOcrLine> seedLines,
+        double maxNormCenterYDelta)
+    {
+        var chosen = new HashSet<ReadOcrLine>();
+        foreach (var s in seedLines)
+            chosen.Add(s);
+
+        foreach (var line in allInk)
+        {
+            if (chosen.Contains(line))
+                continue;
+            var cy = line.NormCenterY;
+            if (!seedLines.Any(s => Math.Abs(s.NormCenterY - cy) <= maxNormCenterYDelta))
+                continue;
+            chosen.Add(line);
+        }
+
+        return chosen
+            .OrderByDescending(l => l.NormCenterY)
+            .ThenBy(l => l.NormLeft)
+            .ToList();
+    }
+
     /// <summary>从全文按行提取含 E13B 磁墨符号的行，供 <see cref="MicrLineRaw"/>（无磁墨行时返回 null）。</summary>
     public static string? TryBuildMicrLineRawFromPlainText(string? text)
     {
@@ -273,7 +345,7 @@ internal static class CheckOcrVisionReadParser
         {
             var filtered = ink.Where(l => l.Text.Contains(rt, StringComparison.Ordinal)).ToList();
             if (filtered.Count > 0)
-                ink = filtered;
+                ink = ExpandMicrInkLinesByVerticalProximity(ink, filtered, maxNormCenterYDelta: 0.14);
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -670,6 +742,7 @@ internal static class CheckOcrVisionReadParser
         if (string.IsNullOrWhiteSpace(text))
             return new MicrHeuristicParseResult(null, null, null, 0.1, 0.1, 0.1, null, "empty");
 
+        text = CollapseSpacesBetweenDigitsOnMicrInkLines(text.Trim());
         text = NormalizeMicrLikeText(text);
         var tailStart = Math.Max(0, text.Length - 400);
         var tail = text[tailStart..];
@@ -685,9 +758,9 @@ internal static class CheckOcrVisionReadParser
         if (lastTransit is not null)
         {
             var rt = lastTransit.Groups[1].Value;
-            string? account = null;
-            if (TryClassifyOnUsDigitsAroundRouting(text, rt, out _, out var acBracket) && !string.IsNullOrEmpty(acBracket))
-                account = acBracket;
+            var bracketClassified =
+                TryClassifyOnUsDigitsAroundRouting(text, rt, out _, out var acBracket) && !string.IsNullOrEmpty(acBracket);
+            string? account = bracketClassified ? acBracket : null;
             if (account is null)
             {
                 foreach (Match am in E13bOnUsAccountRegex.Matches(text))
@@ -706,16 +779,28 @@ internal static class CheckOcrVisionReadParser
                 : null;
 
             var selectionMode = "e13b_transit";
+            var auxiliaryMatched = false;
             if (account is null && TryParseAuxiliaryOnUsAfterTransit(text, lastTransit.Index + lastTransit.Length, out var acAux))
             {
                 account = acAux;
                 selectionMode = "e13b_transit_aux_on_us";
+                auxiliaryMatched = true;
+            }
+
+            var strongAccount = bracketClassified || auxiliaryMatched || (account?.Length ?? 0) >= 8;
+            var transitTailRefinedAccount = false;
+            if (!strongAccount && TryPickMicrAccountAfterTransitTail(text, lastTransit, out var tailAcct))
+            {
+                account = tailAcct;
+                transitTailRefinedAccount = true;
             }
 
             var micrRaw = TryBuildMicrLineRawFromPlainText(text);
             micrRaw ??= text.Length <= 160 ? text.Trim() : text[(text.Length - 160)..].Trim();
             var acConf = account != null
-                ? (selectionMode == "e13b_transit_aux_on_us" ? 0.56 : 0.68)
+                ? auxiliaryMatched ? 0.56
+                : transitTailRefinedAccount ? 0.58
+                : 0.68
                 : 0.35;
             return new MicrHeuristicParseResult(rt, account, micrRaw, 0.9, acConf, 0.88, true, selectionMode);
         }
@@ -1248,12 +1333,41 @@ internal static class CheckOcrVisionReadParser
         return amountWordTokens >= Math.Max(2, (int)Math.Ceiling(tokens.Count * 0.6));
     }
 
+    /// <summary>整行为票据日期或与 <see cref="DateRegex"/> 等效的独立日期行（含可选 DATE 前缀），勿当银行名。</summary>
+    private static bool LooksLikeDateOnlyPrintedLine(string normalizedLine)
+    {
+        var t = NormalizeSpaces(normalizedLine).Trim();
+        if (t.Length < 6)
+            return false;
+
+        var core = Regex.Replace(t, @"^(?i)date\s*[:\.]?\s*", "").Trim();
+        if (core.Length < 6)
+            return false;
+
+        var m = DateRegex.Match(core);
+        if (!m.Success || m.Index != 0)
+            return false;
+
+        return string.IsNullOrWhiteSpace(core.Substring(m.Length));
+    }
+
+    /// <summary>支票左上角常见的分数式 transit（如 Chase 样式的 9-32/720），勿当银行名称。</summary>
+    private static bool LooksLikePrintedFractionalRoutingTransit(string t)
+    {
+        var s = NormalizeSpaces(t).Trim();
+        return Regex.IsMatch(s, @"^\d{1,3}\s*-\s*\d{1,3}\s*/\s*\d{1,4}\s*$");
+    }
+
     private static double ScoreBankNameCandidate(ReadOcrLine line)
     {
         if (string.IsNullOrWhiteSpace(line.Text))
             return 0.0;
         var normalized = NormalizeSpaces(line.Text);
         var t = normalized.Trim();
+        if (LooksLikePrintedFractionalRoutingTransit(t))
+            return 0.0;
+        if (LooksLikeDateOnlyPrintedLine(t))
+            return 0.0;
         if (Regex.IsMatch(t, @"^(?i)(pay(\s+to(\s+the)?)?|to\s+the|order\s+of|for|dollars|deposits|photo|mp)$"))
             return 0.0;
         var lower = normalized.ToLowerInvariant();
@@ -1282,6 +1396,8 @@ internal static class CheckOcrVisionReadParser
             score += 0.3;
         if (lower.Contains("national", StringComparison.Ordinal) || lower.Contains("trust", StringComparison.Ordinal))
             score += 0.08;
+        if (BankNameNationalAssociationSuffixRegex.IsMatch(t))
+            score += 0.38;
         if (BankNoiseTokens.Any(lower.Contains))
             score -= 0.2;
         if (normalized.Length is >= 6 and <= 48)
@@ -1290,8 +1406,8 @@ internal static class CheckOcrVisionReadParser
         if (normY < 0.18)
             score += 0.06;
 
-        // 磁墨上方短品牌名（REGIONS、CHASE 等），与左上地址/抬头竞争时提高权重
-        if (normY >= 0.40 && normY <= 0.78)
+        // 付款行带上/中间带短品牌（REGIONS、CHASE 等）与法人银行名加权；minY 与 <see cref="BankNameMicrAdjacentAuxRegion"/> 衔接
+        if (normY >= 0.28 && normY <= 0.78)
         {
             score += 0.08;
             if (Regex.IsMatch(t, @"^(?i)[A-Za-z]{5,15}$"))
@@ -1305,6 +1421,13 @@ internal static class CheckOcrVisionReadParser
             score -= 0.16;
         if (normalized.Length > 38 && !lower.Contains("bank", StringComparison.Ordinal))
             score -= 0.08;
+
+        // 左上角易把付款商号（LLC/INC）当成银行：无法人银行线索时强降权
+        var hasBankCue = lower.Contains("bank", StringComparison.Ordinal)
+                         || lower.Contains("credit union", StringComparison.Ordinal)
+                         || BankNameNationalAssociationSuffixRegex.IsMatch(t);
+        if (!hasBankCue && GetCorporateLegalSuffixBump(t) >= 0.44)
+            score -= 0.26;
 
         return score;
     }

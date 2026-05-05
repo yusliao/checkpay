@@ -85,6 +85,25 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseBankName_PrefersWellsFargoNaOverPayeeLlcInPriorRegion()
+    {
+        // 左上角付款商号误入 BankNamePriorRegion；磁墨上方应为「Wells Fargo, N.A.」
+        var lines = new[]
+        {
+            new ReadOcrLine("K-DAAK CHICKEN LLC", 0.22, 0.08, 0.06, 0.10, 0.08, 0.38),
+            new ReadOcrLine("3960 NORTHSIDE DR", 0.22, 0.12, 0.10, 0.14, 0.08, 0.38),
+            new ReadOcrLine("Alliance food Group", 0.42, 0.38, 0.34, 0.42, 0.28, 0.72),
+            new ReadOcrLine("Wells Fargo, N.A.", 0.38, 0.52, 0.48, 0.56, 0.12, 0.72),
+            new ReadOcrLine("⑈003734⑈ ⑆061000227⑆", 0.42, 0.82, 0.78, 0.86, 0.08, 0.92)
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 800);
+
+        var (bankName, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("Wells Fargo, N.A.", bankName);
+    }
+
+    [Fact]
     public void ParseAccountHolderName_AvoidsAddressLikeLine()
     {
         var lines = new[]

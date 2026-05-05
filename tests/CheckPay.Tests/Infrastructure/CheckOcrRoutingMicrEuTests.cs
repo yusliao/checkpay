@@ -121,6 +121,39 @@ public class CheckOcrRoutingMicrEuTests
     }
 
     [Fact]
+    public void TryResolveMicrLineRawFromLayout_MergesAdjacentMicrRowMissingRoutingSubstring()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var row1 = $"{onUs}003358{onUs} {transit}061000227{transit}";
+        var row2 = $"002 409 4{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine(row2, 0.52, 0.935, 0.925, 0.945, 0.08, 0.92),
+            new ReadOcrLine(row1, 0.52, 0.905, 0.895, 0.915, 0.08, 0.92),
+            new ReadOcrLine("noise", 0.5, 0.50, 0.49, 0.51, 0, 1)
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1000, 1000);
+        var raw = CheckOcrVisionReadParser.TryResolveMicrLineRawFromLayout(layout, "061000227");
+        Assert.NotNull(raw);
+        Assert.Contains(row1, raw, StringComparison.Ordinal);
+        Assert.True(raw.Replace(" ", "").Contains("0024094", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ParseMicrHeuristic_E13bTransit_TwoMicrRows_PrefersTransitTailSevenPlusDigitsOverShortBracket()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var text = $"{onUs}003358{onUs} {transit}061000227{transit}\n002 409 4{onUs}\n";
+        var r = CheckOcrVisionReadParser.ParseMicrHeuristic(text);
+        Assert.Equal("061000227", r.RoutingNumber);
+        Assert.Equal("0024094", r.AccountNumber);
+        Assert.True(r.RoutingAbaChecksumValid);
+        Assert.Equal("e13b_transit", r.RoutingSelectionMode);
+    }
+
+    [Fact]
     public void ParseMicrHeuristic_Layout_RejectsRegionSlidingWithoutMicrInk_FallsBackToFullTextE13b()
     {
         const char transit = '\u2446';
@@ -255,6 +288,38 @@ public class CheckOcrRoutingMicrEuTests
         var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
         var (bank, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
         Assert.Equal("CHASE BANK", bank);
+    }
+
+    /// <summary>Chase 等票左上角的分数 transit（如 9-32/720）勿覆盖磁墨上方的完整法人银行名。</summary>
+    [Fact]
+    public void ParseBankName_RejectsPrintedFractionalTransitForChaseStyleLayout()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("WOW COW LLC", 0.32, 0.08, 0.06, 0.10, 0.08, 0.62),
+            new ReadOcrLine("9-32/720", 0.32, 0.12, 0.10, 0.14, 0.08, 0.62),
+            new ReadOcrLine("CHASE O", 0.26, 0.56, 0.54, 0.58, 0.08, 0.42),
+            new ReadOcrLine("JPMorgan Chase Bank, N.A.", 0.38, 0.62, 0.58, 0.66, 0.06, 0.58)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
+        var (bank, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("JPMorgan Chase Bank, N.A.", bank);
+    }
+
+    /// <summary>独立日期行与 Prior/Aux「断层」：法人银行行 normY≈0.32 时仍能进入候选，日期行不得占位。</summary>
+    [Fact]
+    public void ParseBankName_RejectsStandaloneDate_when_LegalBankSitsInMicrAdjacentGapBand()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("WOW COW LLC", 0.32, 0.09, 0.07, 0.11, 0.08, 0.62),
+            new ReadOcrLine("04/07/2026", 0.28, 0.18, 0.16, 0.20, 0.05, 0.35),
+            new ReadOcrLine("CHASE O", 0.26, 0.32, 0.30, 0.34, 0.06, 0.42),
+            new ReadOcrLine("JPMorgan Chase Bank, N.A.", 0.40, 0.36, 0.34, 0.38, 0.06, 0.55)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1000, 1000);
+        var (bank, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("JPMorgan Chase Bank, N.A.", bank);
     }
 
     [Fact]

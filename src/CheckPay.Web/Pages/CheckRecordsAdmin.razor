@@ -241,15 +241,17 @@
             return;
         }
 
-        // 查找或创建客户
+        // 查找或创建客户（账号 + ABA 唯一）
+        var routingKey = CustomerAchRoutingLookup.NormalizeRoutingKey(tracked.RoutingNumber);
         var customer = await DbContext.Customers
-            .FirstOrDefaultAsync(c => c.CustomerCode == _editCustomerCode.Trim());
+            .FirstOrDefaultAsync(c => c.CustomerCode == _editCustomerCode.Trim() && c.ExpectedRoutingNumber == routingKey);
 
         if (customer == null)
         {
             customer = new Customer
             {
                 CustomerCode = _editCustomerCode.Trim(),
+                ExpectedRoutingNumber = routingKey,
                 CustomerName = _editCustomerCode.Trim(),
                 MobilePhone = _editCustomerPhone.Trim(),
                 IsActive = true,

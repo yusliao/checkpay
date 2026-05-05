@@ -32,7 +32,9 @@
                 <MudSelect T="Guid" Value="_customerId" ValueChanged="OnCustomerIdChangedAsync" Label="客户" Variant="Variant.Outlined" Margin="Margin.Dense">
                     @foreach (var c in _customers)
                     {
-                        <MudSelectItem Value="@c.Id">@c.CustomerCode — @c.CustomerName</MudSelectItem>
+                        <MudSelectItem Value="@c.Id">
+                            @(c.CustomerCode + (string.IsNullOrEmpty(c.ExpectedRoutingNumber) ? "" : $" · RTN {c.ExpectedRoutingNumber}") + " — " + c.CustomerName)
+                        </MudSelectItem>
                     }
                 </MudSelect>
                 <MudTextField @bind-Value="_customerPhone" Label="客户手机号" Variant="Variant.Outlined" Margin="Margin.Dense" />
@@ -116,6 +118,7 @@
                 .Where(c => c.IsActive)
                 .Include(c => c.CompanyNames)
                 .OrderBy(c => c.CustomerCode)
+                .ThenBy(c => c.ExpectedRoutingNumber)
                 .ToListAsync();
 
             var record = await DbContext.CheckRecords

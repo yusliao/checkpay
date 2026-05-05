@@ -14,6 +14,10 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.Property(e => e.Id).HasColumnName("id");
 
         builder.Property(e => e.CustomerCode).HasColumnName("customer_code").HasMaxLength(50).IsRequired();
+        builder.Property(e => e.ExpectedRoutingNumber)
+            .HasColumnName("expected_routing_number")
+            .HasMaxLength(20)
+            .IsRequired();
         builder.Property(e => e.CustomerName).HasColumnName("customer_name").HasMaxLength(200).IsRequired();
         builder.Property(e => e.MobilePhone).HasColumnName("mobile_phone").HasMaxLength(30).IsRequired();
         builder.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
@@ -32,10 +36,10 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
         builder.Property(e => e.DeletedAt).HasColumnName("deleted_at");
 
-        // 仅对未软删除行保证账号唯一；已删除行不参与唯一性，避免删客户后无法再以同账号建档
-        builder.HasIndex(e => e.CustomerCode)
+        // 未软删除行：(客户账号, ABA 路由号) 唯一；路由为空字符串时仍为一条合法组合（旧数据兼容）
+        builder.HasIndex(e => new { e.CustomerCode, e.ExpectedRoutingNumber })
             .IsUnique()
             .HasFilter("deleted_at IS NULL")
-            .HasDatabaseName("ix_customers_customer_code");
+            .HasDatabaseName("ix_customers_customer_code_expected_routing_number");
     }
 }

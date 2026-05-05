@@ -47,6 +47,7 @@
 <MudTable Items="@_customers" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="Customer" Dense="true">
     <HeaderContent>
         <MudTh>客户账号</MudTh>
+        <MudTh>ABA</MudTh>
         <MudTh>客户名称</MudTh>
         <MudTh>手机号</MudTh>
         <MudTh>关联银行</MudTh>
@@ -57,6 +58,7 @@
     </HeaderContent>
     <RowTemplate>
         <MudTd DataLabel="客户账号">@context.CustomerCode</MudTd>
+        <MudTd DataLabel="ABA">@(string.IsNullOrEmpty(context.ExpectedRoutingNumber) ? "—" : context.ExpectedRoutingNumber)</MudTd>
         <MudTd DataLabel="客户名称">@context.CustomerName</MudTd>
         <MudTd DataLabel="手机号">@(string.IsNullOrWhiteSpace(context.MobilePhone) ? "—" : context.MobilePhone)</MudTd>
         <MudTd DataLabel="关联银行">@(context.ExpectedBankName ?? "—")</MudTd>
@@ -157,6 +159,7 @@
             var list = await DbContext.Customers
                 .Include(c => c.CompanyNames)
                 .OrderBy(c => c.CustomerCode)
+                .ThenBy(c => c.ExpectedRoutingNumber)
                 .ToListAsync();
             var bytes = CustomerCsvImportExport.ExportToUtf8BomBytes(list);
             var base64 = Convert.ToBase64String(bytes);
@@ -229,24 +232,29 @@
 
     private async Task ApplyCustomerImportAsync(List<CustomerCsvImportRow> rows)
     {
-        var codes = rows.Select(r => r.CustomerCode).ToList();
+        var codes = rows.Select(r => r.CustomerCode.Trim()).Distinct().ToList();
         var existing = await DbContext.Customers
             .Include(c => c.CompanyNames)
             .Where(c => codes.Contains(c.CustomerCode))
             .ToListAsync();
-        var dict = existing.ToDictionary(c => c.CustomerCode, StringComparer.OrdinalIgnoreCase);
+        var dict = existing.ToDictionary(
+            c => CustomerCsvImportExport.ImportCompositeKey(c.CustomerCode, c.ExpectedRoutingNumber ?? ""),
+            StringComparer.Ordinal);
         var now = DateTime.UtcNow;
         var inserted = 0;
         var updated = 0;
 
         foreach (var r in rows)
         {
-            if (!dict.TryGetValue(r.CustomerCode, out var c))
+            var rk = CustomerAchRoutingLookup.NormalizeRoutingKey(r.ExpectedRoutingNumber);
+            var key = CustomerCsvImportExport.ImportCompositeKey(r.CustomerCode, rk);
+            if (!dict.TryGetValue(key, out var c))
             {
                 var ocr = r.OcrCompanyName;
                 c = new Customer
                 {
-                    CustomerCode = r.CustomerCode,
+                    CustomerCode = r.CustomerCode.Trim(),
+                    ExpectedRoutingNumber = rk,
                     CustomerName = r.CustomerName,
                     MobilePhone = r.MobilePhone.Trim(),
                     ExpectedBankName = r.ExpectedBankName,
@@ -254,10 +262,12 @@
                     ExpectedCompanyName = ocr,
                     ExpectedAccountAddress = r.ExpectedAccountAddress,
                     IsActive = r.IsActive ?? true,
-                    IsAuthorized = r.IsAuthorized ?? false
+                    IsAuthorized = r.IsAuthorized ?? false,
+                    CreatedAt = now,
+                    UpdatedAt = now
                 };
                 DbContext.Customers.Add(c);
-                dict[r.CustomerCode] = c;
+                dict[key] = c;
                 inserted++;
                 ReplaceCompanyNamesForImport(c, CustomerCsvImportExport.ParseCompanyNamesCell(r.CompanyNamesRaw));
             }
@@ -270,6 +280,7 @@
                 c.ExpectedAccountHolderName = ocr2;
                 c.ExpectedCompanyName = ocr2;
                 c.ExpectedAccountAddress = r.ExpectedAccountAddress;
+                c.ExpectedRoutingNumber = rk;
                 if (r.IsActive.HasValue) c.IsActive = r.IsActive.Value;
                 if (r.IsAuthorized.HasValue) c.IsAuthorized = r.IsAuthorized.Value;
                 c.UpdatedAt = now;
@@ -305,7 +316,8 @@
         {
             var query = DbContext.Customers
                 .Include(c => c.CompanyNames)
-                .OrderBy(c => c.CustomerCode);
+                .OrderBy(c => c.CustomerCode)
+                .ThenBy(c => c.ExpectedRoutingNumber);
             _totalCustomers = await query.CountAsync();
             if (_customerPage > _customerTotalPages)
                 _customerPage = _customerTotalPages;

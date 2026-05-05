@@ -6,6 +6,7 @@ namespace CheckPay.Application.Common;
 public sealed record CustomerCsvImportRow(
     int LineNumber,
     string CustomerCode,
+    string ExpectedRoutingNumber,
     string CustomerName,
     string MobilePhone,
     string? ExpectedBankName,
@@ -18,8 +19,9 @@ public sealed record CustomerCsvImportRow(
 /// <summary>客户主数据 CSV 导入/导出（UTF-8，与「客户管理」字段一致）。</summary>
 public static class CustomerCsvImportExport
 {
+    /// <summary>第二列为 ABA（9 位数字）；可为空表示不按银行区分（与旧数据一致）。</summary>
     public const string Header =
-        "客户账号,客户名称,手机号,关联银行,票面公司名称,客户地址,关联公司,活跃,已授权";
+        "客户账号,ABA路由号,客户名称,手机号,关联银行,票面公司名称,客户地址,关联公司,活跃,已授权";
 
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
@@ -27,7 +29,7 @@ public static class CustomerCsvImportExport
     {
         var sb = new StringBuilder();
         sb.AppendLine(Header);
-        foreach (var c in customers.OrderBy(x => x.CustomerCode))
+        foreach (var c in customers.OrderBy(x => x.CustomerCode).ThenBy(x => x.ExpectedRoutingNumber))
             sb.AppendLine(BuildRow(c));
         var body = Utf8NoBom.GetBytes(sb.ToString());
         return Encoding.UTF8.GetPreamble().Concat(body).ToArray();
@@ -39,6 +41,7 @@ public static class CustomerCsvImportExport
         sb.AppendLine(Header);
         sb.AppendLine(string.Join(",",
             CsvEscape("示例账号001"),
+            CsvEscape("021000021"),
             CsvEscape("示例客户有限公司"),
             CsvEscape("13800138000"),
             CsvEscape("示例银行"),
@@ -58,6 +61,7 @@ public static class CustomerCsvImportExport
         var ocr = c.ExpectedCompanyName ?? c.ExpectedAccountHolderName ?? "";
         return string.Join(",",
             CsvEscape(c.CustomerCode),
+            CsvEscape(c.ExpectedRoutingNumber ?? ""),
             CsvEscape(c.CustomerName),
             CsvEscape(c.MobilePhone ?? ""),
             CsvEscape(c.ExpectedBankName ?? ""),
@@ -99,6 +103,9 @@ public static class CustomerCsvImportExport
             .ToList();
     }
 
+    public static string ImportCompositeKey(string customerCode, string normalizedRoutingKey) =>
+        $"{customerCode.Trim()}\u001f{normalizedRoutingKey}";
+
     public static (List<CustomerCsvImportRow> Rows, List<string> Errors) Parse(string utf8Text)
     {
         var errors = new List<string>();
@@ -125,7 +132,7 @@ public static class CustomerCsvImportExport
             return (rows, errors);
         }
 
-        var seenCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenComposite = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 1; i < allRows.Count; i++)
         {
             var lineNo = i + 1;
@@ -133,7 +140,7 @@ public static class CustomerCsvImportExport
             if (IsRowEmpty(cells))
                 continue;
 
-            string Cell(int col) => col < cells.Length ? cells[col].Trim() : "";
+            string Cell(int col) => col >= 0 && col < cells.Length ? cells[col].Trim() : "";
 
             var code = Cell(idx.Code);
             var name = Cell(idx.Name);
@@ -146,9 +153,13 @@ public static class CustomerCsvImportExport
                 continue;
             }
 
-            if (!seenCodes.Add(code))
+            var rtnRaw = Cell(idx.Routing);
+            var rtnKey = CustomerAchRoutingLookup.NormalizeRoutingKey(rtnRaw);
+            var compositeKey = ImportCompositeKey(code, rtnKey);
+            if (!seenComposite.Add(compositeKey))
             {
-                errors.Add($"客户账号「{code}」在文件中出现多次");
+                errors.Add(
+                    $"第 {lineNo} 行：客户账号「{code}」与 ABA「{(rtnKey.Length > 0 ? rtnKey : "未填")}」的组合在文件中出现多次");
                 continue;
             }
 
@@ -179,6 +190,7 @@ public static class CustomerCsvImportExport
             rows.Add(new CustomerCsvImportRow(
                 lineNo,
                 code,
+                rtnKey,
                 name.Trim(),
                 phone.Trim(),
                 bank,
@@ -203,6 +215,7 @@ public static class CustomerCsvImportExport
 
     private readonly struct ColumnIndex(
         int code,
+        int routing,
         int name,
         int phone,
         int bank,
@@ -213,6 +226,8 @@ public static class CustomerCsvImportExport
         int auth)
     {
         public int Code { get; } = code;
+        /// <summary>-1 表示旧版 CSV 无此列。</summary>
+        public int Routing { get; } = routing;
         public int Name { get; } = name;
         public int Phone { get; } = phone;
         public int Bank { get; } = bank;
@@ -240,10 +255,12 @@ public static class CustomerCsvImportExport
             {
                 if (map.TryGetValue(n, out var i)) return i;
             }
+
             return null;
         }
 
         var codeI = Find("客户账号", "CustomerCode");
+        var routingI = Find("ABA路由号", "ExpectedRoutingNumber", "RoutingNumber", "ABA");
         var nameI = Find("客户名称", "CustomerName");
         var phoneI = Find("手机号", "MobilePhone", "手机", "电话", "Phone");
         var bankI = Find("关联银行", "ExpectedBankName", "Bank");
@@ -257,12 +274,13 @@ public static class CustomerCsvImportExport
             || compI is null || actI is null || authI is null)
         {
             error =
-                "表头须包含列：" + Header + "（可使用英文别名如 CustomerCode, CustomerName, MobilePhone 等）。";
+                "表头须包含列：" + Header + "（可使用英文别名；ABA路由号列可选，旧模板若无该列则视为不按银行区分）。";
             return false;
         }
 
         idx = new ColumnIndex(
             codeI.Value,
+            routingI ?? -1,
             nameI.Value,
             phoneI.Value,
             bankI.Value,

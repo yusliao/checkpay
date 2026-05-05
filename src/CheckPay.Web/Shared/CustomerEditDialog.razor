@@ -20,6 +20,9 @@
             <MudStack Spacing="2">
                 <MudTextField Value="@_customerCode" Label="客户账号" Variant="Variant.Outlined" Margin="Margin.Dense"
                               Disabled="true" />
+                <MudTextField @bind-Value="_editExpectedRouting" Label="ABA 路由号（9 位，可选）" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Placeholder="跨银行账号重复时请填写；留空不按银行区分" MaxLength="20"
+                              HelperText="修改后与上传支票 Routing Number 不一致将无法匹配自动带出手机号" />
                 <MudTextField @bind-Value="_editName" Label="客户名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
                 <MudTextField @bind-Value="_editMobilePhone" Label="手机号" Variant="Variant.Outlined" Margin="Margin.Dense" />
                 <MudTextField @bind-Value="_editExpectedBank" Label="关联银行" Variant="Variant.Outlined" Margin="Margin.Dense" />
@@ -75,6 +78,7 @@
     private bool _saving;
 
     private string _customerCode = "";
+    private string _editExpectedRouting = "";
     private string _editName = "";
     private string _editExpectedBank = "";
     private string _editOcrCompanyName = "";
@@ -117,6 +121,7 @@
             }
 
             _customerCode = c.CustomerCode;
+            _editExpectedRouting = c.ExpectedRoutingNumber ?? "";
             _editName = c.CustomerName;
             _editExpectedBank = c.ExpectedBankName ?? "";
             _editOcrCompanyName = c.ExpectedCompanyName ?? c.ExpectedAccountHolderName ?? "";
@@ -167,8 +172,10 @@
                 return;
             }
 
+            var rk = CustomerAchRoutingLookup.NormalizeRoutingKey(_editExpectedRouting);
             c.CustomerName = _editName.Trim();
             c.MobilePhone = _editMobilePhone.Trim();
+            c.ExpectedRoutingNumber = rk;
             c.ExpectedBankName = string.IsNullOrWhiteSpace(_editExpectedBank) ? null : _editExpectedBank.Trim();
             var ocrName = string.IsNullOrWhiteSpace(_editOcrCompanyName) ? null : _editOcrCompanyName.Trim();
             c.ExpectedAccountHolderName = ocrName;
@@ -196,6 +203,14 @@
         catch (DbUpdateConcurrencyException)
         {
             Snackbar.Add("保存失败：数据已被他人修改，请关闭对话框后刷新页面再试。", Severity.Error);
+        }
+        catch (DbUpdateException ex)
+        {
+            var detail = ex.InnerException?.Message ?? ex.Message;
+            if (detail.Contains("ix_customers_customer_code_expected_routing_number", StringComparison.OrdinalIgnoreCase))
+                Snackbar.Add("保存失败：已存在相同的「客户账号 + ABA」组合。", Severity.Error);
+            else
+                Snackbar.Add($"保存失败：{detail}", Severity.Error);
         }
         finally
         {

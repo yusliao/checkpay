@@ -16,6 +16,7 @@ public class OcrResultConfiguration : IEntityTypeConfiguration<OcrResult>
         builder.Property(e => e.Id).HasColumnName("id");
 
         builder.Property(e => e.ImageUrl).HasColumnName("image_url").HasMaxLength(500).IsRequired();
+        builder.Property(e => e.ImageContentSha256).HasColumnName("image_content_sha256").HasMaxLength(64);
         builder.Property(e => e.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20).IsRequired();
 
         builder.Property(e => e.RawResult).HasColumnName("raw_result").HasColumnType("jsonb")
@@ -58,5 +59,6 @@ public class OcrResultConfiguration : IEntityTypeConfiguration<OcrResult>
         builder.Property(e => e.AzureErrorMessage).HasColumnName("azure_error_message");
 
         builder.HasIndex(e => e.Status).HasDatabaseName("ix_ocr_results_status");
+        builder.HasIndex(e => e.ImageContentSha256).HasDatabaseName("ix_ocr_results_image_content_sha256");
     }
 }

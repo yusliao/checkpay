@@ -7,6 +7,10 @@ namespace CheckPay.Domain.Entities;
 public class OcrResult : BaseEntity
 {
     public string ImageUrl { get; set; } = string.Empty;
+
+    /// <summary>上传图像内容的 SHA-256 十六进制（64 字符），用于跳过重复 Vision 调用；历史行可为空。</summary>
+    public string? ImageContentSha256 { get; set; }
+
     public OcrStatus Status { get; set; } = OcrStatus.Pending;
     public JsonDocument? RawResult { get; set; }
     public JsonDocument? ConfidenceScores { get; set; }

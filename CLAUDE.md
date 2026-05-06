@@ -2,6 +2,8 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-05-06** - **管理端支票记录**（`/admin/check-records`）：移除列表 **内联编辑** 与 **编辑** 按钮，仅保留 **删除**（已确认记录仍不可删）；票面修订请走收款记录页已提交编辑流程。
+- **2026-05-06** - **支票上传 OCR 去重**：[`OcrResult`](src/CheckPay.Domain/Entities/OcrResult.cs) 增加 **`ImageContentSha256`**（迁移 `AddOcrResultImageContentSha256`）；上传页 [`CheckUpload`](src/CheckPay.Web/Pages/CheckUpload.razor) 对 **`byte[]` SHA-256** 命中已完成识别行时 **复用 `RawResult`/置信度/金额校验 JSON**，**跳过 Vision 与队列**；可选 **`Ocr:Dedup:Enabled`**、**`MaxSourceAgeDays`**（Compose / `.env.example` `OCR_DEDUP_*`）；队列 **「强制重新识别」** 绕过去重；[`OcrImageContentDedup`](src/CheckPay.Application/Common/OcrImageContentDedup.cs)；单测 `OcrImageContentDedupTests`；说明见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
 - **2026-05-06** - **客户管理筛选**（`/customers`）：支持按 **支票账户（`CustomerCode`）**、**ABA 路由号**（整段 9 位精确匹配，或非 9 位时的数字子串匹配）、**餐馆编号（`MobilePhone`）** 组合查询（不区分大小写部分匹配）；列表分页与 **导出 CSV** 均应用当前筛选。
 - **2026-05-06** - **手写金额校验 → `raw_result.Diagnostics`**：`OcrWorker` 与上传/复核页在完成 **DI `prebuilt-check.us`** 校验后，合并 **`di_amount_validation_status`、`di_handwritten_legal_amount_raw`** 等（与主路径快照 **`di_word_amount_*`** 区分）；复制面板 **`OcrCheckCopyPanelFormatter`** 展示；上传队列项在手动校验后同步 **`RawResult`**；`OcrRawResultAmountValidationDiagnostics`；单测 `OcrRawResultAmountValidationDiagnosticsTests`
 - **2026-05-06** - `OcrResultDto.Diagnostics` 增加 **`di_word_amount_raw`** / **`di_word_amount_confidence`** / **`di_word_amount_parsed`**（DI 书面金额原始串、字段置信度、`TryParseAmountFromWords` 解析值）；**主路径 `EnrichPrimary`** 或仅 **金额兜底** 调用 **`prebuilt-check.us`** 时写入快照。

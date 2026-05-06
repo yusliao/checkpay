@@ -66,6 +66,8 @@ services:
 
       Ocr__MaxRetries: ${OCR_MAX_RETRIES:-3}
       Ocr__RetryDelayMs: ${OCR_RETRY_DELAY_MS:-3000}
+      Ocr__Dedup__Enabled: ${OCR_DEDUP_ENABLED:-true}
+      Ocr__Dedup__MaxSourceAgeDays: ${OCR_DEDUP_MAX_SOURCE_AGE_DAYS:-0}
       Ocr__AmountValidation__Enabled: ${OCR_AMOUNT_VALIDATION_ENABLED:-true}
       Ocr__AmountValidation__TriggerConfidenceThreshold: ${OCR_AMOUNT_VALIDATION_TRIGGER_CONFIDENCE_THRESHOLD:-0.85}
       Ocr__AmountValidation__FailOpen: ${OCR_AMOUNT_VALIDATION_FAIL_OPEN:-true}

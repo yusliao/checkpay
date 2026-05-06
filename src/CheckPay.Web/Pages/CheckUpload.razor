@@ -50,6 +50,8 @@ else
         <MudText Typo="Typo.subtitle1" GutterBottom="true">
             待录入队列（@_uploadQueue.Count 张）— 已完成 @_uploadQueue.Count(q => q.Done) 张
         </MudText>
+        <MudCheckBox T="bool" @bind-Value="_forceFreshOcr" Color="Color.Primary" Dense="true" Class="mb-2"
+                     Label="强制重新识别（不使用相同图片缓存，仍将消耗 Vision）" />
         <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="2">
             @foreach (var item in _uploadQueue)
             {
@@ -461,6 +463,7 @@ else
     private bool _saving;
     private bool _retryingOcr;
     private bool _amountValidationRunning;
+    private bool _forceFreshOcr;
     private OcrResult? _ocrResult; // 当前 OCR 结果
     private string _ocrCopyPanelText = "";
 
@@ -522,28 +525,57 @@ else
 
             try
             {
-                // 1. 上传到 Blob 存储
-                using var ms = new MemoryStream(data);
-                item.ImageUrl = await BlobStorage.UploadAsync(ms, name);
+                using var uploadMs = new MemoryStream(data);
+                item.ImageUrl = await BlobStorage.UploadAsync(uploadMs, name);
                 item.Uploading = false;
                 item.OcrStatus = CheckOcrStatus.Recognizing;
                 StateHasChanged();
 
-                // 2. 创建 OcrResult 记录并入队
-                var ocrResult = new OcrResult
-                {
-                    ImageUrl = item.ImageUrl,
-                    Status = OcrStatus.Pending
-                };
+                var hash = OcrImageContentDedup.ComputeSha256Hex(data);
+                var dedupEnabled = Configuration.GetValue("Ocr:Dedup:Enabled", true);
+                var maxAgeDays = Configuration.GetValue<int?>("Ocr:Dedup:MaxSourceAgeDays");
+                if (maxAgeDays is <= 0) maxAgeDays = null;
+
+                OcrResult? reusable = null;
+                var ocrResultId = Guid.Empty;
                 await DbSerializedAsync(async () =>
                 {
+                    if (dedupEnabled && !_forceFreshOcr)
+                    {
+                        reusable = await OcrImageContentDedup.FindReusableCompletedAsync(
+                            DbContext.OcrResults.AsNoTracking(),
+                            hash,
+                            maxAgeDays);
+                    }
+
+                    var ocrResult = new OcrResult
+                    {
+                        ImageUrl = item.ImageUrl,
+                        ImageContentSha256 = hash,
+                        Status = reusable != null ? OcrStatus.Completed : OcrStatus.Pending
+                    };
+                    if (reusable != null)
+                    {
+                        OcrImageContentDedup.CopyCompletedOcrFromSource(ocrResult, reusable);
+                        OcrImageContentDedup.DisposeDetachedPayload(reusable);
+                    }
+
                     DbContext.OcrResults.Add(ocrResult);
                     await DbContext.SaveChangesAsync();
+                    ocrResultId = ocrResult.Id;
                 });
-                await OcrWorker.EnqueueAsync(ocrResult.Id);
-                item.OcrResultId = ocrResult.Id;
 
-                // 3. 启动轮询（不 await，后台跑）
+                item.OcrResultId = ocrResultId;
+
+                if (reusable == null)
+                    await OcrWorker.EnqueueAsync(ocrResultId);
+                else
+                {
+                    await InvokeAsync(() => Snackbar.Add(
+                        "该图片与历史已识别文件内容一致，已复用识别结果（未调用 Vision）。请确认附件是否正确。",
+                        Severity.Info));
+                }
+
                 _ = PollOcrStatusAsync(item, _cts.Token);
             }
             catch (Exception ex)

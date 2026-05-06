@@ -303,6 +303,54 @@ public class CheckOcrRoutingMicrEuTests
     }
 
     [Fact]
+    public void TryResolveMicrLineRawFromLayout_TransitiveMergeLinksRoutingRowToDistantOnUsAndDigitLine()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var row1 = $"{transit}062206431{transit}";
+        var row2 = $"2254548{onUs}";
+        var row3 = "0109";
+        var lines = new[]
+        {
+            new ReadOcrLine(row1, 0.5, 0.82, 0.805, 0.835, 0.1, 0.9),
+            new ReadOcrLine(row2, 0.5, 0.90, 0.885, 0.915, 0.1, 0.9),
+            new ReadOcrLine(row3, 0.5, 0.98, 0.965, 0.995, 0.1, 0.9)
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var raw = CheckOcrVisionReadParser.TryResolveMicrLineRawFromLayout(layout, "062206431");
+        Assert.NotNull(raw);
+        Assert.Contains(row1, raw, StringComparison.Ordinal);
+        Assert.Contains(row2, raw, StringComparison.Ordinal);
+        Assert.Contains(row3, raw, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseCheckNumber_CitizensStyle_SplitMicrThreeRows_AccountLineNotTakenAsCheck()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var row1 = $"{transit}062206431{transit}";
+        var row2 = $"2254548{onUs}";
+        var row3 = "0109";
+        var lines = new[]
+        {
+            new ReadOcrLine("New China Cafe", 0.35, 0.06, 0.05, 0.07, 0.08, 0.55),
+            new ReadOcrLine("109", 0.15, 0.10, 0.09, 0.12, 0.08, 0.20),
+            new ReadOcrLine(row1, 0.5, 0.82, 0.805, 0.835, 0.1, 0.9),
+            new ReadOcrLine(row2, 0.5, 0.90, 0.885, 0.915, 0.1, 0.9),
+            new ReadOcrLine(row3, 0.5, 0.98, 0.965, 0.995, 0.1, 0.9)
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.True(
+            string.Equals(cn, "0109", StringComparison.Ordinal)
+            || string.Equals(cn, "109", StringComparison.Ordinal),
+            $"unexpected check: {cn}");
+        Assert.NotEqual("2254548", cn);
+    }
+
+    [Fact]
     public void TryResolveMicrLineRawFromLayout_IncludesAdjacentDigitOnlyMicrBandLine()
     {
         const char transit = '\u2446';
@@ -467,6 +515,35 @@ public class CheckOcrRoutingMicrEuTests
         var layout = new ReadOcrLayout(full, lines, 1000, 1000);
         var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
         Assert.Equal("562203631", cn);
+    }
+
+    /// <summary>
+    /// Chase 等：<c>⑈000183⑈ ⑆072000326⑆</c> 换行后 <c>529738869⑈</c>（漏读账号左 ⑈）；支票号应为 183/000183，账号为下一行。
+    /// </summary>
+    [Fact]
+    public void ParseCheckNumber_ChaseStyle_BracketedCheckTransit_ThenBareAccountOnNextLine_PrefersPaddedCheckNotAccount()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{onUs}000183{onUs} {transit}072000326{transit}";
+        var micrLine2 = $"529738869{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("Super China Restaurant LLC", 0.2, 0.06, 0.05, 0.07, 0.08, 0.15),
+            new ReadOcrLine("183", 0.15, 0.10, 0.09, 0.11, 0.10, 0.22),
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.05, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.93, 0.92, 0.94, 0.05, 0.92),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.True(
+            string.Equals(cn, "183", StringComparison.Ordinal)
+            || string.Equals(cn, "000183", StringComparison.Ordinal),
+            $"unexpected check number: {cn}");
+        var micr = CheckOcrVisionReadParser.ParseMicrHeuristic(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("072000326", micr.RoutingNumber);
+        Assert.Equal("529738869", micr.AccountNumber);
     }
 
     [Fact]

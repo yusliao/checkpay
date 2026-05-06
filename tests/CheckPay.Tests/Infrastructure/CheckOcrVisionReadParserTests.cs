@@ -47,7 +47,7 @@ public class CheckOcrVisionReadParserTests
             new ReadOcrLine("9999.99", 0.50, 0.90, 0.86, 0.94, 0.40, 0.60)
         };
         var layout = new ReadOcrLayout("x", lines, 1000, 1000);
-        var (amount, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        var (amount, _, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
         Assert.Equal(1234.56m, amount);
     }
 
@@ -60,7 +60,7 @@ public class CheckOcrVisionReadParserTests
             new ReadOcrLine("Other noise", 0.50, 0.90, 0.86, 0.94, 0.40, 0.60)
         };
         var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1000, 1000);
-        var (amount, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        var (amount, _, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
         Assert.Equal(2046.39m, amount);
     }
 
@@ -75,9 +75,49 @@ public class CheckOcrVisionReadParserTests
             new ReadOcrLine("ORDER OF", 0.10, 0.52, 0.50, 0.56, 0.42, 0.62),
         };
         var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
-        var (amount, conf) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        var (amount, conf, mode) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
         Assert.Equal(10148.00m, amount);
         Assert.True(conf >= 0.6);
+        Assert.Equal("space_cents_inline", mode);
+    }
+
+    [Fact]
+    public void ParseAmount_SpilloverCentsOnAdjacentLine_10148_48_AlignsVisionReadSplitBox()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("$ 10148", 0.44, 0.46, 0.44, 0.48, 0.32, 0.52),
+            new ReadOcrLine("48", 0.44, 0.50, 0.48, 0.52, 0.40, 0.60),
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var (amount, _, mode) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal(10148.48m, amount);
+        Assert.Equal("spillover_cents", mode);
+    }
+
+    [Fact]
+    public void ParseAmount_FractionOver100_OnSameLine_AlignsCourtesyBoxPercentForm()
+    {
+        var lines = new[] { new ReadOcrLine("$ 1234 56/100", 0.5, 0.45, 0.43, 0.47, 0.30, 0.58) };
+        var layout = new ReadOcrLayout(lines[0].Text, lines, 1000, 1000);
+        var (amount, _, mode) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal(1234.56m, amount);
+        Assert.Equal("fraction_100", mode);
+    }
+
+    [Fact]
+    public void ParseAmount_SpilloverFractionOver100_OnNextLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("$ 1234", 0.5, 0.45, 0.43, 0.47, 0.28, 0.52),
+            new ReadOcrLine("56/100", 0.5, 0.50, 0.48, 0.52, 0.32, 0.58),
+        };
+        var ft = string.Join('\n', lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(ft, lines, 1200, 900);
+        var (amount, _, mode) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal(1234.56m, amount);
+        Assert.Equal("spillover_fraction_100", mode);
     }
 
     [Fact]
@@ -438,7 +478,7 @@ BANK OF AMERICA
             new ReadOcrLine("PAY TO THE", 0.42, 0.34, 0.32, 0.36, 0.12, 0.62),
         };
         var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
-        var (amount, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        var (amount, _, _) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
         Assert.Equal(686.25m, amount);
     }
 

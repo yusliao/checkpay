@@ -86,10 +86,38 @@ internal static class CheckOcrVisionReadParser
         @"\$\s*([\d,]{1,9})\s*[-–]\s*(\d{2})\b",
         RegexOptions.Compiled);
 
-    /// <summary>票面金额（Read 常见断字）：<c>$ 10148 00</c>（美元整数 + 空白 + 两位分，无小数点）。</summary>
+    /// <summary>票面金额（Read 常见断字）：<c>$ 10148 00</c>（美元整数 + 空白 + 两位分，无小数点）。勿与 <c>56/100</c> 角分列冲突。</summary>
     private static readonly Regex AmountDollarSpaceCentsRegex = new(
-        @"\$\s*([\d,]{1,9})\s+(\d{2})\b",
+        @"\$\s*([\d,]{1,9})\s+(\d{2})\b(?!\s*/\s*100)",
         RegexOptions.Compiled);
+
+    /// <summary>全文拼接行序下「$ 整数」与下一行「两位分」被 Read 拆行（如 <c>$ 10148\n48</c>）；勿与下行 <c>56/100</c> 混淆。</summary>
+    private static readonly Regex AmountDollarNewlineCentsRegex = new(
+        @"\$\s*([\d,]{1,9})\s*\r?\n\s*(\d{2})\b(?!\s*/\s*100)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /// <summary>票面「分列百分之小数」：<c>$ 10148 48/100</c>，可选 <c>%</c> / <c>percent</c>（与法线 <c>*** /100</c> 同义）。</summary>
+    private static readonly Regex AmountDollarFractionOver100Regex = new(
+        @"\$\s*([\d,]{1,9})\s+(\d{1,2})\s*/\s*100(?:%|\s+%|\s+percent\b|\s+pct\b)?\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>全文：<c>$ 整数\n48/100</c>。</summary>
+    private static readonly Regex AmountDollarNewlineFractionOver100Regex = new(
+        @"\$\s*([\d,]{1,9})\s*\r?\n\s*(\d{1,2})\s*/\s*100(?:%|\s+%|\s+percent\b|\s+pct\b)?\b",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex AmountDollarIntegerOnlyTextRegex = new(
+        @"^\$\s*([\d,]{1,9})\s*$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TwoDigitCentsOnlyTextRegex = new(
+        @"^\d{2}$",
+        RegexOptions.Compiled);
+
+    /// <summary>独立行 <c>48/100</c>、<c>48／100</c> 或后接 <c>%</c>/<c>percent</c>（票面分列）。</summary>
+    private static readonly Regex FractionHundredthsOnlyLineRegex = new(
+        @"^(\d{1,2})\s*/\s*100(?:%|\s+%|\s+percent|\s+pct)?$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex DateRegex = new(
         @"\b(?:(?:0?[1-9]|1[0-2])[/\-](?:0?[1-9]|[12]\d|3[01])[/\-](?:\d{4}|\d{2})|" +
@@ -256,17 +284,36 @@ internal static class CheckOcrVisionReadParser
         return true;
     }
 
-    /// <summary>在已归一化文本中，按「⑈…⑈ ⑆9位路由⑆ …⑈」提取支票号（与账号）；路由须通过 ABA。</summary>
+    /// <summary>在已归一化文本中，按「⑈…⑈ ⑆9位路由⑆ …⑈」或「⑈…⑈ ⑆路由⑆ 独行 nn…⑈（漏读左 ⑈）」提取支票号与账号；路由须通过 ABA。</summary>
     private static bool TryClassifyOnUsDigitsAroundRouting(string text, string routing9, out string? checkDigits, out string? accountDigits)
     {
         checkDigits = null;
         accountDigits = null;
         if (routing9.Length != 9)
             return false;
-        var m = Regex.Match(text, $@"⑈(\d{{4,17}})⑈\s*⑆\s*{Regex.Escape(routing9)}\s*⑆\s*(\d{{4,17}})⑈");
+        var m = Regex.Match(
+            text,
+            $@"⑈(\d{{4,17}})⑈\s*⑆\s*{Regex.Escape(routing9)}\s*⑆\s*(?:⑈(\d{{4,17}})⑈|(\d{{6,17}})⑈)",
+            RegexOptions.Singleline);
         if (!m.Success)
             return false;
-        return TryAssignMicrCheckVsAccountByLength(m.Groups[1].Value, m.Groups[2].Value, out checkDigits, out accountDigits);
+
+        var left = m.Groups[1].Value;
+        var right = m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value;
+        if (TryAssignMicrCheckVsAccountByLength(left, right, out checkDigits, out accountDigits))
+            return true;
+
+        // Chase 等：同行 ⑈支票序⑈ ⑆路由⑆ 后换行再接「账号 + 尾 ⑈」且 Vision 漏读账号左 ⑈；000xxx 垫片常为磁墨支票序，右侧 9 位常为账号
+        if (left.Length is >= 4 and <= 7
+            && left.StartsWith("000", StringComparison.Ordinal)
+            && right.Length == 9)
+        {
+            checkDigits = left;
+            accountDigits = right;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -279,12 +326,12 @@ internal static class CheckOcrVisionReadParser
         if (routing9.Length != 9 || !AbaRoutingNumberValidator.IsValid(routing9))
             return false;
 
-        var m = Regex.Match(normalizedText, $@"⑈(\d{{4,17}})⑈\s*⑆\s*{Regex.Escape(routing9)}\s*⑆\s*(\d{{4,17}})⑈");
+        var m = Regex.Match(normalizedText, $@"⑈(\d{{4,17}})⑈\s*⑆\s*{Regex.Escape(routing9)}\s*⑆\s*(?:⑈(\d{{4,17}})⑈|(\d{{6,17}})⑈)", RegexOptions.Singleline);
         if (!m.Success)
             return false;
 
         var left = m.Groups[1].Value;
-        var right = m.Groups[2].Value;
+        var right = m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value;
         if (TryAssignMicrCheckVsAccountByLength(left, right, out _, out _))
             return false;
 
@@ -297,10 +344,13 @@ internal static class CheckOcrVisionReadParser
         {
             if (L <= 7 && R >= 8)
             {
-                // 同行「短⑈ ⑆路由⑆ 长⑈」时 Peoples 取左；若路由闭合与右段之间**换行**且右段 ≥9 位（常为独立磁墨支票号），取右。
+                var preferLeftChaseSplitAccount = left.Length is >= 4 and <= 7
+                    && left.StartsWith("000", StringComparison.Ordinal)
+                    && R == 9;
                 // 右段 8 位且换行时多为 Peoples 换行长账号，仍取左（见单测 Peoples vs SkipsZip）。
                 if (right.Length >= 9
-                    && NewlineBetweenTransitCloseAndRightDigits(normalizedText, routing9, right))
+                    && NewlineBetweenTransitCloseAndRightDigits(normalizedText, routing9, right)
+                    && !preferLeftChaseSplitAccount)
                     checkDigits = right;
                 else
                     checkDigits = left;
@@ -498,32 +548,83 @@ internal static class CheckOcrVisionReadParser
         return false;
     }
 
+    /// <summary>归一化纵轴条带（扩边 margin）是否与另一行重叠或邻接，用于 MICR 多行链式合并。</summary>
+    private static bool NormVerticalBandsTouch(ReadOcrLine a, ReadOcrLine b, double margin)
+    {
+        var a0 = a.NormTop - margin;
+        var a1 = a.NormBottom + margin;
+        var b0 = b.NormTop - margin;
+        var b1 = b.NormBottom + margin;
+        return a1 >= b0 && b1 >= a0;
+    }
+
     /// <summary>
-    /// Vision 将 MICR 切成多行时，含路由的子串过滤会丢掉「仅有 ⑈ 尾段、不含 9 位 ABA」的相邻行；按垂直距离把同属一条磁墨带的行并入。
+    /// Vision 将 MICR 切成多行时，含路由的子串过滤会丢掉「仅有 ⑈ 尾段、不含 9 位 ABA」的相邻行；
+    /// 按纵向条带重叠做<strong>传递闭包</strong>（不再只与种子比中心距），以免第三行离路由行略远但仍在磁带上时被丢弃。
     /// </summary>
     private static List<ReadOcrLine> ExpandMicrInkLinesByVerticalProximity(
         IReadOnlyList<ReadOcrLine> allInk,
         IReadOnlyList<ReadOcrLine> seedLines,
-        double maxNormCenterYDelta)
+        double bandTouchMargin)
     {
-        var chosen = new HashSet<ReadOcrLine>();
-        foreach (var s in seedLines)
-            chosen.Add(s);
-
-        foreach (var line in allInk)
+        var chosen = new HashSet<ReadOcrLine>(seedLines);
+        var margin = bandTouchMargin;
+        var changed = true;
+        while (changed)
         {
-            if (chosen.Contains(line))
-                continue;
-            var cy = line.NormCenterY;
-            if (!seedLines.Any(s => Math.Abs(s.NormCenterY - cy) <= maxNormCenterYDelta))
-                continue;
-            chosen.Add(line);
+            changed = false;
+            foreach (var line in allInk)
+            {
+                if (chosen.Contains(line))
+                    continue;
+                if (!chosen.Any(s => NormVerticalBandsTouch(s, line, margin)))
+                    continue;
+                chosen.Add(line);
+                changed = true;
+            }
         }
 
         return chosen
             .OrderByDescending(l => l.NormCenterY)
             .ThenBy(l => l.NormLeft)
             .ToList();
+    }
+
+    /// <summary>
+    /// Citizens 等：<c>⑆ABA⑆</c> 独占一行，下行 <c>账号…⑈</c>，再下行纯数字支票号（无 E13B）；勿把账号误作 <c>MICRCheckTrailingOnUs</c> 支票号。
+    /// </summary>
+    private static bool TryExtractMicrSplitTransitRowAccountThenCheckDigitRow(string micrNorm, out string? checkDigits)
+    {
+        checkDigits = null;
+        if (string.IsNullOrEmpty(micrNorm))
+            return false;
+
+        Match? lastTransit = null;
+        foreach (Match tm in E13bTransitRoutingRegex.Matches(micrNorm))
+        {
+            if (AbaRoutingNumberValidator.IsValid(tm.Groups[1].Value))
+                lastTransit = tm;
+        }
+
+        if (lastTransit is null)
+            return false;
+
+        var rt = lastTransit.Groups[1].Value;
+        var slice = micrNorm[lastTransit.Index..];
+        var m = Regex.Match(
+            slice,
+            $@"^⑆{Regex.Escape(rt)}⑆\s*[\r\n]+\s*(\d{{6,17}})⑈\s*[\r\n]+\s*(\d{{3,8}})(?=\s*[\r\n]|\s*$)",
+            RegexOptions.Multiline);
+        if (!m.Success)
+            return false;
+
+        var acct = m.Groups[1].Value;
+        var chk = m.Groups[2].Value;
+        if (chk.Length >= acct.Length)
+            return false;
+
+        checkDigits = chk;
+        return true;
     }
 
     /// <summary>从全文按行提取含 E13B 磁墨符号的行，供 <see cref="MicrLineRaw"/>（无磁墨行时返回 null）。</summary>
@@ -558,7 +659,7 @@ internal static class CheckOcrVisionReadParser
         {
             var filtered = ink.Where(l => l.Text.Contains(rt, StringComparison.Ordinal)).ToList();
             if (filtered.Count > 0)
-                ink = ExpandMicrInkLinesByVerticalProximity(ink, filtered, maxNormCenterYDelta: 0.14);
+                ink = ExpandMicrInkLinesByVerticalProximity(ink, filtered, bandTouchMargin: 0.025);
         }
 
         var chosen = new HashSet<ReadOcrLine>(ink);
@@ -569,10 +670,9 @@ internal static class CheckOcrVisionReadParser
                 if (chosen.Contains(line))
                     continue;
                 var t = line.Text.Trim();
-                if (!Regex.IsMatch(t, @"^\d{3,8}$"))
+                if (!Regex.IsMatch(t, @"^(?:\d{3,8}|\d{6,17}⑈)$"))
                     continue;
-                var cy = line.NormCenterY;
-                if (!chosen.Any(s => Math.Abs(s.NormCenterY - cy) <= 0.16))
+                if (!chosen.Any(s => NormVerticalBandsTouch(s, line, 0.05)))
                     continue;
                 chosen.Add(line);
             }
@@ -676,6 +776,7 @@ internal static class CheckOcrVisionReadParser
             micrNumber = fragMicrCheckDigits;
 
         var micrFromNavyShortDelimiterAccount = false;
+        var micrFromSplitTransitAccountCheckRows = false;
         if (micrNumber is null)
         {
             string? navyChk = null;
@@ -706,6 +807,19 @@ internal static class CheckOcrVisionReadParser
             var micrMatch = MicrCheckNumberRegex.Match(micrNorm);
             if (micrMatch.Success)
                 micrNumber = micrMatch.Groups[1].Value.Trim();
+        }
+
+        if (micrNumber is null)
+        {
+            string? splitChk = null;
+            if (TryExtractMicrSplitTransitRowAccountThenCheckDigitRow(micrNorm, out splitChk)
+                || TryExtractMicrSplitTransitRowAccountThenCheckDigitRow(
+                    NormalizeMicrLikeText(CollapseSpacesBetweenDigitsOnMicrInkLines(layout.FullText)),
+                    out splitChk))
+            {
+                micrNumber = splitChk;
+                micrFromSplitTransitAccountCheckRows = true;
+            }
         }
 
         if (!string.IsNullOrEmpty(fragAcctDigits) && micrNumber != null && micrBracketedCheck is null
@@ -740,7 +854,8 @@ internal static class CheckOcrVisionReadParser
         {
             if (micrNumber == printedNumber || CanonicalCheckDigitsEqual(micrNumber, printedNumber))
                 return (PreferShorterCanonicallyEqualCheckDigits(micrNumber, printedNumber), 0.94);
-            if (micrBracketedCheck != null || !string.IsNullOrEmpty(fragMicrCheckDigits) || micrFromNavyShortDelimiterAccount)
+            if (micrBracketedCheck != null || !string.IsNullOrEmpty(fragMicrCheckDigits) || micrFromNavyShortDelimiterAccount
+                || micrFromSplitTransitAccountCheckRows)
                 return (micrNumber, 0.82);
             if (printedScore >= 0.78)
                 return (printedNumber, Math.Clamp(printedScore, 0.66, 0.88));
@@ -763,6 +878,7 @@ internal static class CheckOcrVisionReadParser
 
         var micrBracketedFt = TryExtractMicrCheckBracketedAroundTransit(norm);
         var micrNumber = micrBracketedFt;
+        var micrFromSplitTransitAccountCheckRowsFt = false;
         if (micrNumber is null && !string.IsNullOrEmpty(fragChkFt))
             micrNumber = fragChkFt;
 
@@ -793,6 +909,13 @@ internal static class CheckOcrVisionReadParser
             var micrMatch = MicrCheckNumberRegex.Match(norm);
             if (micrMatch.Success)
                 micrNumber = micrMatch.Groups[1].Value.Trim();
+        }
+
+        if (micrNumber is null
+            && TryExtractMicrSplitTransitRowAccountThenCheckDigitRow(norm, out var splitChkFt))
+        {
+            micrNumber = splitChkFt;
+            micrFromSplitTransitAccountCheckRowsFt = true;
         }
 
         if (!string.IsNullOrEmpty(fragAcctFt) && micrNumber != null && string.IsNullOrEmpty(fragChkFt)
@@ -830,6 +953,8 @@ internal static class CheckOcrVisionReadParser
                 return (micrNumber, 0.92);
             if (CanonicalCheckDigitsEqual(micrNumber, printedNumber))
                 return (PreferShorterCanonicallyEqualCheckDigits(micrNumber, printedNumber), 0.92);
+            if (micrFromSplitTransitAccountCheckRowsFt)
+                return (micrNumber, 0.84);
             return (micrNumber, 0.55);
         }
 
@@ -976,9 +1101,11 @@ internal static class CheckOcrVisionReadParser
         return (null, 0.1);
     }
 
-    public static (decimal amount, double confidence) ParseAmount(ReadOcrLayout layout, CheckOcrParsingProfile profile)
+    public static (decimal amount, double confidence, string? amountParseMode) ParseAmount(
+        ReadOcrLayout layout,
+        CheckOcrParsingProfile profile)
     {
-        var scored = new List<(decimal amount, double score)>();
+        var scored = new List<(decimal amount, double score, string mode)>();
         foreach (var line in layout.Lines)
         {
             foreach (Match hm in AmountDollarHyphenCentsRegex.Matches(line.Text))
@@ -994,7 +1121,7 @@ internal static class CheckOcrVisionReadParser
                 if (v <= 0m)
                     continue;
                 var score = ScoreAmountCandidate(line, hasDollar: true, profile, extraBoost: 0.22);
-                scored.Add((v, score));
+                scored.Add((v, score, "hyphen_cents"));
             }
 
             foreach (Match sm in AmountDollarSpaceCentsRegex.Matches(line.Text))
@@ -1010,8 +1137,11 @@ internal static class CheckOcrVisionReadParser
                 if (v <= 0m)
                     continue;
                 var score = ScoreAmountCandidate(line, hasDollar: true, profile, extraBoost: 0.22);
-                scored.Add((v, score));
+                scored.Add((v, score, "space_cents_inline"));
             }
+
+            var lineSlashNorm = NormalizeCourtesyFractionSlashes(line.Text);
+            AddScoresFromFractionOver100Matches(scored, line, lineSlashNorm, profile, "fraction_100");
 
             foreach (Match m in AmountRegex.Matches(line.Text))
             {
@@ -1021,7 +1151,7 @@ internal static class CheckOcrVisionReadParser
 
                 var hasDollar = m.Groups[1].Success;
                 var score = ScoreAmountCandidate(line, hasDollar, profile);
-                scored.Add((v, score));
+                scored.Add((v, score, "decimal_point"));
             }
 
             foreach (Match cm in AmountDollarCommaDecimalRegex.Matches(line.Text))
@@ -1030,7 +1160,22 @@ internal static class CheckOcrVisionReadParser
                 if (!decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var v) || v <= 0m)
                     continue;
                 var score = ScoreAmountCandidate(line, hasDollar: true, profile, extraBoost: 0.06);
-                scored.Add((v, score));
+                scored.Add((v, score, "comma_decimal"));
+            }
+        }
+
+        if (layout.Lines.Count > 1)
+        {
+            var ordered = layout.Lines
+                .Select((l, idx) => (l, idx))
+                .OrderBy(t => t.l.NormTop)
+                .ThenBy(t => t.l.NormLeft)
+                .ToList();
+            for (var i = 0; i < ordered.Count - 1; i++)
+            {
+                var dollarLine = ordered[i].l;
+                var centsLine = ordered[i + 1].l;
+                TryAddSpilloverDollarCentsLinePair(scored, dollarLine, centsLine, centsLine.Text.Trim(), profile);
             }
         }
 
@@ -1049,7 +1194,103 @@ internal static class CheckOcrVisionReadParser
         if (distinct.Count > 3)
             conf *= 0.88;
 
-        return (best.amount, Math.Clamp(conf, 0.18, 0.94));
+        return (best.amount, Math.Clamp(conf, 0.18, 0.94), best.mode);
+    }
+
+    /// <summary>
+    /// Read 将票面「$ 整数」与紧随其后的「两位分」拆成相邻行时，拼成与 <see cref="AmountDollarSpaceCentsRegex"/> 等价的一行再解析。
+    /// 下一行亦可能是 <c>48/100</c>、<c>48％</c> 类分列。
+    /// </summary>
+    private static void TryAddSpilloverDollarCentsLinePair(
+        List<(decimal amount, double score, string mode)> scored,
+        ReadOcrLine dollarLine,
+        ReadOcrLine centsLine,
+        string centsTrimmed,
+        CheckOcrParsingProfile profile)
+    {
+        if (!AmountBoxSpilloverCandidateLines(dollarLine, centsLine))
+            return;
+
+        var dMatch = AmountDollarIntegerOnlyTextRegex.Match(dollarLine.Text.Trim());
+        if (!dMatch.Success)
+            return;
+
+        if (TwoDigitCentsOnlyTextRegex.IsMatch(centsTrimmed))
+        {
+            var synthetic = $"{dMatch.Value} {centsTrimmed}";
+            foreach (Match sm in AmountDollarSpaceCentsRegex.Matches(synthetic))
+            {
+                var dollars = sm.Groups[1].Value.Replace(",", "");
+                var centsPart = sm.Groups[2].Value;
+                if (!decimal.TryParse(dollars, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dInt))
+                    continue;
+                if (!int.TryParse(centsPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cents2)
+                    || cents2 is < 0 or > 99)
+                    continue;
+                var v = dInt + cents2 / 100m;
+                if (v <= 0m)
+                    continue;
+                var score = ScoreAmountCandidate(dollarLine, hasDollar: true, profile, extraBoost: 0.22);
+                scored.Add((v, score, "spillover_cents"));
+            }
+
+            return;
+        }
+
+        var fracLine = NormalizeCourtesyFractionSlashes(centsTrimmed);
+        var fracOnly = FractionHundredthsOnlyLineRegex.Match(fracLine);
+        if (!fracOnly.Success)
+            return;
+
+        var syntheticFrac = $"{dMatch.Value} {fracOnly.Groups[1].Value}/100";
+        AddScoresFromFractionOver100Matches(scored, dollarLine, syntheticFrac, profile, "spillover_fraction_100");
+    }
+
+    private static string NormalizeCourtesyFractionSlashes(string text) =>
+        Regex.Replace(
+            text.Replace('／', '/').Replace('∕', '/').Replace('％', '%'),
+            @"\s*/\s*",
+            "/");
+
+    private static void AddScoresFromFractionOver100Matches(
+        List<(decimal amount, double score, string mode)> scored,
+        ReadOcrLine scoreLine,
+        string text,
+        CheckOcrParsingProfile profile,
+        string mode)
+    {
+        foreach (Match fm in AmountDollarFractionOver100Regex.Matches(text))
+        {
+            var dollars = fm.Groups[1].Value.Replace(",", "");
+            var centsPart = fm.Groups[2].Value;
+            if (!decimal.TryParse(dollars, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dInt))
+                continue;
+            if (!int.TryParse(centsPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cents2)
+                || cents2 is < 0 or > 99)
+                continue;
+            var v = dInt + cents2 / 100m;
+            if (v <= 0m)
+                continue;
+            var score = ScoreAmountCandidate(scoreLine, hasDollar: true, profile, extraBoost: 0.22);
+            scored.Add((v, score, mode));
+        }
+    }
+
+    private static bool AmountBoxSpilloverCandidateLines(ReadOcrLine dollarLine, ReadOcrLine centsLine)
+    {
+        if (centsLine.NormTop < dollarLine.NormTop - 0.04)
+            return false;
+        if (centsLine.NormTop - dollarLine.NormBottom > 0.12)
+            return false;
+        return HorizontalIntervalOverlapOrNear(dollarLine, centsLine);
+    }
+
+    private static bool HorizontalIntervalOverlapOrNear(ReadOcrLine a, ReadOcrLine b)
+    {
+        var overlap = Math.Min(a.NormRight, b.NormRight) - Math.Max(a.NormLeft, b.NormLeft);
+        if (overlap > 0.015)
+            return true;
+        return Math.Abs(a.NormCenterX - b.NormCenterX) < 0.30;
     }
 
     private static double ScoreAmountCandidate(ReadOcrLine line, bool hasDollar, CheckOcrParsingProfile profile, double extraBoost = 0)
@@ -1072,8 +1313,10 @@ internal static class CheckOcrVisionReadParser
         return s;
     }
 
-    private static (decimal amount, double confidence) ParseAmountFullText(string text)
+    private static (decimal amount, double confidence, string? amountParseMode) ParseAmountFullText(string text)
     {
+        text = text.Replace('／', '/').Replace('∕', '/').Replace('％', '%');
+
         var hyphen = AmountDollarHyphenCentsRegex.Match(text);
         if (hyphen.Success
             && decimal.TryParse(hyphen.Groups[1].Value.Replace(",", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var hd)
@@ -1082,7 +1325,29 @@ internal static class CheckOcrVisionReadParser
         {
             var hv = hd + hc / 100m;
             if (hv > 0m)
-                return (hv, 0.70);
+                return (hv, 0.70, "hyphen_cents");
+        }
+
+        var newlineCents = AmountDollarNewlineCentsRegex.Match(text);
+        if (newlineCents.Success
+            && decimal.TryParse(newlineCents.Groups[1].Value.Replace(",", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var nd)
+            && int.TryParse(newlineCents.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var nc)
+            && nc is >= 0 and <= 99)
+        {
+            var nv = nd + nc / 100m;
+            if (nv > 0m)
+                return (nv, 0.68, "newline_cents");
+        }
+
+        var newlineFrac = AmountDollarNewlineFractionOver100Regex.Match(text);
+        if (newlineFrac.Success
+            && decimal.TryParse(newlineFrac.Groups[1].Value.Replace(",", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var nfd)
+            && int.TryParse(newlineFrac.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var nfc)
+            && nfc is >= 0 and <= 99)
+        {
+            var nfv = nfd + nfc / 100m;
+            if (nfv > 0m)
+                return (nfv, 0.68, "newline_fraction_100");
         }
 
         var spaceCents = AmountDollarSpaceCentsRegex.Match(text);
@@ -1093,7 +1358,18 @@ internal static class CheckOcrVisionReadParser
         {
             var sv = sd + sc / 100m;
             if (sv > 0m)
-                return (sv, 0.70);
+                return (sv, 0.70, "space_cents_inline");
+        }
+
+        var fracInline = AmountDollarFractionOver100Regex.Match(text);
+        if (fracInline.Success
+            && decimal.TryParse(fracInline.Groups[1].Value.Replace(",", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var fd)
+            && int.TryParse(fracInline.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var fc)
+            && fc is >= 0 and <= 99)
+        {
+            var fv = fd + fc / 100m;
+            if (fv > 0m)
+                return (fv, 0.70, "fraction_100");
         }
 
         var commaDec = AmountDollarCommaDecimalRegex.Match(text);
@@ -1101,12 +1377,12 @@ internal static class CheckOcrVisionReadParser
         {
             var cvRaw = commaDec.Groups[1].Value.Replace(",", ".", StringComparison.Ordinal);
             if (decimal.TryParse(cvRaw, NumberStyles.Number, CultureInfo.InvariantCulture, out var cv) && cv > 0m)
-                return (cv, 0.84);
+                return (cv, 0.84, "comma_decimal");
         }
 
         var matches = AmountRegex.Matches(text);
         if (matches.Count == 0)
-            return (0m, 0.1);
+            return (0m, 0.1, null);
 
         var amounts = matches
             .Select(m =>
@@ -1120,11 +1396,11 @@ internal static class CheckOcrVisionReadParser
             .ToList();
 
         if (amounts.Count == 0)
-            return (0m, 0.1);
+            return (0m, 0.1, null);
 
-        var best = amounts[0];
+        var bestAmt = amounts[0];
         var conf = amounts.Count == 1 ? 0.88 : amounts.Count <= 3 ? 0.72 : 0.50;
-        return (best, conf);
+        return (bestAmt, conf, "decimal_point");
     }
 
     public static (DateTime? date, double confidence) ParseDate(ReadOcrLayout layout, CheckOcrParsingProfile profile)

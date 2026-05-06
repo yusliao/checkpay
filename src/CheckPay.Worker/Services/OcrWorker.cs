@@ -180,7 +180,8 @@ public class OcrWorker : BackgroundService
         }
 
         var amountConfidence = ocr.ConfidenceScores.TryGetValue("Amount", out var conf) ? conf : 0.0;
-        if (amountConfidence >= _amountValidationTriggerConfidenceThreshold)
+        if (amountConfidence >= _amountValidationTriggerConfidenceThreshold
+            && !WeakCourtesyAmountParseModeOcrStillRunValidation(ocr))
         {
             entity.AmountValidationStatus = AmountValidationStatus.Skipped;
             entity.AmountValidationErrorMessage = $"金额置信度 {amountConfidence:F2} 高于阈值，跳过二次校验";
@@ -206,6 +207,16 @@ public class OcrWorker : BackgroundService
             if (!_amountValidationFailOpen)
                 throw;
         }
+    }
+
+    private static bool WeakCourtesyAmountParseModeOcrStillRunValidation(OcrResultDto ocr)
+    {
+        if (ocr.Diagnostics is null)
+            return false;
+        if (!ocr.Diagnostics.TryGetValue("amount_parse_mode", out var mode) || string.IsNullOrWhiteSpace(mode))
+            return false;
+        return mode is "space_cents_inline" or "spillover_cents" or "newline_cents"
+               or "fraction_100" or "spillover_fraction_100" or "newline_fraction_100";
     }
 
     /// <summary>

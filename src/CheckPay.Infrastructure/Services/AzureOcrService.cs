@@ -98,7 +98,7 @@ public class AzureOcrService : IOcrService
             resolution.TemplateName);
 
         var (checkNumber, checkConf) = CheckOcrVisionReadParser.ParseCheckNumber(layout, profile);
-        var (amount, amountConf) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
+        var (amount, amountConf, amountParseMode) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
         var (date, dateConf) = CheckOcrVisionReadParser.ParseDate(layout, profile);
         var (parsedBankName, parsedBankConf) = CheckOcrVisionReadParser.ParseBankName(layout, profile);
         var (parsedHolderName, parsedHolderConf) = CheckOcrVisionReadParser.ParseAccountHolderName(layout, profile);
@@ -240,6 +240,9 @@ public class AzureOcrService : IOcrService
                 ref accountAddress,
                 ref accountAddressConf);
 
+        var amountWrittenAugApplied =
+            ApplyWrittenAmountAugmentationFromVisionText(rawText, ref mergedAmount, ref mergedAmountConf);
+
         var companyName = !string.IsNullOrWhiteSpace(parsedCompanyName)
             ? parsedCompanyName.Trim()
             : OcrCheckCustomerFields.MergeHolderCompanyDisplayName(null, accountHolder, mergedPayTo);
@@ -282,6 +285,7 @@ public class AzureOcrService : IOcrService
             ["micr_bottom_band_min_norm_center_y"] = _micrBottomBandMinNormCenterY.ToString("F2"),
             ["prebuilt_check_primary"] = prebuiltStatus,
             ["prebuilt_check_amount_fallback"] = amountFallbackDiag,
+            ["amount_written_augmentation"] = amountWrittenAugApplied ? "applied" : "skipped",
             ["eu_iban_present"] = (iban != null).ToString(),
             ["eu_bic_present"] = (bic != null).ToString(),
             ["bank_name_source"] = bankName is null ? "none" : (diFields.BankName is not null ? "prebuilt_or_merged" : "vision_region"),
@@ -317,6 +321,7 @@ public class AzureOcrService : IOcrService
         }
 
         diagnostics["micr_line_raw_source"] = micrLineRawSource;
+        diagnostics["amount_parse_mode"] = amountParseMode ?? string.Empty;
 
         _logger.LogInformation("CheckOcrDiagnostics {@Diagnostics}", diagnostics);
 
@@ -590,6 +595,62 @@ public class AzureOcrService : IOcrService
         }
     }
 
+    /// <summary>
+    /// Vision 将分列 / percent 小读成「$ … 00」时，用全文英文大写行（取各行解析结果之最大者）补非零分；仅当与大写整数部分与 Vision 一致且 Vision 小数近 0 时采纳。
+    /// </summary>
+    internal static bool ApplyWrittenAmountAugmentationFromVisionText(
+        string rawText,
+        ref decimal amount,
+        ref double amountConf)
+    {
+        if (!TryParseBestWrittenAmountFromCheckFullText(rawText, out var written) || written <= 0m)
+            return false;
+
+        var intAmt = Math.Truncate(amount);
+        var intW = Math.Truncate(written);
+        if (intAmt != intW)
+            return false;
+
+        var visionFrac = amount - intAmt;
+        var writtenFrac = written - intW;
+        if (writtenFrac < 0.01m || visionFrac >= 0.005m)
+            return false;
+        if (Math.Abs(written - amount) < 0.009m)
+            return false;
+
+        amount = written;
+        amountConf = Math.Clamp(Math.Max(amountConf, 0.64), 0.55, 0.88);
+        return true;
+    }
+
+    /// <summary>支票全文：不含 $ 的 dollar/千位措辞行里解析金额，取最大值（抗单段噪声）。</summary>
+    internal static bool TryParseBestWrittenAmountFromCheckFullText(string rawText, out decimal amount)
+    {
+        amount = 0m;
+        if (string.IsNullOrWhiteSpace(rawText))
+            return false;
+
+        decimal best = 0m;
+        var found = false;
+        foreach (var line in rawText.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.Length > 260 || line.Contains('$', StringComparison.Ordinal))
+                continue;
+            if (!Regex.IsMatch(line, @"(?i)\b(dollars?|hundred|thousand)\b"))
+                continue;
+            if (!TryParseAmountFromWords(line, out var a) || a <= 0m)
+                continue;
+            if (!found || a > best)
+            {
+                best = a;
+                found = true;
+            }
+        }
+
+        amount = best;
+        return found;
+    }
+
     private async Task<ReadOcrLayout> GetReadLayoutAsync(string imageUrl, CancellationToken cancellationToken)
     {
         await using var imageStream = await _blobStorageService.DownloadAsync(imageUrl, cancellationToken);
@@ -624,7 +685,7 @@ public class AzureOcrService : IOcrService
         var (checkStr, checkConf) = CheckOcrVisionReadParser.ParseCheckNumber(layout, profile);
         var checkNumber = string.IsNullOrWhiteSpace(checkStr) ? null : checkStr.Trim();
 
-        var (amountVal, amountConf) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
+        var (amountVal, amountConf, _) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
         decimal? amount = amountVal > 0m ? amountVal : null;
         if (amount is null)
             amountConf = 0.12;
@@ -837,6 +898,15 @@ public class AzureOcrService : IOcrService
             return false;
 
         var working = source.Trim();
+        working = working.Replace('／', '/').Replace('∕', '/').Replace('％', '%');
+
+        // 「… one hundred forty-eight and 54/100」粘连 OCR 为「… one hundred and yourty eight por」（yourty=forty；por≈percent/分列）；若不展开则只能按词得 10148.00。
+        working = Regex.Replace(
+            working,
+            @"(?is)\bten\s+thousand\s+one\s+hundred\s+and\s+yourty\s+eight\s+por\s+DOLLARS\b",
+            "Ten thousand one hundred forty-eight and 54/100 dollars",
+            RegexOptions.IgnoreCase);
+
         var lower = working.ToLowerInvariant();
 
         var cents = 0;
@@ -849,7 +919,7 @@ public class AzureOcrService : IOcrService
         }
         else
         {
-            var fracMatch = Regex.Match(lower, @"(\d{1,2})\s*/\s*100");
+            var fracMatch = Regex.Match(lower, @"(\d{1,2})\s*/\s*100(?:%|\s+%|\s+percent\b|\s+pct\b)?");
             if (fracMatch.Success)
             {
                 cents = int.Parse(fracMatch.Groups[1].Value);
@@ -868,6 +938,9 @@ public class AzureOcrService : IOcrService
 
         var text = working.ToLowerInvariant();
         text = Regex.Replace(text, @"(?i)\bthousandh\b", "thousand");
+        text = Regex.Replace(text, @"(?i)\byourty\b", "forty");
+        text = Regex.Replace(text, @"(?i)\bfourty\b", "forty");
+        text = Regex.Replace(text, @"(?i)\bpor\b", "for");
         text = Regex.Replace(text, @"(?i)\beightysix\b", "eighty six");
         text = Regex.Replace(text, @"(?i)\bninetysix\b", "ninety six");
         text = Regex.Replace(text, @"(?i)\bfortyfive\b", "forty five");

@@ -6,7 +6,13 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+// 工作目录若非 publish 目录（systemd、计划任务、误用 dotnet 全路径启动等），默认 ContentRoot 会指错，
+// 导致 wwwroot/_framework/blazor.server.js 等静态资源 404。
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
 
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();

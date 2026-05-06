@@ -1,0 +1,17 @@
+/* CheckPay site.css */
+
+/* 避免依赖外网字体导致首屏阻塞，统一使用系统字体栈 */
+body {
+    font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+}
+
+/* 表格行可点击光标 */
+.cursor-pointer {
+    cursor: pointer;
+}
+
+/* 支票图片自适应 */
+.mud-image {
+    max-width: 100%;
+    height: auto;
+}

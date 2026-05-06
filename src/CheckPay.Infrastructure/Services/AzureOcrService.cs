@@ -139,6 +139,7 @@ public class AzureOcrService : IOcrService
         var bic = CheckOcrEuInstrumentParser.TryFindBic(rawText);
 
         var diFields = PrebuiltCheckStructuredFields.Empty;
+        var diStructuredSnapshot = PrebuiltCheckStructuredFields.Empty;
         var prebuiltStatus = "skipped";
         string? amountFallbackOutcome = null;
 
@@ -153,6 +154,7 @@ public class AzureOcrService : IOcrService
                     BinaryData.FromStream(memoryStream),
                     cancellationToken);
                 diFields = PrebuiltCheckStructuredExtractor.TryExtract(operation.Value);
+                diStructuredSnapshot = diFields;
                 prebuiltStatus = diFields.RoutingNumber != null || diFields.BankName != null ? "used" : "empty_model_fields";
             }
             catch (Exception ex)
@@ -171,13 +173,13 @@ public class AzureOcrService : IOcrService
                     BankCheckModelId,
                     BinaryData.FromStream(memoryStream),
                     cancellationToken);
-                var fallbackDi = PrebuiltCheckStructuredExtractor.TryExtract(operation.Value);
-                if (fallbackDi.NumberAmount is { } na
+                diStructuredSnapshot = PrebuiltCheckStructuredExtractor.TryExtract(operation.Value);
+                if (diStructuredSnapshot.NumberAmount is { } na
                     && na > 0m
-                    && fallbackDi.NumberAmountConfidence >= 0.6)
+                    && diStructuredSnapshot.NumberAmountConfidence >= 0.6)
                 {
                     amount = na;
-                    amountConf = Math.Clamp(fallbackDi.NumberAmountConfidence, 0.55, 0.92);
+                    amountConf = Math.Clamp(diStructuredSnapshot.NumberAmountConfidence, 0.55, 0.92);
                     amountFallbackOutcome = "applied";
                     _logger.LogInformation(
                         "prebuilt-check.us 金额兜底: Vision 金额不足信，采用 DI NumberAmount={Amount}（置信度 {Conf:F2}）",
@@ -322,6 +324,11 @@ public class AzureOcrService : IOcrService
 
         diagnostics["micr_line_raw_source"] = micrLineRawSource;
         diagnostics["amount_parse_mode"] = amountParseMode ?? string.Empty;
+        diagnostics["di_word_amount_raw"] = diStructuredSnapshot.WordAmountRaw ?? string.Empty;
+        diagnostics["di_word_amount_confidence"] =
+            diStructuredSnapshot.WordAmountConfidence.ToString("F4", CultureInfo.InvariantCulture);
+        diagnostics["di_word_amount_parsed"] =
+            diStructuredSnapshot.WordAmountParsed?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty;
 
         _logger.LogInformation("CheckOcrDiagnostics {@Diagnostics}", diagnostics);
 
@@ -588,6 +595,18 @@ public class AzureOcrService : IOcrService
             amountConf = Math.Clamp(di.NumberAmountConfidence, 0.55, 0.92);
         }
 
+        // prebuilt-check.us：数字框常为整数，书面金额含 XX/100 或分列在另一行 — WordAmount 经全文解析可优于 NumberAmount。
+        if (di.WordAmountParsed is { } wap && wap > 0m
+                                      && di.WordAmountConfidence >= 0.48
+                                      && Math.Truncate(wap) == Math.Truncate(amount)
+                                      && (amount - Math.Truncate(amount)) < 0.005m
+                                      && (wap - Math.Truncate(wap)) >= 0.009m
+                                      && Math.Abs(wap - amount) > 0.005m)
+        {
+            amount = wap;
+            amountConf = Math.Clamp(Math.Max(amountConf * 0.92, di.WordAmountConfidence), 0.55, 0.88);
+        }
+
         if (di.CheckDate is { } cd && di.CheckDateConfidence >= 0.55 && (!date.HasValue || dateConf < 0.52))
         {
             date = cd;
@@ -638,7 +657,7 @@ public class AzureOcrService : IOcrService
                 continue;
             if (!Regex.IsMatch(line, @"(?i)\b(dollars?|hundred|thousand)\b"))
                 continue;
-            if (!TryParseAmountFromWords(line, out var a) || a <= 0m)
+            if (!TryParseAmountFromWords(line, out var a, rawText) || a <= 0m)
                 continue;
             if (!found || a > best)
             {
@@ -708,7 +727,8 @@ public class AzureOcrService : IOcrService
     public async Task<AmountValidationResult> ValidateHandwrittenAmountAsync(
         string imageUrl,
         decimal numericAmount,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? companionFullTextForLegalAmount = null)
     {
         if (numericAmount <= 0m)
             return new AmountValidationResult(numericAmount, null, null, null, 0.0, "skipped", "数字金额无效，跳过校验");
@@ -730,7 +750,8 @@ public class AzureOcrService : IOcrService
             cancellationToken);
 
         var result = operation.Value;
-        var (legalRaw, legalAmount, confidence, reason) = ExtractLegalAmountFromDiV4(result);
+        var (legalRaw, legalAmount, confidence, reason) =
+            ExtractLegalAmountFromDiV4(result, numericAmount, companionFullTextForLegalAmount);
         if (legalAmount is null)
         {
             return new AmountValidationResult(
@@ -754,12 +775,86 @@ public class AzureOcrService : IOcrService
             consistent ? "手写金额与数字金额一致" : "手写金额与数字金额不一致");
     }
 
-    private static (string? rawText, decimal? amount, double confidence, string? reason) ExtractLegalAmountFromDiV4(AnalyzeResult result)
+    private static string MergeLegalAmountCompanionText(string? companion, string documentBody)
+    {
+        var a = companion?.Trim();
+        var b = documentBody.Trim();
+        if (string.IsNullOrEmpty(a))
+            return b;
+        if (string.IsNullOrEmpty(b))
+            return a;
+        return a + "\n" + b;
+    }
+
+    private static bool IsLikelyWordAmountDiFieldKey(string key) =>
+        key is "WordAmount" or "AmountInWords" or "AmountWritten" or "LegalAmount";
+
+    /// <summary>
+    /// prebuilt-check 偶将金额以「美分整数」或与 dollars 连在一起返回（例 1014850 ⇒ 10148.50）。
+    /// 仅当除以 100 后的整数美元与票面数字近似、且原值美分部分非零时降级，以免误缩巨大整数。
+    /// </summary>
+    internal static decimal RescaleSuspectDiMinorUnitsToDollars(decimal parsed, decimal numericHint)
+    {
+        if (numericHint <= 0 || parsed <= 0)
+            return parsed;
+        if (Math.Abs(parsed - numericHint) <= 0.03m)
+            return parsed;
+
+        var rem = parsed % 100m;
+        if (rem == 0m)
+            return parsed;
+
+        var dollarPart = decimal.Truncate(parsed / 100m);
+        var tolerance = Math.Max(0.85m, numericHint * 0.03m);
+        if (Math.Abs(dollarPart - numericHint) <= tolerance && parsed >= numericHint * 15m)
+            return parsed / 100m;
+
+        return parsed;
+    }
+
+    /// <summary>修复 DI 折断的 «… eight 100 + 换行 DOLLARS»，并按解析 cents 补足 «and XX/100»。</summary>
+    internal static string FormatLegalAmountRawForDiagnosticsDisplay(
+        string raw,
+        decimal parsedAmount,
+        string mergedFullText)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return raw;
+
+        if (Regex.IsMatch(raw, @"\d{1,2}\s*/\s*100"))
+            return raw;
+
+        var cents = (int)decimal.Round((parsedAmount % 1m) * 100m, 0, MidpointRounding.AwayFromZero);
+        if (cents is < 0 or > 99)
+            cents = 0;
+
+        if (cents == 0)
+        {
+            var z = Regex.Replace(raw, @"(?is)\r?\n\s*100\s*\r?\n\s*DOLLARS\s*$", "\nDOLLARS");
+            if (z != raw)
+                return z.Trim();
+            return Regex.Replace(raw, @"(?i)(?<=[a-z])\s+100(\s*\r?\n\s*DOLLARS\s*)$", "$1", RegexOptions.Singleline)
+                .Trim();
+        }
+
+        var core = Regex.Replace(raw, @"(?is)\s*DOLLARS\s*$", "").Trim();
+        core = Regex.Replace(core, @"(?im)\r?\n\s*100\s*$", "").Trim();
+        core = Regex.Replace(core, @"(?i)(?<=[a-z])\s+100\s*$", "").Trim();
+
+        return $"{core} and {cents:D2}/100 DOLLARS";
+    }
+
+    private static (string? rawText, decimal? amount, double confidence, string? reason) ExtractLegalAmountFromDiV4(
+        AnalyzeResult result,
+        decimal numericAmountHint,
+        string? companionFullTextForLegalAmount)
     {
         if (result.Documents is null || result.Documents.Count == 0)
             return (null, null, 0.0, "Document Intelligence 未返回文档结构");
 
         var doc = result.Documents[0];
+        var documentBody = result.Content ?? string.Empty;
+        var mergedFull = MergeLegalAmountCompanionText(companionFullTextForLegalAmount, documentBody);
         // v4 prebuilt-check.us：WordAmount / NumberAmount；旧版 prebuilt-check 字段名仍尝试兼容
         var candidateKeys = new[]
         {
@@ -778,32 +873,65 @@ public class AzureOcrService : IOcrService
                 continue;
 
             var confidence = Convert.ToDouble(field.Confidence ?? 0f);
-            if (TryGetAmountFromDiV4Field(field, out var amount, out var raw))
+            if (TryGetAmountFromDiV4Field(
+                    field,
+                    key,
+                    out var amount,
+                    out var raw,
+                    mergedFull,
+                    numericAmountHint))
+            {
+                amount = RefineLegalCentsAgainstVisionSpilledLine(amount, numericAmountHint, mergedFull);
+                raw = FormatLegalAmountRawForDiagnosticsDisplay(raw, amount, mergedFull);
                 return (raw, amount, confidence, null);
+            }
         }
 
-        var dollarLine = result.Content?
+        var dollarLine = mergedFull
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(x => x.Contains("dollar", StringComparison.OrdinalIgnoreCase));
 
-        if (!string.IsNullOrWhiteSpace(dollarLine) && TryParseAmountFromWords(dollarLine, out var parsedDollar))
-            return (dollarLine, parsedDollar, 0.35, "从全文 Dollar 行启发式解析");
-
-        if (!string.IsNullOrWhiteSpace(result.Content))
+        if (!string.IsNullOrWhiteSpace(dollarLine)
+            && TryParseAmountFromWords(dollarLine, out var parsedDollar, mergedFull))
         {
-            foreach (var rawLine in result.Content.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            var parsedRef = RefineLegalCentsAgainstVisionSpilledLine(parsedDollar, numericAmountHint, mergedFull);
+            return (
+                FormatLegalAmountRawForDiagnosticsDisplay(dollarLine, parsedRef, mergedFull),
+                parsedRef,
+                0.35,
+                "从全文 Dollar 行启发式解析");
+        }
+
+        if (!string.IsNullOrWhiteSpace(documentBody))
+        {
+            foreach (var rawLine in documentBody.Split(
+                         '\n',
+                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 if (!LooksLikeWrittenAmountScanLine(rawLine))
                     continue;
-                if (TryParseAmountFromWords(rawLine, out var lineAmt))
-                    return (rawLine, lineAmt, 0.32, "从全文金额措辞行启发式解析");
+                if (TryParseAmountFromWords(rawLine, out var lineAmt, mergedFull))
+                {
+                    var lineRef = RefineLegalCentsAgainstVisionSpilledLine(lineAmt, numericAmountHint, mergedFull);
+                    return (
+                        FormatLegalAmountRawForDiagnosticsDisplay(rawLine, lineRef, mergedFull),
+                        lineRef,
+                        0.32,
+                        "从全文金额措辞行启发式解析");
+                }
             }
         }
 
         return (dollarLine, null, 0.1, "未找到可解析的手写金额字段");
     }
 
-    private static bool TryGetAmountFromDiV4Field(DocumentField field, out decimal amount, out string raw)
+    private static bool TryGetAmountFromDiV4Field(
+        DocumentField field,
+        string fieldKey,
+        out decimal amount,
+        out string raw,
+        string mergedFullTextForFraction,
+        decimal numericAmountHint)
     {
         raw = field.Content ?? string.Empty;
         amount = 0m;
@@ -812,28 +940,56 @@ public class AzureOcrService : IOcrService
         {
             amount = Convert.ToDecimal(currency.Amount);
             raw = string.IsNullOrWhiteSpace(field.Content) ? amount.ToString("N2") : field.Content;
-            return amount > 0;
+            amount = RescaleSuspectDiMinorUnitsToDollars(amount, numericAmountHint);
+            var ok = ApplyWordAmountFallbackIfNumericFarFromVision(
+                field,
+                fieldKey,
+                numericAmountHint,
+                ref amount,
+                ref raw,
+                mergedFullTextForFraction);
+            return ok && amount > 0;
         }
 
         if (field.FieldType == DocumentFieldType.Double && field.ValueDouble is { } dbl)
         {
             amount = Convert.ToDecimal(dbl);
             raw = string.IsNullOrWhiteSpace(field.Content) ? amount.ToString("N2") : field.Content;
-            return amount > 0;
+            amount = RescaleSuspectDiMinorUnitsToDollars(amount, numericAmountHint);
+            var ok = ApplyWordAmountFallbackIfNumericFarFromVision(
+                field,
+                fieldKey,
+                numericAmountHint,
+                ref amount,
+                ref raw,
+                mergedFullTextForFraction);
+            return ok && amount > 0;
         }
 
         if (field.FieldType == DocumentFieldType.Int64 && field.ValueInt64 is { } int64)
         {
             amount = int64;
             raw = string.IsNullOrWhiteSpace(field.Content) ? amount.ToString("N2") : field.Content;
-            return amount > 0;
+            amount = RescaleSuspectDiMinorUnitsToDollars(amount, numericAmountHint);
+            var ok = ApplyWordAmountFallbackIfNumericFarFromVision(
+                field,
+                fieldKey,
+                numericAmountHint,
+                ref amount,
+                ref raw,
+                mergedFullTextForFraction);
+            return ok && amount > 0;
         }
 
-        if (field.FieldType == DocumentFieldType.String && !string.IsNullOrEmpty(field.ValueString))
+        if (field.FieldType == DocumentFieldType.String)
         {
-            var text = field.ValueString;
-            raw = text;
-            if (TryParseAmountFromWords(text, out var parsed))
+            var text = !string.IsNullOrWhiteSpace(field.ValueString)
+                ? field.ValueString
+                : (field.Content ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+            raw = text.Trim();
+            if (TryParseAmountFromWords(raw, out var parsed, mergedFullTextForFraction))
             {
                 amount = parsed;
                 return true;
@@ -841,6 +997,36 @@ public class AzureOcrService : IOcrService
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// 书面金额字段被标成 Currency/double且数值偏离票面过多时，回退解析 <see cref="DocumentField.Content"/> 英文字串。
+    /// </summary>
+    private static bool ApplyWordAmountFallbackIfNumericFarFromVision(
+        DocumentField field,
+        string fieldKey,
+        decimal numericAmountHint,
+        ref decimal amount,
+        ref string raw,
+        string mergedFullTextForFraction)
+    {
+        if (!IsLikelyWordAmountDiFieldKey(fieldKey) || numericAmountHint <= 0)
+            return true;
+
+        var thresh = Math.Max(2m, numericAmountHint * 0.05m);
+        if (Math.Abs(amount - numericAmountHint) <= thresh)
+            return true;
+
+        var text = (field.Content ?? field.ValueString ?? string.Empty).Trim();
+        if (text.Length < 12 || !Regex.IsMatch(text, @"(?i)\b(hundred|thousand)\b"))
+            return true;
+
+        if (!TryParseAmountFromWords(text, out var wordsAmt, mergedFullTextForFraction))
+            return false;
+
+        amount = wordsAmt;
+        raw = text;
+        return true;
     }
 
     /// <summary>DI <see cref="AnalyzeResult.Content"/> 逐行兜底：过滤明显非「英文大写金额」行。</summary>
@@ -891,7 +1077,176 @@ public class AzureOcrService : IOcrService
         ["million"] = 1_000_000
     };
 
-    internal static bool TryParseAmountFromWords(string? source, out decimal amount)
+    /// <summary>支票票面「分列」：**独立行 XX/100** 或 **`$`** 上方的 **单列 1～2 位分**（如 Pay 带宽里误拆出的 <c>54</c>）。</summary>
+    private static readonly Regex StandaloneHundredthsOnlyLineRegex = new(
+        @"^\s*(\d{1,2})\s*/\s*100(?:%|\s+%|\s+percent|\s+pct)?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex BareDigitsOneOrTwoCentsCandidateLineRegex = new(
+        @"^\d{1,2}$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// 当英文金额行内未含 <c>xx/100</c> 时，从全文拾取「仅分列」行（多行时取首个出现在含 <c>$</c> 数字行之后的候选；若无则试行内 <c>$</c> 上方的紧邻裸分数字）。
+    /// </summary>
+    private static bool TryPickStandaloneHundredthsFromFullText(string fullText, out int cents)
+    {
+        cents = 0;
+        if (string.IsNullOrWhiteSpace(fullText))
+            return false;
+
+        var lines = fullText.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        static int LocateFirstPrintDollarLineIndex(string[] L)
+        {
+            for (var i = 0; i < L.Length; i++)
+            {
+                if (!L[i].Contains('$', StringComparison.Ordinal) || !Regex.IsMatch(L[i], @"\d"))
+                    continue;
+                return i;
+            }
+
+            return -1;
+        }
+
+        var fracHits = new List<(int idx, int c)>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var t = lines[i].Trim();
+            if (t.Contains('⑆', StringComparison.Ordinal) || t.Contains('⑈', StringComparison.Ordinal))
+                continue;
+            var m = StandaloneHundredthsOnlyLineRegex.Match(t);
+            if (m.Success
+                && int.TryParse(
+                    m.Groups[1].Value,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var v)
+                && v is >= 0 and <= 99)
+                fracHits.Add((i, v));
+        }
+
+        var dollarIdx = LocateFirstPrintDollarLineIndex(lines);
+
+        if (fracHits.Count > 1)
+        {
+            if (dollarIdx < 0)
+                return false;
+
+            var afterBox = fracHits.Where(h => h.idx > dollarIdx).OrderBy(h => h.idx).ToList();
+            if (afterBox.Count == 0)
+                return TryPickBareCentsDigitsAbovePrimaryDollarLine(lines, dollarIdx, out cents);
+
+            cents = afterBox[0].c;
+            return true;
+        }
+
+        if (fracHits.Count == 1)
+        {
+            cents = fracHits[0].c;
+            return true;
+        }
+
+        // 无 NN/100：试一试「分列裸分」（例：PAY 带宽里单独一行 <c>54</c> 紧贴 <c>$ 10148 00</c> 上方）
+        if (dollarIdx >= 0 && TryPickBareCentsDigitsAbovePrimaryDollarLine(lines, dollarIdx, out cents))
+            return true;
+
+        return false;
+    }
+
+    /// <summary>首处含金额符号的 $<c>...</c>$ 行之上的「裸 1～2 位数字」分列分；需与同段 **PAY / TO THE / ORDER OF** 等词同带。</summary>
+    private static bool TryPickBareCentsDigitsAbovePrimaryDollarLine(
+        string[] lines,
+        int dollarLineIdx,
+        out int cents)
+    {
+        cents = 0;
+        const int AboveWindow = 12;
+        var start = Math.Max(0, dollarLineIdx - AboveWindow);
+
+        var candidates = new List<(int idx, int centsValue, bool twoDigits)>();
+        for (var i = start; i < dollarLineIdx; i++)
+        {
+            var t = lines[i].Trim();
+            if (t.Contains('⑆', StringComparison.Ordinal)
+                || t.Contains('⑈', StringComparison.Ordinal)
+                || t.Contains('$', StringComparison.Ordinal))
+                continue;
+
+            if (!BareDigitsOneOrTwoCentsCandidateLineRegex.IsMatch(t))
+                continue;
+
+            if (!int.TryParse(
+                    t,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var cc)
+                || cc is < 1 or > 99)
+                continue;
+
+            if (!SpansPayOrderLegalBandIncluding(lines, candidateLineIndex: i, dollarLineIdx))
+                continue;
+
+            candidates.Add((i, cc, cc >= 10));
+        }
+
+        if (candidates.Count == 0)
+            return false;
+
+        // 靠 $ 更近优先；两位数（54）优先于单行 5
+        candidates.Sort(static (a, b) =>
+        {
+            var cmp = -a.twoDigits.CompareTo(b.twoDigits);
+            if (cmp != 0)
+                return cmp;
+            return -a.idx.CompareTo(b.idx);
+        });
+
+        cents = candidates[0].centsValue;
+        return true;
+    }
+
+    private static bool SpansPayOrderLegalBandIncluding(string[] lines, int candidateLineIndex, int dollarLineIdx)
+    {
+        var lo = Math.Max(0, candidateLineIndex - 8);
+        for (var j = lo; j <= dollarLineIdx; j++)
+            if (LineHintsPrintedLegalAmountProximity(lines[j]))
+                return true;
+        return false;
+    }
+
+    internal static decimal RefineLegalCentsAgainstVisionSpilledLine(
+        decimal parsed,
+        decimal numericAmountHint,
+        string mergedFull)
+    {
+        if (string.IsNullOrWhiteSpace(mergedFull) || numericAmountHint <= 1m)
+            return parsed;
+
+        var wholeParsed = decimal.Truncate(parsed + 0.00000005m);
+        var wholeHint = decimal.Truncate(numericAmountHint + 0.00000005m);
+
+        // 票面数字常为「元」对齐；不写死容差过小以免 10147/10148 OCR 漂移
+        if (Math.Abs(wholeParsed - wholeHint) > 2m)
+            return parsed;
+
+        if (!TryPickStandaloneHundredthsFromFullText(mergedFull, out var picked) || picked is < 1 or > 99)
+            return parsed;
+
+        var centsFromParsed = decimal.ToInt32(
+            decimal.Round((parsed % 1m) * 100m, 0, MidpointRounding.AwayFromZero));
+
+        return centsFromParsed == picked ? parsed : wholeParsed + picked / 100m;
+    }
+
+    private static bool LineHintsPrintedLegalAmountProximity(string line) =>
+        Regex.IsMatch(line, @"(?i)\b(order of|pay to|to the|pay\b)\b|\bT\.?O\.?\b");
+
+
+    internal static bool TryParseAmountFromWords(
+        string? source,
+        out decimal amount,
+        string? fullTextForStandaloneFraction = null)
     {
         amount = 0m;
         if (string.IsNullOrWhiteSpace(source))
@@ -899,13 +1254,6 @@ public class AzureOcrService : IOcrService
 
         var working = source.Trim();
         working = working.Replace('／', '/').Replace('∕', '/').Replace('％', '%');
-
-        // 「… one hundred forty-eight and 54/100」粘连 OCR 为「… one hundred and yourty eight por」（yourty=forty；por≈percent/分列）；若不展开则只能按词得 10148.00。
-        working = Regex.Replace(
-            working,
-            @"(?is)\bten\s+thousand\s+one\s+hundred\s+and\s+yourty\s+eight\s+por\s+DOLLARS\b",
-            "Ten thousand one hundred forty-eight and 54/100 dollars",
-            RegexOptions.IgnoreCase);
 
         var lower = working.ToLowerInvariant();
 
@@ -991,6 +1339,11 @@ public class AzureOcrService : IOcrService
         total += current;
         if (total <= 0 && cents <= 0)
             return false;
+
+        if (cents == 0 && !string.IsNullOrWhiteSpace(fullTextForStandaloneFraction)
+                         && TryPickStandaloneHundredthsFromFullText(fullTextForStandaloneFraction, out var pickedCents))
+            cents = pickedCents;
+
         amount = total + cents / 100m;
         return amount > 0m;
     }

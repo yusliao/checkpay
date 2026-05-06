@@ -14,6 +14,7 @@ public sealed class AdminTrainingOcrService(IOcrService primary) : IAdminTrainin
     public Task<AmountValidationResult> ValidateHandwrittenAmountAsync(
         string imageUrl,
         decimal numericAmount,
-        CancellationToken cancellationToken = default)
-        => primary.ValidateHandwrittenAmountAsync(imageUrl, numericAmount, cancellationToken);
+        CancellationToken cancellationToken = default,
+        string? companionFullTextForLegalAmount = null)
+        => primary.ValidateHandwrittenAmountAsync(imageUrl, numericAmount, cancellationToken, companionFullTextForLegalAmount);
 }

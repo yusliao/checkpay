@@ -921,7 +921,12 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
             var oldError = tracked.AmountValidationErrorMessage;
             var oldResult = tracked.AmountValidationResult?.RootElement.GetRawText();
 
-            var result = await OcrService.ValidateHandwrittenAmountAsync(tracked.ImageUrl, _amount);
+            var visionExtractedText = OcrResultRawJsonReaders.TryReadExtractedText(PrimaryCheckOcrPayload(tracked));
+            var result = await OcrService.ValidateHandwrittenAmountAsync(
+                tracked.ImageUrl,
+                _amount,
+                CancellationToken.None,
+                visionExtractedText);
             tracked.AmountValidationResult?.Dispose();
             tracked.AmountValidationResult = JsonDocument.Parse(JsonSerializer.Serialize(result));
             tracked.AmountValidationStatus = result.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
@@ -932,6 +937,17 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
             tracked.AmountValidationErrorMessage = result.Reason;
             tracked.AmountValidatedAt = DateTime.UtcNow;
             tracked.UpdatedAt = DateTime.UtcNow;
+
+            if (tracked.RawResult != null)
+            {
+                var merged = OcrRawResultAmountValidationDiagnostics.MergeIntoRawJson(
+                    tracked.RawResult,
+                    tracked.AmountValidationResult,
+                    tracked.AmountValidationStatus,
+                    tracked.AmountValidationErrorMessage);
+                tracked.RawResult.Dispose();
+                tracked.RawResult = merged;
+            }
 
             await DbContext.SaveChangesAsync();
             try

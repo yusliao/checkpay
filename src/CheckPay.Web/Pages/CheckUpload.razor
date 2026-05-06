@@ -921,7 +921,9 @@ else
                 return;
             }
 
-            var diResult = await OcrService.ValidateHandwrittenAmountAsync(imageUrl, _amount);
+            var visionExtractedText = OcrResultRawJsonReaders.TryReadExtractedText(GetPreferredOcrDocument(_current));
+            var diResult =
+                await OcrService.ValidateHandwrittenAmountAsync(imageUrl, _amount, CancellationToken.None, visionExtractedText);
 
             AmountValidationStatus oldStatus = default;
             string? oldError = null;
@@ -948,6 +950,17 @@ else
                 tracked.AmountValidationErrorMessage = diResult.Reason;
                 tracked.AmountValidatedAt = DateTime.UtcNow;
                 tracked.UpdatedAt = DateTime.UtcNow;
+
+                if (tracked.RawResult != null)
+                {
+                    var merged = OcrRawResultAmountValidationDiagnostics.MergeIntoRawJson(
+                        tracked.RawResult,
+                        tracked.AmountValidationResult,
+                        tracked.AmountValidationStatus,
+                        tracked.AmountValidationErrorMessage);
+                    tracked.RawResult.Dispose();
+                    tracked.RawResult = merged;
+                }
 
                 await DbContext.SaveChangesAsync();
                 trackedAfter = tracked;
@@ -986,6 +999,16 @@ else
             }
 
             _ocrResult = trackedAfter;
+            if (_current != null
+                && _current.OcrResultId == trackedAfter.Id
+                && trackedAfter.RawResult != null)
+            {
+                _current.RawResult?.Dispose();
+                _current.RawResult =
+                    JsonDocument.Parse(trackedAfter.RawResult.RootElement.GetRawText());
+            }
+
+            RefreshOcrCopyPanelText();
             Snackbar.Add("手写金额校验已完成", Severity.Success);
             StateHasChanged();
         }

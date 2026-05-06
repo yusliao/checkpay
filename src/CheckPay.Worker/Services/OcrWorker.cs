@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using CheckPay.Application.Common;
 using CheckPay.Application.Common.Interfaces;
 using CheckPay.Domain.Entities;
 using CheckPay.Domain.Enums;
@@ -119,6 +120,7 @@ public class OcrWorker : BackgroundService
             ocrResult.ConfidenceScores = JsonDocument.Parse(JsonSerializer.Serialize(result.ConfidenceScores));
             ocrResult.Status = OcrStatus.Completed;
             await RunAmountValidationAsync(azureService, result, ocrResult, stoppingToken);
+            PatchRawResultWithAmountValidationDiagnostics(ocrResult);
 
             ocrResult.AzureRawResult?.Dispose();
             ocrResult.AzureRawResult = null;
@@ -190,7 +192,11 @@ public class OcrWorker : BackgroundService
 
         try
         {
-            var validation = await azureService.ValidateHandwrittenAmountAsync(entity.ImageUrl, ocr.Amount, cancellationToken);
+            var validation = await azureService.ValidateHandwrittenAmountAsync(
+                entity.ImageUrl,
+                ocr.Amount,
+                cancellationToken,
+                ocr.ExtractedText);
             entity.AmountValidationResult = JsonDocument.Parse(JsonSerializer.Serialize(validation));
             entity.AmountValidationStatus = validation.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
                 ? AmountValidationStatus.Completed
@@ -207,6 +213,19 @@ public class OcrWorker : BackgroundService
             if (!_amountValidationFailOpen)
                 throw;
         }
+    }
+
+    private static void PatchRawResultWithAmountValidationDiagnostics(OcrResult entity)
+    {
+        if (entity.RawResult is null)
+            return;
+        var merged = OcrRawResultAmountValidationDiagnostics.MergeIntoRawJson(
+            entity.RawResult,
+            entity.AmountValidationResult,
+            entity.AmountValidationStatus,
+            entity.AmountValidationErrorMessage);
+        entity.RawResult.Dispose();
+        entity.RawResult = merged;
     }
 
     private static bool WeakCourtesyAmountParseModeOcrStillRunValidation(OcrResultDto ocr)

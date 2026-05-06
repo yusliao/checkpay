@@ -7,7 +7,8 @@ public interface IOcrService
     Task<AmountValidationResult> ValidateHandwrittenAmountAsync(
         string imageUrl,
         decimal numericAmount,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? companionFullTextForLegalAmount = null);
 }
 
 /// <summary>

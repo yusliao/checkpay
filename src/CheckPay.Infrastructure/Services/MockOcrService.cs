@@ -69,7 +69,8 @@ public class MockOcrService : IOcrService
     public Task<AmountValidationResult> ValidateHandwrittenAmountAsync(
         string imageUrl,
         decimal numericAmount,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? companionFullTextForLegalAmount = null)
     {
         var legalAmount = Math.Round(numericAmount, 2);
         var outcome = new AmountValidationResult(

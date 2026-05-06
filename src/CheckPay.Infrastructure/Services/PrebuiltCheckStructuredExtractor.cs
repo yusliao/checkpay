@@ -15,6 +15,7 @@ internal static class PrebuiltCheckStructuredExtractor
 
         var doc = result.Documents[0];
         var f = new PrebuiltCheckStructuredFields();
+        var bodyText = result.Content ?? string.Empty;
 
         TryFillMicrNested(doc, f);
         f.BankName = GetPlainString(doc, "BankName");
@@ -26,7 +27,37 @@ internal static class PrebuiltCheckStructuredExtractor
         f.CheckDate = GetDateField(doc, "CheckDate");
         f.CheckDateConfidence = GetFieldConfidence(doc, "CheckDate");
 
+        if (TryGetWordAmountField(doc, out var wordField, out var wordKey))
+        {
+            var raw = ReadStringField(wordField);
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                f.WordAmountRaw = raw;
+                f.WordAmountConfidence = GetFieldConfidence(doc, wordKey);
+                if (AzureOcrService.TryParseAmountFromWords(raw, out var wp, bodyText))
+                    f.WordAmountParsed = wp;
+            }
+        }
+
         return f;
+    }
+
+    /// <summary>prebuilt-check.us 英文金额（与 <see cref="AzureOcrService.TryParseAmountFromWords"/> + 全文分列 <c>XX/100</c>）。</summary>
+    private static bool TryGetWordAmountField(AnalyzedDocument doc, out DocumentField? field, out string keyUsed)
+    {
+        foreach (var key in new[] { "WordAmount", "AmountInWords", "AmountWritten", "LegalAmount" })
+        {
+            if (doc.Fields.TryGetValue(key, out var f) && f is not null)
+            {
+                field = f;
+                keyUsed = key;
+                return true;
+            }
+        }
+
+        field = null;
+        keyUsed = string.Empty;
+        return false;
     }
 
     private static void TryFillMicrNested(AnalyzedDocument doc, PrebuiltCheckStructuredFields target)
@@ -129,4 +160,12 @@ internal sealed class PrebuiltCheckStructuredFields
     public double NumberAmountConfidence { get; set; }
     public DateTime? CheckDate { get; set; }
     public double CheckDateConfidence { get; set; }
+
+    /// <summary>DI <c>WordAmount</c> / <c>AmountInWords</c> 原始文本（若有）。</summary>
+    public string? WordAmountRaw { get; set; }
+
+    public double WordAmountConfidence { get; set; }
+
+    /// <summary>经 <see cref="AzureOcrService.TryParseAmountFromWords"/> 与全文 <c>XX/100</c> 分立行解析后的金额（可能为 null）。</summary>
+    public decimal? WordAmountParsed { get; set; }
 }

@@ -57,8 +57,33 @@ public static class OcrCheckCopyPanelFormatter
         sb.AppendLine($"  \"company_name\": {JsonVal(ach.CompanyName)},");
         sb.AppendLine($"  \"check_number_micr\": {JsonVal(ach.CheckNumberMicr)},");
         sb.AppendLine($"  \"micr_line_raw\": {JsonVal(ach.MicrLineRaw)},");
+        AppendDiagnosticsHandwrittenSnippet(sb, result.Diagnostics);
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    private static void AppendDiagnosticsHandwrittenSnippet(StringBuilder sb, IReadOnlyDictionary<string, string>? diagnostics)
+    {
+        if (diagnostics is null)
+            return;
+
+        AppendDiagnosticPropertyLine(sb, diagnostics, "di_amount_validation_status");
+        AppendDiagnosticPropertyLine(sb, diagnostics, "di_handwritten_di_service_status");
+        AppendDiagnosticPropertyLine(sb, diagnostics, "di_handwritten_legal_amount_raw");
+        AppendDiagnosticPropertyLine(sb, diagnostics, "di_handwritten_legal_amount_parsed");
+        AppendDiagnosticPropertyLine(sb, diagnostics, "di_handwritten_validation_confidence");
+        AppendDiagnosticPropertyLine(sb, diagnostics, "di_handwritten_is_consistent");
+        AppendDiagnosticPropertyLine(sb, diagnostics, "di_handwritten_validation_reason");
+    }
+
+    private static void AppendDiagnosticPropertyLine(
+        StringBuilder sb,
+        IReadOnlyDictionary<string, string> diagnostics,
+        string key)
+    {
+        if (!diagnostics.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
+            return;
+        sb.AppendLine($"  \"{key}\": {JsonVal(value)},");
     }
 
     private static string JsonVal(string? v) => v == null ? "null" : $"\"{v}\"";

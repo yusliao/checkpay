@@ -65,6 +65,22 @@ public class CheckOcrVisionReadParserTests
     }
 
     [Fact]
+    public void ParseAmount_DollarSpaceSeparatedCents10148_AlignsVisionReadBox()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Alliance Food", 0.36, 0.34, 0.32, 0.36, 0.22, 0.48),
+            new ReadOcrLine("PAY", 0.10, 0.30, 0.28, 0.32, 0.40, 0.52),
+            new ReadOcrLine("$ 10148 00", 0.44, 0.42, 0.40, 0.52, 0.30, 0.58),
+            new ReadOcrLine("ORDER OF", 0.10, 0.52, 0.50, 0.56, 0.42, 0.62),
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var (amount, conf) = CheckOcrVisionReadParser.ParseAmount(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal(10148.00m, amount);
+        Assert.True(conf >= 0.6);
+    }
+
+    [Fact]
     public void ParseDate_PrefersLineInDatePriorRegion()
     {
         var lines = new[]

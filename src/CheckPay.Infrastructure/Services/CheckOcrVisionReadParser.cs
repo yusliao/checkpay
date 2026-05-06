@@ -86,6 +86,11 @@ internal static class CheckOcrVisionReadParser
         @"\$\s*([\d,]{1,9})\s*[-–]\s*(\d{2})\b",
         RegexOptions.Compiled);
 
+    /// <summary>票面金额（Read 常见断字）：<c>$ 10148 00</c>（美元整数 + 空白 + 两位分，无小数点）。</summary>
+    private static readonly Regex AmountDollarSpaceCentsRegex = new(
+        @"\$\s*([\d,]{1,9})\s+(\d{2})\b",
+        RegexOptions.Compiled);
+
     private static readonly Regex DateRegex = new(
         @"\b(?:(?:0?[1-9]|1[0-2])[/\-](?:0?[1-9]|[12]\d|3[01])[/\-](?:\d{4}|\d{2})|" +
         @"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b",
@@ -992,6 +997,22 @@ internal static class CheckOcrVisionReadParser
                 scored.Add((v, score));
             }
 
+            foreach (Match sm in AmountDollarSpaceCentsRegex.Matches(line.Text))
+            {
+                var dollars = sm.Groups[1].Value.Replace(",", "");
+                var centsPart = sm.Groups[2].Value;
+                if (!decimal.TryParse(dollars, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dInt))
+                    continue;
+                if (!int.TryParse(centsPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cents2)
+                    || cents2 is < 0 or > 99)
+                    continue;
+                var v = dInt + cents2 / 100m;
+                if (v <= 0m)
+                    continue;
+                var score = ScoreAmountCandidate(line, hasDollar: true, profile, extraBoost: 0.22);
+                scored.Add((v, score));
+            }
+
             foreach (Match m in AmountRegex.Matches(line.Text))
             {
                 var raw = (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).Replace(",", "");
@@ -1062,6 +1083,17 @@ internal static class CheckOcrVisionReadParser
             var hv = hd + hc / 100m;
             if (hv > 0m)
                 return (hv, 0.70);
+        }
+
+        var spaceCents = AmountDollarSpaceCentsRegex.Match(text);
+        if (spaceCents.Success
+            && decimal.TryParse(spaceCents.Groups[1].Value.Replace(",", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sd)
+            && int.TryParse(spaceCents.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sc)
+            && sc is >= 0 and <= 99)
+        {
+            var sv = sd + sc / 100m;
+            if (sv > 0m)
+                return (sv, 0.70);
         }
 
         var commaDec = AmountDollarCommaDecimalRegex.Match(text);

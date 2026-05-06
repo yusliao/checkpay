@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-05-06** - 支票 **Vision 金额**：识别 **`$ 10148 00`** 类版样（**整数与两位分之间为空格、无小数点**），`AmountDollarSpaceCentsRegex`；`ParseAmount` / `ParseAmountFullText` 与 hyphen 票面金额同级加权；单测 `ParseAmount_DollarSpaceSeparatedCents10148_AlignsVisionReadBox`；排查文档 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
 - **2026-05-06** - **客户主数据 → 支票表单扩展**：`customers` 新增可空 **`expected_account_type` / `expected_pay_to_order_of`**；客户新增/编辑、CSV（表头末尾两列可选，旧文件无该列仍兼容）、首次入库自动建档时写入；命中账号+ABA 时 `SyncCustomerFromMasterAsync` 与已有期望字段一并同步上传/复核（**Account Type**、**Pay to the order of** 与银行/公司/地址等同策略）；迁移 `AddCustomerExpectedAccountTypePayTo`；单测 `CustomerMasterSyncTests`、`CustomerCsvImportExportTests`
 - **2026-05-06** - 支票 **`bank_name` / `company_name`（Truist+Yamato 类版式）**：**磁墨上方**品牌辅带 `normY` **扩至约 0.94**（短品牌加分同步）以免漏 **Truist** 等紧贴底栏行；**公司名**对 **最上沿单行字母商号**加分、对中部 **group/holding** 目录展示名降权，优先页眉出票方而非 **Pay to** 的 **Alliance Food Group**；单测 `ParseBankName_PrefersMicrAdjacentTruistOverTopRemitterWord`、`ParseCompanyName_PrefersTopHeaderWordOverPayToGroupLine`
 - **2026-05-06** - **MICR 支票号**：`TryPickBracketedMicrCheckShortPairFallback` 在 **`⑆路由⑆` 与右段 `⑈` 字块间有换行**且**右段 ≥9 位**时取右段（如独立行 `562203631⑈`），右段 8 位时仍取左短段（Peoples 换行长账号）；单测 `ParseCheckNumber_SkipsZip*` / `ParseCheckNumber_PeoplesStyle_*`

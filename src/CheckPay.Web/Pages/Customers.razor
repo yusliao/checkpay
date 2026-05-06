@@ -44,6 +44,47 @@
     </MudStack>
 </MudStack>
 
+<MudPaper Class="pa-4 mb-4">
+    <MudGrid>
+        <MudItem xs="12" md="4">
+            <MudTextField @bind-Value="_filterAccountNumber"
+                          Label="支票账户（客户账号）"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Placeholder="支持部分匹配"
+                          Clearable="true" />
+        </MudItem>
+        <MudItem xs="12" md="4">
+            <MudTextField @bind-Value="_filterAba"
+                          Label="ABA 路由号"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Placeholder="9 位或部分数字"
+                          Clearable="true" />
+        </MudItem>
+        <MudItem xs="12" md="4">
+            <MudTextField @bind-Value="_filterRestaurantId"
+                          Label="餐馆编号"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Placeholder="支持部分匹配"
+                          Clearable="true" />
+        </MudItem>
+        <MudItem xs="12" Class="d-flex flex-wrap" Style="gap:8px">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       OnClick="SearchAsync"
+                       Disabled="@(_loading || _importing)">
+                查询
+            </MudButton>
+            <MudButton Variant="Variant.Outlined"
+                       OnClick="ResetFiltersAsync"
+                       Disabled="@_importing">
+                重置
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
 <MudTable Items="@_customers" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" T="Customer" Dense="true">
     <HeaderContent>
         <MudTh>客户账号</MudTh>
@@ -149,14 +190,72 @@
     private int _customerTotalPages => Math.Max(1, (int)Math.Ceiling(_totalCustomers / (double)Math.Max(1, _customerPageSize)));
     private bool _loading = true;
     private bool _importing;
+    private string _filterAccountNumber = "";
+    private string _filterAba = "";
+    private string _filterRestaurantId = "";
 
     protected override async Task OnInitializedAsync() => await LoadData();
+
+    private static string SanitizeLikeFragment(string s) =>
+        string.IsNullOrEmpty(s)
+            ? s
+            : new string(s.Where(ch => ch is not '%' and not '_' and not '\\').ToArray());
+
+    private IQueryable<Customer> ApplyCustomerListFilters(IQueryable<Customer> query)
+    {
+        if (!string.IsNullOrWhiteSpace(_filterAccountNumber))
+        {
+            var t = SanitizeLikeFragment(_filterAccountNumber.Trim());
+            if (t.Length > 0)
+                query = query.Where(c => EF.Functions.ILike(c.CustomerCode, "%" + t + "%"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterAba))
+        {
+            var raw = _filterAba.Trim();
+            var digits = string.Concat(raw.Where(char.IsDigit));
+            if (digits.Length == 9)
+                query = query.Where(c => c.ExpectedRoutingNumber == digits);
+            else if (digits.Length > 0)
+                query = query.Where(c => c.ExpectedRoutingNumber.Contains(digits));
+            else
+            {
+                var t = SanitizeLikeFragment(raw);
+                if (t.Length > 0)
+                    query = query.Where(c => EF.Functions.ILike(c.ExpectedRoutingNumber, "%" + t + "%"));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterRestaurantId))
+        {
+            var t = SanitizeLikeFragment(_filterRestaurantId.Trim());
+            if (t.Length > 0)
+                query = query.Where(c => EF.Functions.ILike(c.MobilePhone, "%" + t + "%"));
+        }
+
+        return query;
+    }
+
+    private async Task SearchAsync()
+    {
+        _customerPage = 1;
+        await LoadData();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _filterAccountNumber = "";
+        _filterAba = "";
+        _filterRestaurantId = "";
+        _customerPage = 1;
+        await LoadData();
+    }
 
     private async Task ExportCsvAsync()
     {
         try
         {
-            var list = await DbContext.Customers
+            var list = await ApplyCustomerListFilters(DbContext.Customers.AsQueryable())
                 .Include(c => c.CompanyNames)
                 .OrderBy(c => c.CustomerCode)
                 .ThenBy(c => c.ExpectedRoutingNumber)
@@ -318,19 +417,20 @@
         _loading = true;
         try
         {
-            var query = DbContext.Customers
-                .Include(c => c.CompanyNames)
+            var filtered = ApplyCustomerListFilters(DbContext.Customers.AsQueryable());
+            var ordered = filtered
                 .OrderBy(c => c.CustomerCode)
                 .ThenBy(c => c.ExpectedRoutingNumber);
-            _totalCustomers = await query.CountAsync();
+            _totalCustomers = await ordered.CountAsync();
             if (_customerPage > _customerTotalPages)
                 _customerPage = _customerTotalPages;
             if (_customerPage < 1)
                 _customerPage = 1;
             var skip = (_customerPage - 1) * _customerPageSize;
-            _customers = await query
+            _customers = await ordered
                 .Skip(skip)
                 .Take(_customerPageSize)
+                .Include(c => c.CompanyNames)
                 .ToListAsync();
         }
         finally

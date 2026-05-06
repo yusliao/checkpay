@@ -30,6 +30,20 @@
                               Margin="Margin.Dense" />
                 <MudTextField @bind-Value="_editExpectedAddress" Label="客户地址" Variant="Variant.Outlined" Margin="Margin.Dense"
                               Lines="2" />
+                <MudSelect T="string" @bind-Value="_editExpectedAccountType" Label="期望账户类型（可选，用于支票上传自动填）"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                    <MudSelectItem Value="@("")">（不维护）</MudSelectItem>
+                    <MudSelectItem Value="@CheckAccountTypeCatalog.BusinessChecking">@CheckAccountTypeCatalog.BusinessChecking</MudSelectItem>
+                    <MudSelectItem Value="@CheckAccountTypeCatalog.Savings">@CheckAccountTypeCatalog.Savings</MudSelectItem>
+                </MudSelect>
+                <MudSelect T="string" @bind-Value="_editExpectedPayTo" Label="期望 Pay to 收款方（可选）" Variant="Variant.Outlined"
+                           Margin="Margin.Dense" Clearable="true">
+                    <MudSelectItem Value="@("")">（不维护）</MudSelectItem>
+                    @foreach (var p in PayToOrderOfCatalog.All)
+                    {
+                        <MudSelectItem Value="@p">@p</MudSelectItem>
+                    }
+                </MudSelect>
                 <MudTextField @bind-Value="_editCompaniesRaw" Label="关联公司名称（每行一条）" Variant="Variant.Outlined"
                               Margin="Margin.Dense" Lines="4" />
                 <MudSelect @bind-Value="_editIsActive" Label="状态" Variant="Variant.Outlined" Margin="Margin.Dense">
@@ -83,6 +97,8 @@
     private string _editExpectedBank = "";
     private string _editOcrCompanyName = "";
     private string _editExpectedAddress = "";
+    private string _editExpectedAccountType = "";
+    private string _editExpectedPayTo = "";
     private string _editCompaniesRaw = "";
     private string _editMobilePhone = "";
     private bool _editIsActive;
@@ -126,6 +142,8 @@
             _editExpectedBank = c.ExpectedBankName ?? "";
             _editOcrCompanyName = c.ExpectedCompanyName ?? c.ExpectedAccountHolderName ?? "";
             _editExpectedAddress = c.ExpectedAccountAddress ?? "";
+            _editExpectedAccountType = c.ExpectedAccountType ?? "";
+            _editExpectedPayTo = c.ExpectedPayToOrderOf ?? "";
             _editIsActive = c.IsActive;
             _isAuthorized = c.IsAuthorized;
             _editMobilePhone = c.MobilePhone ?? "";
@@ -181,6 +199,8 @@
             c.ExpectedAccountHolderName = ocrName;
             c.ExpectedCompanyName = ocrName;
             c.ExpectedAccountAddress = string.IsNullOrWhiteSpace(_editExpectedAddress) ? null : _editExpectedAddress.Trim();
+            c.ExpectedAccountType = CustomerMasterSync.CanonicalAccountTypeForCustomerMaster(_editExpectedAccountType);
+            c.ExpectedPayToOrderOf = CustomerMasterSync.CanonicalPayToForCustomerMaster(_editExpectedPayTo);
             c.IsActive = _editIsActive;
             c.UpdatedAt = DateTime.UtcNow;
 

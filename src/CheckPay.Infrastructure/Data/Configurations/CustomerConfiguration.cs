@@ -32,6 +32,8 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.Property(e => e.ExpectedAccountHolderName).HasColumnName("expected_account_holder_name").HasMaxLength(300);
         builder.Property(e => e.ExpectedCompanyName).HasColumnName("expected_company_name").HasMaxLength(300);
         builder.Property(e => e.ExpectedAccountAddress).HasColumnName("expected_account_address").HasMaxLength(500);
+        builder.Property(e => e.ExpectedAccountType).HasColumnName("expected_account_type").HasMaxLength(80);
+        builder.Property(e => e.ExpectedPayToOrderOf).HasColumnName("expected_pay_to_order_of").HasMaxLength(300);
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
         builder.Property(e => e.DeletedAt).HasColumnName("deleted_at");

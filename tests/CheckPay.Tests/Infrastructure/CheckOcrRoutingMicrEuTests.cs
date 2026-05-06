@@ -248,6 +248,29 @@ public class CheckOcrRoutingMicrEuTests
         Assert.Equal("3122", cn);
     }
 
+    /// <summary>
+    /// Peoples Bank 等：<c>⑈短序号⑈ ⑆ABA⑆</c> 换行后 <c>账号…⑈</c>；max&lt;10 弃分类时勿取长账号作支票号（应 01340 / 展示 1340）。
+    /// </summary>
+    [Fact]
+    public void ParseCheckNumber_PeoplesStyle_BracketShortBeforeTransit_LongAccountNextLine_Is1340NotAccount()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{onUs}01340{onUs} {transit}084205452{transit}";
+        var micrLine2 = $"00326291{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.08, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.93, 0.92, 0.94, 0.08, 0.92)
+        };
+        var layout = new ReadOcrLayout(string.Join("\n", lines.Select(l => l.Text)), lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.True(
+            string.Equals(cn, "1340", StringComparison.Ordinal)
+            || string.Equals(cn, "01340", StringComparison.Ordinal),
+            $"unexpected check number: {cn}");
+    }
+
     /// <summary>无版头印刷序号时，磁墨两行「⑥ + ⑦」且 TryAssign 放弃：应取较短 bracket 序号为支票号。</summary>
     [Fact]
     public void ParseCheckNumber_MetroCityMicrOnly_ShortBracketSixDigitsBeatsTrailingSevenOnUs()

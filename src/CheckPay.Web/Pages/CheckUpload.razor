@@ -306,7 +306,7 @@ else
                         <MudTextField @bind-Value="_companyName" Label="公司名称（付款/开票主体）" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")" />
 
-                        @* 客户账号 (customer_code = 支票账号)；与 Routing Number（9 位 ABA）一起在主数据中唯一；手机号自动带出按二者匹配 *@
+                        @* 客户账号 (customer_code = 支票账号)；与 Routing Number（9 位 ABA）一起在主数据中唯一；手机号/期望银行、公司、地址、账户类型、Pay to 等按二者匹配自动带出 *@
                         <MudTextField @bind-Value="_customerCode"
                                       Label="客户账号"
                                       Required="true"
@@ -439,7 +439,7 @@ else
     private DateTime? _checkDate;
     private string _customerCode = "";
     private string _customerPhone = "";
-    /// <summary>最近一次从客户主数据自动带出手机号时对应的「账号 + ABA 路由键」，用于避免覆盖用户手工改过的手机号。</summary>
+    /// <summary>最近一次从客户主数据自动同步成功时对应的「账号 + ABA 路由键」，用于避免覆盖用户在同组合下的手工修改。</summary>
     private string? _lastCustomerCodeForAutoPhone;
     private string? _lastRoutingKeyForAutoPhone;
     private string _notes = "";
@@ -708,17 +708,17 @@ else
             }
         }
 
-        await SyncCustomerPhoneFromMasterAsync();
+        await SyncCustomerFromMasterAsync();
     }
 
     private async Task OnCustomerAccountBlurAsync(FocusEventArgs _)
-        => await SyncCustomerPhoneFromMasterAsync();
+        => await SyncCustomerFromMasterAsync();
 
     private Task OnAchRoutingBlurAsync(FocusEventArgs _)
-        => SyncCustomerPhoneFromMasterAsync();
+        => SyncCustomerFromMasterAsync();
 
-    /// <summary>客户账号有值时，从客户主数据（库内）按「账号 + 9 位 ABA」解析手机号并写入；OCR 写入或变更账号/路由时也会触发。</summary>
-    private async Task SyncCustomerPhoneFromMasterAsync(CancellationToken cancellationToken = default)
+    /// <summary>客户账号有值时，从客户主数据按「账号 + 9 位 ABA」同步手机号、期望银行名、公司/持有人、地址、账户类型、Pay to（空则填；账号+ABA 相对上次成功同步变化时可覆盖）；OCR 或手工变更账号/路由时也会触发。</summary>
+    private async Task SyncCustomerFromMasterAsync(CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(_customerCode))
         {
@@ -741,29 +741,35 @@ else
             else
                 query = query.Where(c => c.ExpectedRoutingNumber == "");
 
-            var row = await query.Select(c => new { c.MobilePhone }).FirstOrDefaultAsync(cancellationToken);
+            var rowEntity = await query.FirstOrDefaultAsync(cancellationToken);
+            CustomerMasterSync.MasterRow? masterRow = rowEntity == null
+                ? null
+                : new CustomerMasterSync.MasterRow(
+                    rowEntity.MobilePhone,
+                    rowEntity.ExpectedBankName,
+                    rowEntity.ExpectedCompanyName,
+                    rowEntity.ExpectedAccountHolderName,
+                    rowEntity.ExpectedAccountAddress,
+                    rowEntity.ExpectedAccountType,
+                    rowEntity.ExpectedPayToOrderOf);
 
-            if (row == null || string.IsNullOrWhiteSpace(row.MobilePhone))
-            {
-                if (_lastCustomerCodeForAutoPhone != null
-                    && (!string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase)
-                        || !string.Equals(_lastRoutingKeyForAutoPhone ?? "", routingKey, StringComparison.Ordinal)))
-                    _customerPhone = string.Empty;
-                _lastCustomerCodeForAutoPhone = null;
-                _lastRoutingKeyForAutoPhone = null;
-                return;
-            }
-
-            var compositeChanged = _lastCustomerCodeForAutoPhone != null
-                                   && (!string.Equals(_lastCustomerCodeForAutoPhone, code, StringComparison.OrdinalIgnoreCase)
-                                       || !string.Equals(_lastRoutingKeyForAutoPhone ?? "", routingKey, StringComparison.Ordinal));
-            var shouldApply = string.IsNullOrWhiteSpace(_customerPhone) || compositeChanged;
-            if (!shouldApply)
-                return;
-
-            _customerPhone = row.MobilePhone.Trim();
-            _lastCustomerCodeForAutoPhone = code;
-            _lastRoutingKeyForAutoPhone = routingKey;
+            var lastCode = _lastCustomerCodeForAutoPhone;
+            var lastRk = _lastRoutingKeyForAutoPhone;
+            CustomerMasterSync.ApplyToCheckFormFields(
+                masterRow,
+                code,
+                routingKey,
+                ref lastCode,
+                ref lastRk,
+                ref _customerPhone,
+                ref _bankName,
+                ref _companyName,
+                ref _accountHolderName,
+                ref _accountAddress,
+                ref _accountType,
+                ref _payToOrderOf);
+            _lastCustomerCodeForAutoPhone = lastCode;
+            _lastRoutingKeyForAutoPhone = lastRk;
         }, cancellationToken);
     }
 
@@ -1320,6 +1326,8 @@ else
             ExpectedAccountHolderName = ocrCompanyTrim,
             ExpectedCompanyName = ocrCompanyTrim,
             ExpectedAccountAddress = NullIfEmpty(_accountAddress),
+            ExpectedAccountType = CustomerMasterSync.CanonicalAccountTypeForCustomerMaster(_accountType),
+            ExpectedPayToOrderOf = CustomerMasterSync.CanonicalPayToForCustomerMaster(_payToOrderOf),
             IsActive = true,
             IsAuthorized = false,
             CreatedAt = DateTime.UtcNow,

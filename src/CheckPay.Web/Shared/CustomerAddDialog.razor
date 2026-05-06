@@ -17,6 +17,20 @@
             <MudTextField @bind-Value="_newExpectedBank" Label="关联银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_newOcrCompanyName" Label="票面公司名称（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_newExpectedAddress" Label="客户地址（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+            <MudSelect T="string" @bind-Value="_newExpectedAccountType" Label="期望账户类型（可选）" Variant="Variant.Outlined"
+                       Margin="Margin.Dense" Clearable="true">
+                <MudSelectItem Value="@("")">（不维护）</MudSelectItem>
+                <MudSelectItem Value="@CheckAccountTypeCatalog.BusinessChecking">@CheckAccountTypeCatalog.BusinessChecking</MudSelectItem>
+                <MudSelectItem Value="@CheckAccountTypeCatalog.Savings">@CheckAccountTypeCatalog.Savings</MudSelectItem>
+            </MudSelect>
+            <MudSelect T="string" @bind-Value="_newExpectedPayTo" Label="期望 Pay to 收款方（可选）" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Clearable="true">
+                <MudSelectItem Value="@("")">（不维护）</MudSelectItem>
+                @foreach (var p in PayToOrderOfCatalog.All)
+                {
+                    <MudSelectItem Value="@p">@p</MudSelectItem>
+                }
+            </MudSelect>
             <MudTextField @bind-Value="_newCompaniesRaw" Label="关联公司名称（每行一条，可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="4" />
             <MudText Typo="Typo.caption" Color="Color.Secondary">保存后授权状态默认为「未授权」，需在列表中确认后变为已授权。</MudText>
         </MudStack>
@@ -45,6 +59,8 @@
     private string _newOcrCompanyName = "";
     private string _newExpectedAddress = "";
     private string _newExpectedRouting = "";
+    private string _newExpectedAccountType = "";
+    private string _newExpectedPayTo = "";
     private string _newCompaniesRaw = "";
 
     private Task CancelAsync()
@@ -92,6 +108,8 @@
                 ExpectedAccountHolderName = ocrName,
                 ExpectedCompanyName = ocrName,
                 ExpectedAccountAddress = string.IsNullOrWhiteSpace(_newExpectedAddress) ? null : _newExpectedAddress.Trim(),
+                ExpectedAccountType = CustomerMasterSync.CanonicalAccountTypeForCustomerMaster(_newExpectedAccountType),
+                ExpectedPayToOrderOf = CustomerMasterSync.CanonicalPayToForCustomerMaster(_newExpectedPayTo),
                 IsActive = true,
                 IsAuthorized = false,
                 CreatedAt = now,

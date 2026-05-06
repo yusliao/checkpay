@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Azure;
 using Azure.AI.DocumentIntelligence;
@@ -28,6 +29,7 @@ public class AzureOcrService : IOcrService
     private readonly bool _amountFallbackWhenVisionFails;
     private readonly bool _micrBottomBandSecondPassEnabled;
     private readonly double _micrBottomBandMinNormCenterY;
+    private readonly CheckImagePreprocessOptions _imagePreprocess;
 
     public AzureOcrService(
         IConfiguration configuration,
@@ -68,6 +70,7 @@ public class AzureOcrService : IOcrService
             "false",
             StringComparison.OrdinalIgnoreCase);
         _micrBottomBandMinNormCenterY = ParseMicrBottomBandThreshold(configuration["Ocr:Micr:BottomBandMinNormCenterY"]);
+        _imagePreprocess = CheckImagePreprocessOptions.FromConfiguration(configuration.GetSection("Ocr:ImagePreprocess"));
     }
 
     public async Task<OcrResultDto> ProcessCheckImageAsync(string imageUrl, CancellationToken cancellationToken = default)
@@ -79,6 +82,7 @@ public class AzureOcrService : IOcrService
         await imageStream.CopyToAsync(memoryStream, cancellationToken);
         memoryStream.Position = 0;
 
+        var imagePre = ApplyCheckImagePreprocessIfEnabled(memoryStream);
         var layout = await AnalyzeReadLayoutFromMemoryAsync(memoryStream, cancellationToken);
         var rawText = layout.FullText;
         _logger.LogInformation("Azure Vision OCR 提取原始文字: {RawText}", rawText);
@@ -128,6 +132,8 @@ public class AzureOcrService : IOcrService
             }
         }
         var (payToLine, payToConf) = CheckOcrVisionReadParser.ParsePayToOrderLine(rawText);
+        var (visionBankFiltered, visionBankConfFiltered) =
+            FilterVisionBankMatchingPayee(parsedBankName, parsedBankConf, payToLine);
 
         var iban = CheckOcrEuInstrumentParser.TryFindValidIban(rawText);
         var bic = CheckOcrEuInstrumentParser.TryFindBic(rawText);
@@ -205,8 +211,8 @@ public class AzureOcrService : IOcrService
         var mergedAcConf = micr.AccountConfidence;
         var mergedPayTo = payToLine;
         var mergedPayToConf = payToConf;
-        string? bankName = parsedBankName;
-        var bankNameConf = parsedBankConf;
+        string? bankName = visionBankFiltered;
+        var bankNameConf = visionBankConfFiltered;
         string? accountHolder = parsedHolderName;
         var accountHolderConf = parsedHolderConf;
         string? accountAddress = parsedAddress;
@@ -250,6 +256,16 @@ public class AzureOcrService : IOcrService
         {
             ["full_text_chars"] = rawText.Length.ToString(),
             ["read_line_count"] = layout.Lines.Count.ToString(),
+            ["image_preprocess_config_enabled"] = _imagePreprocess.Enabled.ToString(),
+            ["image_preprocess_mode"] = imagePre.Mode,
+            ["image_preprocess_pipeline_applied"] = imagePre.PipelineApplied.ToString(),
+            ["image_preprocess_skew_detected_deg"] = imagePre.SkewDetectedDeg.ToString("F2", CultureInfo.InvariantCulture),
+            ["image_preprocess_skew_applied_deg"] = imagePre.SkewAppliedDeg.ToString("F2", CultureInfo.InvariantCulture),
+            ["image_preprocess_content_trim"] = imagePre.ContentTrimApplied.ToString(),
+            ["image_preprocess_upscale"] = imagePre.UpscaleApplied.ToString(),
+            ["image_preprocess_fallback_reason"] = imagePre.FallbackReason ?? string.Empty,
+            ["image_preprocess_skew_applied_bucket"] = SkewAppliedBucket(imagePre.SkewAppliedDeg),
+            ["image_preprocess_perspective_correction"] = "skipped_not_implemented_use_deskew_content_trim",
             ["micr_hint_default_region_lines"] = micrHintLinesDefault.ToString(),
             ["micr_applied_template_region_lines"] = micrAppliedLines.ToString(),
             ["micr_selection_mode"] = micr.RoutingSelectionMode,
@@ -350,6 +366,64 @@ public class AzureOcrService : IOcrService
         return await _parsedSampleCorrector.ApplyIfMatchedAsync(dto, cancellationToken);
     }
 
+    private static string SkewAppliedBucket(double skewAppliedDeg)
+    {
+        var a = Math.Abs(skewAppliedDeg);
+        if (a < 0.5) return "lt0_5deg";
+        if (a < 2.0) return "0_5_to_2deg";
+        if (a < 6.0) return "2_to_6deg";
+        return "6deg_plus";
+    }
+
+    private readonly record struct CheckImagePreprocessTrace(
+        string Mode,
+        bool PipelineApplied,
+        double SkewDetectedDeg,
+        double SkewAppliedDeg,
+        bool ContentTrimApplied,
+        bool UpscaleApplied,
+        string? FallbackReason);
+
+    /// <summary>将预处理结果写回 <paramref name="memoryStream"/> 供 Vision Read 与 DI 共用；失败回退原字节。</summary>
+    private CheckImagePreprocessTrace ApplyCheckImagePreprocessIfEnabled(MemoryStream memoryStream)
+    {
+        if (!_imagePreprocess.Enabled)
+            return new CheckImagePreprocessTrace("off", false, 0, 0, false, false, null);
+
+        var r = CheckImagePreprocessor.TryPreprocessForCheck(memoryStream, _imagePreprocess, _logger);
+        try
+        {
+            if (!r.UsedPreprocessed)
+            {
+                return new CheckImagePreprocessTrace(
+                    r.Mode,
+                    false,
+                    r.SkewDegreesDetected,
+                    r.SkewDegreesApplied,
+                    r.ContentTrimApplied,
+                    r.MinSideUpscaleApplied,
+                    r.FallbackReason);
+            }
+
+            memoryStream.SetLength(0);
+            r.Stream.Position = 0;
+            r.Stream.CopyTo(memoryStream);
+            memoryStream.Position = 0;
+            return new CheckImagePreprocessTrace(
+                r.Mode,
+                true,
+                r.SkewDegreesDetected,
+                r.SkewDegreesApplied,
+                r.ContentTrimApplied,
+                r.MinSideUpscaleApplied,
+                r.FallbackReason);
+        }
+        finally
+        {
+            r.Stream.Dispose();
+        }
+    }
+
     private static int CountLinesInRegion(ReadOcrLayout layout, NormRegion? region)
     {
         if (region is null || layout.Lines.Count == 0)
@@ -396,6 +470,32 @@ public class AzureOcrService : IOcrService
             return mergedPayToConf;
 
         return Math.Clamp(Math.Max(mergedPayToConf, accountHolderConf) * 0.92, 0.12, 0.72);
+    }
+
+    /// <summary>
+    /// Vision Read 左上/中部误把收款人行当银行名时剔除，避免与 Pay to 重复；DI 融合仍可在其后补全银行名。
+    /// </summary>
+    private static (string? bankName, double conf) FilterVisionBankMatchingPayee(
+        string? visionBank,
+        double conf,
+        string? payTo)
+    {
+        if (string.IsNullOrWhiteSpace(visionBank) || string.IsNullOrWhiteSpace(payTo))
+            return (visionBank, conf);
+
+        static string Norm(string s) => Regex.Replace(s.Trim(), @"\s+", " ").ToLowerInvariant();
+
+        var bn = Norm(visionBank);
+        var pt = Norm(payTo);
+        if (bn == pt)
+            return (null, 0.1);
+        const int minSubstring = 8;
+        if (bn.Length >= minSubstring && pt.Contains(bn, StringComparison.Ordinal))
+            return (null, 0.1);
+        if (pt.Length >= minSubstring && bn.Contains(pt, StringComparison.Ordinal))
+            return (null, 0.1);
+
+        return (visionBank, conf);
     }
 
     private static void MergePrebuiltStructuredFields(

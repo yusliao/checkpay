@@ -58,6 +58,8 @@ public class CustomerCsvImportExportTests
             ExpectedCompanyName = "O1",
             ExpectedAccountHolderName = "O1",
             ExpectedAccountAddress = "A1",
+            ExpectedAccountType = CheckAccountTypeCatalog.Savings,
+            ExpectedPayToOrderOf = PayToOrderOfCatalog.CheungKongAllianceFood,
             IsActive = true,
             IsAuthorized = false,
             CompanyNames = new List<CustomerCompanyName>
@@ -76,5 +78,7 @@ public class CustomerCsvImportExportTests
         Assert.Equal("13900000000", rows[0].MobilePhone);
         Assert.False(rows[0].IsAuthorized);
         Assert.True(rows[0].IsActive);
+        Assert.Equal(CheckAccountTypeCatalog.Savings, rows[0].ExpectedAccountType);
+        Assert.Equal(PayToOrderOfCatalog.CheungKongAllianceFood, rows[0].ExpectedPayToOrderOf);
     }
 }

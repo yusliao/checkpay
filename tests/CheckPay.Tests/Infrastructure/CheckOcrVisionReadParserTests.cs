@@ -80,6 +80,28 @@ public class CheckOcrVisionReadParserTests
         Assert.Equal(15, date.Value.Day);
     }
 
+    /// <summary>票面印刷 hyphen 日与地址夹心应败给「手写日 + 独立 DATE 行」邻近（Peoples 类版式）。</summary>
+    [Fact]
+    public void ParseDate_PeoplesStyle_PrefersSlashDateAdjacentDateLabel_OverHyphenPrintedDateInAddressBand()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("YY FOOD INC", 0.3, 0.08, 0.06, 0.10, 0.05, 0.12),
+            new ReadOcrLine("708 CITY AVE S", 0.35, 0.10, 0.08, 0.12, 0.05, 0.16),
+            new ReadOcrLine("02-21-23", 0.3, 0.14, 0.12, 0.16, 0.05, 0.20),
+            new ReadOcrLine("RIPLEY, MS 38663", 0.42, 0.18, 0.14, 0.22, 0.05, 0.24),
+            new ReadOcrLine("1340", 0.92, 0.12, 0.08, 0.16, 0.76, 0.36),
+            new ReadOcrLine("5/4/26", 0.5, 0.36, 0.34, 0.38, 0.62, 0.44),
+            new ReadOcrLine("DATE", 0.3, 0.40, 0.36, 0.42, 0.05, 0.52)
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var (date, _) = CheckOcrVisionReadParser.ParseDate(layout, CheckOcrParsingProfile.Default);
+        Assert.NotNull(date);
+        Assert.Equal(2026, date.Value.Year);
+        Assert.Equal(5, date.Value.Month);
+        Assert.Equal(4, date.Value.Day);
+    }
+
     [Fact]
     public void ParseBankName_PrefersTopLeftBankCandidate()
     {
@@ -114,6 +136,24 @@ public class CheckOcrVisionReadParserTests
         var (bankName, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
 
         Assert.Equal("Wells Fargo, N.A.", bankName);
+    }
+
+    /// <summary>左上角 remitter 名单字行勿覆盖磁墨正上方付款行短品牌（如 Truist）。</summary>
+    [Fact]
+    public void ParseBankName_PrefersMicrAdjacentTruistOverTopRemitterWord()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Yamato", 0.42, 0.08, 0.05, 0.11, 0.08, 0.40),
+            new ReadOcrLine("Alliance Food Group", 0.40, 0.48, 0.45, 0.51, 0.12, 0.68),
+            new ReadOcrLine("Truist", 0.35, 0.82, 0.78, 0.86, 0.10, 0.88),
+            new ReadOcrLine("⑈001230⑈ ⑆053201607⑆1410019144140⑈", 0.48, 0.92, 0.88, 0.96, 0.08, 0.94)
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+
+        var (bankName, _) = CheckOcrVisionReadParser.ParseBankName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("Truist", bankName);
     }
 
     [Fact]
@@ -268,6 +308,24 @@ public class CheckOcrVisionReadParserTests
         var (company, _) = CheckOcrVisionReadParser.ParseCompanyName(layout, CheckOcrParsingProfile.Default);
 
         Assert.Equal("168 CHINA GARDEN INC.", company);
+    }
+
+    /// <summary>页眉单行商号（出票方）优先于 Pay to 目录里的「… Group」展示名。</summary>
+    [Fact]
+    public void ParseCompanyName_PrefersTopHeaderWordOverPayToGroupLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("Yamato", 0.42, 0.08, 0.05, 0.11, 0.08, 0.40),
+            new ReadOcrLine("46 Terrace Dr Ste 104", 0.38, 0.14, 0.11, 0.16, 0.10, 0.48),
+            new ReadOcrLine("Alliance Food Group", 0.40, 0.46, 0.42, 0.50, 0.14, 0.64),
+            new ReadOcrLine("Truist", 0.35, 0.82, 0.78, 0.86, 0.10, 0.88)
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+
+        var (company, _) = CheckOcrVisionReadParser.ParseCompanyName(layout, CheckOcrParsingProfile.Default);
+
+        Assert.Equal("Yamato", company);
     }
 
     [Fact]

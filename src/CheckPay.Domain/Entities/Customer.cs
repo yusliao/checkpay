@@ -35,5 +35,11 @@ public class Customer : BaseEntity
     /// <summary>期望账户地址（与 OCR AccountAddress 比对，可空表示不校验）</summary>
     public string? ExpectedAccountAddress { get; set; }
 
+    /// <summary>期望账户类型（与支票表单 AccountType 一致，如 Business Checking / Savings；可空表示上传时不自动填）</summary>
+    public string? ExpectedAccountType { get; set; }
+
+    /// <summary>期望 Pay to the order of（与收款方目录规范全称一致；可空表示上传时不自动填）</summary>
+    public string? ExpectedPayToOrderOf { get; set; }
+
     public ICollection<CustomerCompanyName> CompanyNames { get; set; } = new List<CustomerCompanyName>();
 }

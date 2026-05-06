@@ -126,7 +126,8 @@ internal static class CheckOcrVisionReadParser
     };
 
     /// <summary>磁墨条上方常见银行名/品牌单行（与左上 <see cref="CheckOcrParsingProfile.BankNamePriorRegion"/> 互补；minNormY 与 Prior max 对齐，避免 Chase 等品牌落在 0.28~0.40 断层）。</summary>
-    private static readonly NormRegion BankNameMicrAdjacentAuxRegion = new(0.0, 0.28, 1.0, 0.76);
+    /// <summary>付款行短品牌（REGIONS、TRUIST…）常印在磁墨条正上方，Read 的 normY 可 &gt;0.76；上限扩至近底以免漏检。</summary>
+    private static readonly NormRegion BankNameMicrAdjacentAuxRegion = new(0.0, 0.28, 1.0, 0.94);
 
     private static bool LooksLikeMicrInkLine(string text) =>
         text.Contains('⑆', StringComparison.Ordinal) || text.Contains('⑈', StringComparison.Ordinal)
@@ -265,7 +266,7 @@ internal static class CheckOcrVisionReadParser
 
     /// <summary>
     /// <c>⑈…⑈ ⑆路由⑆ …⑈</c> 已匹配但 <see cref="TryAssignMicrCheckVsAccountByLength"/> 因 max&lt;10 放弃时，用位数启发式**仅**解析磁墨支票号
-    /// （不充当账号分类，避免影响 <see cref="ParseMicrHeuristic"/>）：max≤7 时较短段多为序号域；max≥8 时较长段多为 on-us。
+    /// （不充当账号分类，避免影响 <see cref="ParseMicrHeuristic"/>）：max≤7 较短段；路由前短 + 路由后长（Peoples 断行账号）取左；对称取右；其余再按较长段。
     /// </summary>
     private static bool TryPickBracketedMicrCheckShortPairFallback(string normalizedText, string routing9, out string? checkDigits)
     {
@@ -288,11 +289,54 @@ internal static class CheckOcrVisionReadParser
         if (mx <= 7)
             checkDigits = L <= R ? left : right;
         else if (mx >= 8)
-            checkDigits = L > R ? left : right;
+        {
+            if (L <= 7 && R >= 8)
+            {
+                // 同行「短⑈ ⑆路由⑆ 长⑈」时 Peoples 取左；若路由闭合与右段之间**换行**且右段 ≥9 位（常为独立磁墨支票号），取右。
+                // 右段 8 位且换行时多为 Peoples 换行长账号，仍取左（见单测 Peoples vs SkipsZip）。
+                if (right.Length >= 9
+                    && NewlineBetweenTransitCloseAndRightDigits(normalizedText, routing9, right))
+                    checkDigits = right;
+                else
+                    checkDigits = left;
+            }
+            else if (R <= 7 && L >= 8)
+                checkDigits = right;
+            else
+                checkDigits = L > R ? left : right;
+        }
         else
             return false;
 
         return !string.IsNullOrEmpty(checkDigits);
+    }
+
+    /// <summary>
+    /// 与 <see cref="TryPickBracketedMicrCheckShortPairFallback"/> 配合：仅当右侧段 <paramref name="rightDigits"/> 长度 ≥9 时才可能覆盖 Peoples「左短右长换行=账号」的默认。
+    /// </summary>
+    private static bool NewlineBetweenTransitCloseAndRightDigits(string normalizedText, string routing9, string rightDigits)
+    {
+        if (routing9.Length != 9 || rightDigits.Length == 0)
+            return false;
+        var close = $"⑆{routing9}⑆";
+        for (var i = 0; ;)
+        {
+            var idx = normalizedText.IndexOf(close, i, StringComparison.Ordinal);
+            if (idx < 0)
+                return false;
+            var afterClose = normalizedText[(idx + close.Length)..];
+            if (afterClose.StartsWith(rightDigits + "⑈", StringComparison.Ordinal))
+                return false;
+            var nlAt = afterClose.IndexOfAny(['\r', '\n']);
+            if (nlAt >= 0)
+            {
+                var afterNl = afterClose[(nlAt + 1)..].TrimStart('\r', '\n', ' ', '\t');
+                if (afterNl.StartsWith(rightDigits + "⑈", StringComparison.Ordinal))
+                    return true;
+            }
+
+            i = idx + 1;
+        }
     }
 
     /// <summary>
@@ -1055,9 +1099,11 @@ internal static class CheckOcrVisionReadParser
     {
         var bestDate = (DateTime?)null;
         var bestScore = 0.0;
+        var lines = layout.Lines;
 
-        foreach (var line in layout.Lines)
+        for (var i = 0; i < lines.Count; i++)
         {
+            var line = lines[i];
             var m = DateRegex.Match(line.Text);
             if (!m.Success)
                 continue;
@@ -1075,6 +1121,16 @@ internal static class CheckOcrVisionReadParser
             if (Regex.IsMatch(line.Text, @"(?i)(?!date\b)[a-z]{4,30}\s+\d{1,2}/\d{1,2}/\d{2,4}\b"))
                 score -= 0.42;
 
+            if (AdjacentStandaloneDateLabelLine(lines, i))
+                score += 0.36;
+
+            if (LooksLikeHyphenPrintedDateSandwichedBetweenAddress(lines, i, m.Value))
+                score -= 0.52;
+
+            if (m.Value.Contains('/') && line.NormCenterY is >= 0.22 and <= 0.58
+                                       && line.NormCenterX is >= 0.18 and <= 0.92)
+                score += 0.06;
+
             if (score > bestScore)
             {
                 bestScore = score;
@@ -1086,6 +1142,29 @@ internal static class CheckOcrVisionReadParser
             return (bestDate, Math.Clamp(bestScore, 0.2, 0.92));
 
         return ParseDateFullText(layout.FullText);
+    }
+
+    /// <summary>上一行或下一行为独立「DATE」标签（OCR 常把手写日与标签拆开）。</summary>
+    private static bool AdjacentStandaloneDateLabelLine(IReadOnlyList<ReadOcrLine> lines, int dateLineIndex)
+    {
+        static bool IsLabel(string text) => Regex.IsMatch(text.Trim(), @"^(?i)date\s*$");
+        return (dateLineIndex > 0 && IsLabel(lines[dateLineIndex - 1].Text))
+               || (dateLineIndex + 1 < lines.Count && IsLabel(lines[dateLineIndex + 1].Text));
+    }
+
+    /// <summary>门牌街道行 + <c>MM-DD-YY</c> 印刷日 + 城市州邮编行（非支票落款日）。</summary>
+    private static bool LooksLikeHyphenPrintedDateSandwichedBetweenAddress(
+        IReadOnlyList<ReadOcrLine> lines,
+        int dateLineIndex,
+        string dateMatchValue)
+    {
+        if (!Regex.IsMatch(dateMatchValue, @"^\d{2}-\d{2}-\d{2}$"))
+            return false;
+        if (dateLineIndex <= 0 || dateLineIndex + 1 >= lines.Count)
+            return false;
+        var prev = lines[dateLineIndex - 1].Text.Trim();
+        var next = lines[dateLineIndex + 1].Text.Trim();
+        return AddressLineRegex.IsMatch(prev) && UsStateZipLineRegex.Match(next).Success;
     }
 
     private static (DateTime? date, double confidence) ParseDateFullText(string text)
@@ -1782,8 +1861,8 @@ internal static class CheckOcrVisionReadParser
         if (normY < 0.18)
             score += 0.06;
 
-        // 付款行带上/中间带短品牌（REGIONS、CHASE 等）与法人银行名加权；minY 与 <see cref="BankNameMicrAdjacentAuxRegion"/> 衔接
-        if (normY >= 0.28 && normY <= 0.78)
+        // 付款行带上/近磁墨短品牌（REGIONS、TRUIST 等）与法人银行名加权；上沿与 <see cref="BankNameMicrAdjacentAuxRegion"/> 衔接
+        if (normY >= 0.28 && normY <= 0.94)
         {
             score += 0.08;
             if (Regex.IsMatch(t, @"^(?i)[A-Za-z]{5,15}$"))
@@ -1881,6 +1960,18 @@ internal static class CheckOcrVisionReadParser
             score += 0.06;
         if (cy <= 0.12)
             score += 0.10;
+
+        // 票面最上沿单行商号（如 remitter 餐馆名），常位于 Pay to 目录名之上且无 GROUP/INC
+        if (cy <= 0.15
+            && Regex.IsMatch(t, @"^(?i)[A-Za-z]{4,22}$")
+            && !Regex.IsMatch(t, @"(?i)^(VOID|CHECK|PAY)$"))
+            score += 0.30;
+
+        // 中部「… Group / Holding …」多为收款方目录展示名，真正印刷商号常在页眉单行
+        if (cy is >= 0.15 and <= 0.55
+            && Regex.IsMatch(lower, @"(?i)\b(group|holdings?|holding)\b"))
+            score -= 0.24;
+
         if (t.Length is >= 4 and <= 72)
             score += 0.04;
 

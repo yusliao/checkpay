@@ -12,6 +12,8 @@ public sealed record CustomerCsvImportRow(
     string? ExpectedBankName,
     string? OcrCompanyName,
     string? ExpectedAccountAddress,
+    string? ExpectedAccountType,
+    string? ExpectedPayToOrderOf,
     string? CompanyNamesRaw,
     bool? IsActive,
     bool? IsAuthorized);
@@ -21,7 +23,7 @@ public static class CustomerCsvImportExport
 {
     /// <summary>第二列为 ABA（9 位数字）；可为空表示不按银行区分（与旧数据一致）。</summary>
     public const string Header =
-        "客户账号,ABA路由号,客户名称,手机号,关联银行,票面公司名称,客户地址,关联公司,活跃,已授权";
+        "客户账号,ABA路由号,客户名称,手机号,关联银行,票面公司名称,客户地址,关联公司,活跃,已授权,账户类型,PayTo收款方";
 
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
@@ -49,7 +51,9 @@ public static class CustomerCsvImportExport
             CsvEscape("地址一行"),
             CsvEscape("关联公司A|关联公司B"),
             "1",
-            "0"));
+            "0",
+            CsvEscape(CheckAccountTypeCatalog.BusinessChecking),
+            CsvEscape(PayToOrderOfCatalog.CheungKongAllianceFood)));
         var body = Utf8NoBom.GetBytes(sb.ToString());
         return Encoding.UTF8.GetPreamble().Concat(body).ToArray();
     }
@@ -69,7 +73,9 @@ public static class CustomerCsvImportExport
             CsvEscape(c.ExpectedAccountAddress ?? ""),
             CsvEscape(companies),
             c.IsActive ? "1" : "0",
-            c.IsAuthorized ? "1" : "0");
+            c.IsAuthorized ? "1" : "0",
+            CsvEscape(c.ExpectedAccountType ?? ""),
+            CsvEscape(c.ExpectedPayToOrderOf ?? ""));
     }
 
     public static string CsvEscape(string s)
@@ -187,6 +193,32 @@ public static class CustomerCsvImportExport
             if (!TryParseBoolOptional(Cell(idx.Auth), lineNo, "已授权", errors, out var authOpt))
                 continue;
 
+            var acctTypeCell = idx.AccountType >= 0 ? Cell(idx.AccountType) : "";
+            var payToCell = idx.PayTo >= 0 ? Cell(idx.PayTo) : "";
+
+            string? acctType = null;
+            if (!string.IsNullOrWhiteSpace(acctTypeCell))
+            {
+                acctType = CustomerMasterSync.CanonicalAccountTypeForCustomerMaster(acctTypeCell);
+                if (acctType == null)
+                {
+                    errors.Add($"第 {lineNo} 行：账户类型无法识别（{acctTypeCell}），请使用与系统一致的下拉值（如 Business Checking）");
+                    continue;
+                }
+            }
+
+            string? payTo = null;
+            if (!string.IsNullOrWhiteSpace(payToCell))
+            {
+                payTo = CustomerMasterSync.CanonicalPayToForCustomerMaster(payToCell);
+                if (payTo == null)
+                {
+                    errors.Add(
+                        $"第 {lineNo} 行：PayTo 收款方无法匹配目录，请使用导出模板中的规范全称");
+                    continue;
+                }
+            }
+
             rows.Add(new CustomerCsvImportRow(
                 lineNo,
                 code,
@@ -196,6 +228,8 @@ public static class CustomerCsvImportExport
                 bank,
                 ocr,
                 addr,
+                acctType,
+                payTo,
                 companies,
                 activeOpt,
                 authOpt));
@@ -223,7 +257,9 @@ public static class CustomerCsvImportExport
         int addr,
         int companies,
         int active,
-        int auth)
+        int auth,
+        int accountType,
+        int payTo)
     {
         public int Code { get; } = code;
         /// <summary>-1 表示旧版 CSV 无此列。</summary>
@@ -236,6 +272,8 @@ public static class CustomerCsvImportExport
         public int Companies { get; } = companies;
         public int Active { get; } = active;
         public int Auth { get; } = auth;
+        public int AccountType { get; } = accountType;
+        public int PayTo { get; } = payTo;
     }
 
     private static bool TryMapHeader(string[] headerCells, out ColumnIndex idx, out string error)
@@ -269,12 +307,14 @@ public static class CustomerCsvImportExport
         var compI = Find("关联公司", "CompanyNames", "Companies");
         var actI = Find("活跃", "IsActive", "Active");
         var authI = Find("已授权", "IsAuthorized", "Authorized");
+        var acctTI = Find("账户类型", "ExpectedAccountType", "AccountType");
+        var payToI = Find("PayTo收款方", "PayTo", "ExpectedPayToOrderOf");
 
         if (codeI is null || nameI is null || phoneI is null || bankI is null || ocrI is null || addrI is null
             || compI is null || actI is null || authI is null)
         {
             error =
-                "表头须包含列：" + Header + "（可使用英文别名；ABA路由号列可选，旧模板若无该列则视为不按银行区分）。";
+                "表头须包含列：" + Header + "（可使用英文别名；ABA路由号、账户类型、PayTo收款方 列可选，旧模板若无后三列则视为未维护）。";
             return false;
         }
 
@@ -288,7 +328,9 @@ public static class CustomerCsvImportExport
             addrI.Value,
             compI.Value,
             actI.Value,
-            authI.Value);
+            authI.Value,
+            acctTI ?? -1,
+            payToI ?? -1);
         error = "";
         return true;
     }

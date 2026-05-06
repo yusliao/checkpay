@@ -261,6 +261,8 @@
                     ExpectedAccountHolderName = ocr,
                     ExpectedCompanyName = ocr,
                     ExpectedAccountAddress = r.ExpectedAccountAddress,
+                    ExpectedAccountType = r.ExpectedAccountType,
+                    ExpectedPayToOrderOf = r.ExpectedPayToOrderOf,
                     IsActive = r.IsActive ?? true,
                     IsAuthorized = r.IsAuthorized ?? false,
                     CreatedAt = now,
@@ -280,6 +282,8 @@
                 c.ExpectedAccountHolderName = ocr2;
                 c.ExpectedCompanyName = ocr2;
                 c.ExpectedAccountAddress = r.ExpectedAccountAddress;
+                c.ExpectedAccountType = r.ExpectedAccountType;
+                c.ExpectedPayToOrderOf = r.ExpectedPayToOrderOf;
                 c.ExpectedRoutingNumber = rk;
                 if (r.IsActive.HasValue) c.IsActive = r.IsActive.Value;
                 if (r.IsAuthorized.HasValue) c.IsAuthorized = r.IsAuthorized.Value;

@@ -56,13 +56,21 @@ else
             @foreach (var item in _uploadQueue)
             {
                 <div style="position:relative;width:100px">
+                    @if (item.ReusedHistoricalOcr)
+                    {
+                        <div class="px-1 py-1 mb-1 text-center rounded"
+                             style="background:#fff3e0;border:1px solid #ff9800;font-size:10px;line-height:1.2;font-weight:600;color:#e65100">
+                            历史已识别
+                        </div>
+                    }
                     <MudPaper @onclick="async () => await SelectItemAsync(item)"
                               Elevation="item == _current ? 4 : 1"
                               Class="pa-2 text-center"
-                              Style="@($"width:100px;cursor:pointer;border:2px solid {(item == _current ? "#1976d2" : item.Done ? "#4caf50" : "#e0e0e0")}")">
+                              Style="@($"width:100px;cursor:pointer;border:2px solid {GetQueueThumbBorderColor(item, _current)}")">
                         <MudIcon Icon="@Icons.Material.Filled.Image" Size="Size.Medium"
                                  Color="@(item.Done ? Color.Success : Color.Default)" />
-                        <MudText Typo="Typo.caption" Style="word-break:break-all">@item.FileName</MudText>
+                        <MudText Typo="Typo.caption"
+                                 Style="@($"word-break:break-all;{(item.ReusedHistoricalOcr ? "color:#e65100;font-weight:600" : "")}")">@item.FileName</MudText>
                         <MudText Typo="Typo.caption" Color="@(item.Done ? Color.Success : Color.Warning)">
                             @(item.Done ? "✅ 已录入" : "⏳ 待录入")
                         </MudText>
@@ -100,6 +108,13 @@ else
                 <MudPaper Class="pa-4">
                     <MudText Typo="Typo.h6" GutterBottom="true">支票图片</MudText>
 
+                    @if (_current.ReusedHistoricalOcr)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="false" Class="mb-3" Variant="Variant.Filled">
+                            @HistoricalOcrReuseUserMessage
+                        </MudAlert>
+                    }
+
                     @if (_current.Uploading)
                     {
                         <MudPaper Class="d-flex flex-column align-center justify-center pa-6"
@@ -122,8 +137,11 @@ else
                             }
                             else if (_current.OcrStatus == CheckOcrStatus.Completed)
                             {
-                                <MudIcon Icon="@Icons.Material.Filled.AutoFixHigh" Size="Size.Small" Color="Color.Success" />
-                                <MudText Typo="Typo.caption" Color="Color.Success">OCR 识别完成，已预填表单</MudText>
+                                <MudIcon Icon="@Icons.Material.Filled.AutoFixHigh" Size="Size.Small"
+                                         Color="@(_current.ReusedHistoricalOcr ? Color.Warning : Color.Success)" />
+                                <MudText Typo="Typo.caption" Color="@(_current.ReusedHistoricalOcr ? Color.Warning : Color.Success)">
+                                    @(_current.ReusedHistoricalOcr ? HistoricalOcrReuseStatusCaption : "OCR 识别完成，已预填表单")
+                                </MudText>
                                 <MudTooltip Text="对识别结果不满意？点击再次识别">
                                     <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
                                                    Color="Color.Info" OnClick="RetryOcrAsync"
@@ -417,12 +435,22 @@ else
 @code {
     private enum CheckOcrStatus { Idle, Uploading, Recognizing, Completed, Failed }
 
+    /// <summary>上传页：内容哈希命中历史已完成 OCR 时，在详情区 `MudAlert` 中展示的固定说明。</summary>
+    private const string HistoricalOcrReuseUserMessage =
+        "【历史识别复用】该附件与系统中已识别完成的支票图片内容一致，已自动载入历史识别结果，本次未再次调用 Vision。"
+        + "请核对当前附件是否为同一张支票，避免误用票据数据。";
+
+    private static readonly string HistoricalOcrReuseStatusCaption =
+        "已载入历史识别结果（未再次识别），请核对附件是否为同一张支票";
+
     private class QueueItem
     {
         public string FileName { get; set; } = "";
         public string ImageUrl { get; set; } = "";
         public bool Uploading { get; set; }
         public bool Done { get; set; }
+        /// <summary> true 表示本条因图片内容 SHA-256 命中历史已完成 OCR 而跳过 Vision，直接复用结果。 </summary>
+        public bool ReusedHistoricalOcr { get; set; }
         public CheckOcrStatus OcrStatus { get; set; } = CheckOcrStatus.Idle;
         public Guid? OcrResultId { get; set; }
         // 识别完成后缓存的数据（与 ocr_results.raw_result 一致）
@@ -468,6 +496,17 @@ else
     private string _ocrCopyPanelText = "";
 
     private readonly CancellationTokenSource _cts = new();
+
+    private static string GetQueueThumbBorderColor(QueueItem item, QueueItem? current)
+    {
+        if (item == current)
+            return "#1976d2";
+        if (item.Done)
+            return "#4caf50";
+        if (item.ReusedHistoricalOcr)
+            return "#ff9800";
+        return "#e0e0e0";
+    }
 
     /// <summary>Scoped DbContext 非线程安全；OCR 轮询与 UI 事件可能并发，序列化全部异步数据库访问。</summary>
     private readonly SemaphoreSlim _dbGate = new(1, 1);
@@ -571,9 +610,8 @@ else
                     await OcrWorker.EnqueueAsync(ocrResultId);
                 else
                 {
-                    await InvokeAsync(() => Snackbar.Add(
-                        "该图片与历史已识别文件内容一致，已复用识别结果（未调用 Vision）。请确认附件是否正确。",
-                        Severity.Info));
+                    item.ReusedHistoricalOcr = true;
+                    await InvokeAsync(StateHasChanged);
                 }
 
                 _ = PollOcrStatusAsync(item, _cts.Token);
@@ -907,6 +945,7 @@ else
             await OcrWorker.EnqueueAsync(ocrId);
 
             _current.OcrStatus = CheckOcrStatus.Recognizing;
+            _current.ReusedHistoricalOcr = false;
             _current.RawResult = null;
             _current.ConfidenceScores = new(StringComparer.OrdinalIgnoreCase);
             _ocrCopyPanelText = "";

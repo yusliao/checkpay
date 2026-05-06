@@ -11,9 +11,9 @@
             <MudTextField @bind-Value="_newCode" Label="客户账号" Variant="Variant.Outlined" Margin="Margin.Dense"
                           Placeholder="与支票 OCR 账号一致" />
             <MudTextField @bind-Value="_newExpectedRouting" Label="ABA 路由号（9 位，可选）" Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Placeholder="跨银行账号重复时请填写；留空不按银行区分" MaxLength="20" HelperText="须与支票 Routing Number 一致才能在上传页自动带出手机号" />
+                          Placeholder="跨银行账号重复时请填写；留空不按银行区分" MaxLength="20" HelperText="须与支票 Routing Number 一致才能在上传页自动带出餐馆编号" />
             <MudTextField @bind-Value="_newName" Label="客户名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
-            <MudTextField @bind-Value="_newMobilePhone" Label="手机号（必填）" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_newMobilePhone" Label="餐馆编号（必填）" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_newExpectedBank" Label="关联银行（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_newOcrCompanyName" Label="票面公司名称（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_newExpectedAddress" Label="客户地址（可选）" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
@@ -79,7 +79,7 @@
 
         if (string.IsNullOrWhiteSpace(_newMobilePhone))
         {
-            Snackbar.Add("手机号不能为空", Severity.Warning);
+            Snackbar.Add("餐馆编号不能为空", Severity.Warning);
             return;
         }
 

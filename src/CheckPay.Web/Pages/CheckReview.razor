@@ -176,7 +176,7 @@ else if (ShowCheckEditForm())
                                Placeholder="与支票账号一致，支持新建"
                                OnBlur="@OnCustomerAccountBlurAsync" />
                 <MudTextField @bind-Value="_customerPhone"
-                               Label="客户手机号"
+                               Label="餐馆编号"
                                Required="true"
                                Variant="Variant.Outlined"
                                Class="mb-2"
@@ -195,7 +195,7 @@ else if (ShowCheckEditForm())
                     if (match != null)
                     {
                         <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">
-                            匹配客户：@match.CustomerName · 手机 @CustomerDisplay.MobileOrDash(match.MobilePhone)
+                            匹配客户：@match.CustomerName · 餐馆编号 @CustomerDisplay.MobileOrDash(match.MobilePhone)
                         </MudAlert>
                     }
                     else
@@ -1290,7 +1290,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         if (string.IsNullOrWhiteSpace(_customerCode))
             return "请输入客户账号";
         if (string.IsNullOrWhiteSpace(_customerPhone))
-            return "请输入客户手机号";
+            return "请输入餐馆编号";
         if (submitAsFinal)
         {
             if (HasAmountValidationMismatch())

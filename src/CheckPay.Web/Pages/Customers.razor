@@ -49,7 +49,7 @@
         <MudTh>客户账号</MudTh>
         <MudTh>ABA</MudTh>
         <MudTh>客户名称</MudTh>
-        <MudTh>手机号</MudTh>
+        <MudTh>餐馆编号</MudTh>
         <MudTh>关联银行</MudTh>
         <MudTh>客户地址</MudTh>
         <MudTh>状态</MudTh>
@@ -60,7 +60,7 @@
         <MudTd DataLabel="客户账号">@context.CustomerCode</MudTd>
         <MudTd DataLabel="ABA">@(string.IsNullOrEmpty(context.ExpectedRoutingNumber) ? "—" : context.ExpectedRoutingNumber)</MudTd>
         <MudTd DataLabel="客户名称">@context.CustomerName</MudTd>
-        <MudTd DataLabel="手机号">@(string.IsNullOrWhiteSpace(context.MobilePhone) ? "—" : context.MobilePhone)</MudTd>
+        <MudTd DataLabel="餐馆编号">@(string.IsNullOrWhiteSpace(context.MobilePhone) ? "—" : context.MobilePhone)</MudTd>
         <MudTd DataLabel="关联银行">@(context.ExpectedBankName ?? "—")</MudTd>
         <MudTd DataLabel="客户地址">
             <MudText Typo="Typo.caption" Style="word-break:break-word">@(context.ExpectedAccountAddress ?? "—")</MudText>

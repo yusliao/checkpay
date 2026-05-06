@@ -37,7 +37,7 @@
                         </MudSelectItem>
                     }
                 </MudSelect>
-                <MudTextField @bind-Value="_customerPhone" Label="客户手机号" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_customerPhone" Label="餐馆编号" Variant="Variant.Outlined" Margin="Margin.Dense" />
                 <MudDivider Class="my-2" />
                 <MudTextField @bind-Value="_routingNumber" Label="Routing Number（9 位）" Variant="Variant.Outlined" Margin="Margin.Dense" MaxLength="9" />
                 <MudTextField @bind-Value="_accountNumber" Label="Account Number" Variant="Variant.Outlined" Margin="Margin.Dense" />
@@ -342,7 +342,7 @@
         if (_customerId == Guid.Empty)
             return "请选择客户";
         if (string.IsNullOrWhiteSpace(_customerPhone))
-            return "请填写客户手机号";
+            return "请填写餐馆编号";
         if (string.IsNullOrWhiteSpace(_routingNumber) || _routingNumber.Length != 9 || !_routingNumber.All(char.IsDigit))
             return "Routing Number 须为 9 位数字";
         if (string.IsNullOrWhiteSpace(_accountNumber))

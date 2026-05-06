@@ -42,7 +42,7 @@
     <HeaderContent>
         <MudTh>支票号</MudTh>
         <MudTh>客户</MudTh>
-        <MudTh>手机号</MudTh>
+        <MudTh>餐馆编号</MudTh>
         <MudTh>支票金额</MudTh>
         <MudTh>日期</MudTh>
         <MudTh>状态</MudTh>
@@ -59,9 +59,9 @@
                 <MudTextField @bind-Value="_editCustomerCode" Variant="Variant.Outlined" Margin="Margin.Dense"
                               Style="min-width:120px" Placeholder="客户账号" />
             </MudTd>
-            <MudTd DataLabel="手机号">
+            <MudTd DataLabel="餐馆编号">
                 <MudTextField @bind-Value="_editCustomerPhone" Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Style="min-width:140px" Label="手机号" />
+                              Style="min-width:140px" Label="餐馆编号" />
             </MudTd>
             <MudTd DataLabel="支票金额">
                 <MudNumericField @bind-Value="_editAmount" Label="金额" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -96,7 +96,7 @@
                          Underline="Underline.None">@context.CheckNumber</MudLink>
             </MudTd>
             <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
-            <MudTd DataLabel="手机号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
+            <MudTd DataLabel="餐馆编号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
             <MudTd DataLabel="支票金额">@context.CheckAmount.ToString("C")</MudTd>
             <MudTd DataLabel="日期">@context.CheckDate.ToShortDateString()</MudTd>
             <MudTd DataLabel="状态">
@@ -224,7 +224,7 @@
 
         if (string.IsNullOrWhiteSpace(_editCustomerPhone))
         {
-            Snackbar.Add("客户手机号不能为空", Severity.Error);
+            Snackbar.Add("餐馆编号不能为空", Severity.Error);
             return;
         }
 

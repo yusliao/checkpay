@@ -22,9 +22,9 @@
                               Disabled="true" />
                 <MudTextField @bind-Value="_editExpectedRouting" Label="ABA 路由号（9 位，可选）" Variant="Variant.Outlined" Margin="Margin.Dense"
                               Placeholder="跨银行账号重复时请填写；留空不按银行区分" MaxLength="20"
-                              HelperText="修改后与上传支票 Routing Number 不一致将无法匹配自动带出手机号" />
+                              HelperText="修改后与上传支票 Routing Number 不一致将无法匹配自动带出餐馆编号" />
                 <MudTextField @bind-Value="_editName" Label="客户名称" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                <MudTextField @bind-Value="_editMobilePhone" Label="手机号" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_editMobilePhone" Label="餐馆编号" Variant="Variant.Outlined" Margin="Margin.Dense" />
                 <MudTextField @bind-Value="_editExpectedBank" Label="关联银行" Variant="Variant.Outlined" Margin="Margin.Dense" />
                 <MudTextField @bind-Value="_editOcrCompanyName" Label="票面公司名称（OCR 公司/持有人）" Variant="Variant.Outlined"
                               Margin="Margin.Dense" />
@@ -173,7 +173,7 @@
 
         if (string.IsNullOrWhiteSpace(_editMobilePhone))
         {
-            Snackbar.Add("手机号不能为空", Severity.Warning);
+            Snackbar.Add("餐馆编号不能为空", Severity.Warning);
             return;
         }
 

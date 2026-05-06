@@ -10,7 +10,7 @@
 - **OCR**: Azure Vision Read 主识别；可选 **`Ocr:ImagePreprocess:Enabled`**（`OCR_IMAGE_PREPROCESS_ENABLED`）在 Read / DI 前对支票图做纠倾、亮纸区域裁剪、短边放大（默认关）；可选 `Ocr:PrebuiltCheck:EnrichPrimaryResult=true` 再调 **prebuilt-check.us** 与 Read 全量融合；未开该项时默认 **`Ocr:PrebuiltCheck:AmountFallbackWhenVisionFails`**（`OCR_PREBUILT_CHECK_AMOUNT_FALLBACK_WHEN_VISION_FAILS`）在 Vision 金额弱时再调 DI，仅用 **`NumberAmount`** 兜底；金额低于置信度阈值时触发 DI 手写金额校验；同时对 `BankName` / `AccountHolderName` / `AccountAddress`（`accountAddressPriorRegion` 内多行 **Y 连通聚类** 合并；**INC/LLC** 印刷行地址分降权）/ `CompanyName`（`companyNamePriorRegion` + 区域与上半带并集；再不行则 **`ExtractedText` 行序** 伪几何重选；INC./LLC 等加权；**bank/credit union** 且无法人后缀者不作为公司名/持有人候选；**prebuilt** **PayerName≈BankName** 不覆盖 Vision 持有人；训练纠偏不写付款行当公司名）增加版式区域锚点解析（可由票型 `parsing_profile_json` 覆盖）并融合 prebuilt 字段；`RoutingNumber/MICR` 解析增加“底部区域优先 + OCR易错字符归一化（O/0, I/1 等）”；配置节沿用 `Azure:DocumentIntelligence`；结果写入 `ocr_results.raw_result`（含 **`Diagnostics`** 诊断键：**`di_word_amount_raw` / `di_word_amount_confidence` / `di_word_amount_parsed`** 等为 DI **`prebuilt-check.us`** 书面金额快照，`EnrichPrimary` 或金额兜底调用时有值），金额校验写入 `amount_validation_*`。支票 **提交入库**（非草稿）可按 `Ocr:Training:AutoSampleOnCheckSubmit` 自动写入训练样本表。排查见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md)
 - **存储**: MinIO（S3 兼容，Docker Compose 默认）
 - **部署**: Docker Compose（推荐，应用 + PostgreSQL + MinIO）
-- **客户主数据**: 支票上传/复核在「客户账号」与 **Routing Number（9 位 ABA）** 可解析时，按 `(customer_code, expected_routing_number)` 查询 **customers**：自动带出**手机号**，并在主数据已维护时补齐 **期望银行名、公司/持有人、地址**、**账户类型（Business Checking / Savings）**、**Pay to 收款方（目录规范全称）** 等（空则填；**同一账号+ABA** 下已填内容不因重复同步被覆盖；**切换账号或 ABA** 后可再从主数据覆盖）。同一账号在不同银行需在客户管理中维护不同 **ABA**；Routing 未识别为 9 位数字时仍匹配「未填 ABA」的存量客户。客户管理 **CSV** 导出/模板在表头末尾含可选列 **账户类型、PayTo收款方**（与 **ABA路由号** 等并列；旧表头无后两列时仍兼容导入）。路由授权角色为 **销售 + 美国财务 + 管理员**（`Sales,USFinance,Admin`）。
+- **客户主数据**: 支票上传/复核在「客户账号」与 **Routing Number（9 位 ABA）** 可解析时，按 `(customer_code, expected_routing_number)` 查询 **customers**：自动带出**餐馆编号**（`MobilePhone`），并在主数据已维护时补齐 **期望银行名、公司/持有人、地址**、**账户类型（Business Checking / Savings）**、**Pay to 收款方（目录规范全称）** 等（空则填；**同一账号+ABA** 下已填内容不因重复同步被覆盖；**切换账号或 ABA** 后可再从主数据覆盖）。同一账号在不同银行需在客户管理中维护不同 **ABA**；Routing 未识别为 9 位数字时仍匹配「未填 ABA」的存量客户。客户管理 **CSV** 导出/模板在表头末尾含可选列 **账户类型、PayTo收款方**（与 **ABA路由号**、**餐馆编号** 等并列；旧表头无后两列时仍兼容导入；**餐馆编号** 列旧名 **手机号** 亦可导入）。路由授权角色为 **销售 + 美国财务 + 管理员**（`Sales,USFinance,Admin`）。
 
 ## 项目状态
 
@@ -20,7 +20,7 @@
 
 | 阶段 | 内容 |
 |------|------|
-| ✅ | Solution、EF Core、`docker-compose`、MinIO、Azure Vision OCR、图片代理、认证（Cookie + BCrypt）、主要 Blazor 页面（收款记录 `/records`：已提交且未 ACH 扣款成功时弹框编辑票面；客户管理 `/customers` 等列表支持数据库分页）与 Web 内嵌 OCR Worker 等 |
+| ✅ | Solution、EF Core、`docker-compose`、MinIO、Azure Vision OCR、图片代理、认证（Cookie + BCrypt）、主要 Blazor 页面（收款记录 `/records`：列表/抽屉客户侧编号列为「餐馆编号」；已提交且未 ACH 扣款成功时弹框编辑票面；客户管理 `/customers` 等列表支持数据库分页）与 Web 内嵌 OCR Worker 等 |
 
 ## 默认账号
 
@@ -110,7 +110,7 @@ dotnet run --project src/CheckPay.Web
 2. 左右分屏手动录入
 3. 按支票号自动匹配支票记录
 4. 成功 → 待核查；失败 → 异常列表
-5. `ACH 支票导出`（`/reports/ach-us`）支持按收款方筛选：`CHEUNG KONG HOLDING INC` / `MAXWELL TRADING`；行复选 + 表头全选后**批量标记 ACH 扣款成功（Y）**
+5. `ACH 支票导出`（`/reports/ach-us`）支持按收款方筛选：`CHEUNG KONG HOLDING INC` / `MAXWELL TRADING`；行复选 + 表头全选后**批量标记 ACH 扣款成功（Y）**；导出 CSV 表头中客户侧编号列为 **餐馆编号**（字段仍对应 `MobilePhone`）。大陆财务 **ACH 已扣款导出**（`/reports/ach-cn`）CSV 同列亦为 **餐馆编号**。
 
 ### 流程三：核查确认（大陆财务）
 1. 待核查列表逐条核对

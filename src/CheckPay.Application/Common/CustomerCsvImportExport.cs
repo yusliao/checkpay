@@ -23,7 +23,7 @@ public static class CustomerCsvImportExport
 {
     /// <summary>第二列为 ABA（9 位数字）；可为空表示不按银行区分（与旧数据一致）。</summary>
     public const string Header =
-        "客户账号,ABA路由号,客户名称,手机号,关联银行,票面公司名称,客户地址,关联公司,活跃,已授权,账户类型,PayTo收款方";
+        "客户账号,ABA路由号,客户名称,餐馆编号,关联银行,票面公司名称,客户地址,关联公司,活跃,已授权,账户类型,PayTo收款方";
 
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
@@ -178,7 +178,7 @@ public static class CustomerCsvImportExport
             var phone = Cell(idx.Phone);
             if (string.IsNullOrWhiteSpace(phone))
             {
-                errors.Add($"第 {lineNo} 行（{code}）：手机号不能为空");
+                errors.Add($"第 {lineNo} 行（{code}）：餐馆编号不能为空");
                 continue;
             }
 
@@ -300,7 +300,7 @@ public static class CustomerCsvImportExport
         var codeI = Find("客户账号", "CustomerCode");
         var routingI = Find("ABA路由号", "ExpectedRoutingNumber", "RoutingNumber", "ABA");
         var nameI = Find("客户名称", "CustomerName");
-        var phoneI = Find("手机号", "MobilePhone", "手机", "电话", "Phone");
+        var phoneI = Find("餐馆编号", "手机号", "MobilePhone", "手机", "电话", "Phone");
         var bankI = Find("关联银行", "ExpectedBankName", "Bank");
         var ocrI = Find("票面公司名称", "OcrCompanyName", "ExpectedCompanyName");
         var addrI = Find("客户地址", "期望地址", "ExpectedAccountAddress", "Address");

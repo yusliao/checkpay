@@ -52,7 +52,7 @@
     <HeaderContent>
         <MudTh>支票号</MudTh>
         <MudTh>客户</MudTh>
-        <MudTh>手机号</MudTh>
+        <MudTh>餐馆编号</MudTh>
         <MudTh>RTN(后4)</MudTh>
         <MudTh>提交</MudTh>
         <MudTh>支票金额</MudTh>
@@ -64,7 +64,7 @@
     <RowTemplate>
         <MudTd DataLabel="支票号">@context.CheckNumber</MudTd>
         <MudTd DataLabel="客户">@context.Customer?.CustomerName</MudTd>
-        <MudTd DataLabel="手机号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
+        <MudTd DataLabel="餐馆编号">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
         <MudTd DataLabel="RTN">@MaskRtn(context.RoutingNumber)</MudTd>
         <MudTd DataLabel="提交">
             @if (context.SubmittedAt.HasValue)
@@ -148,7 +148,7 @@
             </MudListItem>
             <MudDivider />
             <MudListItem T="string">
-                <MudText Typo="Typo.caption" Color="Color.Secondary">客户手机号</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">餐馆编号</MudText>
                 <MudText>@CustomerDisplay.MobileOrDash(_selectedRecord.Customer?.MobilePhone)</MudText>
             </MudListItem>
             <MudDivider />

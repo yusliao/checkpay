@@ -34,7 +34,7 @@
 <MudTable Items="_rows" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
     <HeaderContent>
         <MudTh>客户编号</MudTh>
-        <MudTh>手机号</MudTh>
+        <MudTh>餐馆编号</MudTh>
         <MudTh>扣款日期</MudTh>
         <MudTh>金额</MudTh>
         <MudTh>发票</MudTh>
@@ -85,7 +85,7 @@
         try
         {
             var sb = new StringBuilder();
-            sb.AppendLine("CustomerCode,MobilePhone,CheckDate,DebitDate,Amount,InvoiceNumbers,CompanyName,PaymentPeriod,CheckNumber");
+            sb.AppendLine("CustomerCode,餐馆编号,CheckDate,DebitDate,Amount,InvoiceNumbers,CompanyName,PaymentPeriod,CheckNumber");
             foreach (var c in _rows)
             {
                 sb.AppendLine(string.Join(',',

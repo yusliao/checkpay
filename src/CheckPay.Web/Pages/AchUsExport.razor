@@ -69,7 +69,7 @@
         </MudTh>
         <MudTh>上传日期</MudTh>
         <MudTh>客户编号</MudTh>
-        <MudTh>手机号</MudTh>
+        <MudTh>餐馆编号</MudTh>
         <MudTh>支票日期</MudTh>
         <MudTh>Bank</MudTh>
         <MudTh>RTN</MudTh>
@@ -475,7 +475,7 @@
         try
         {
             var sb = new StringBuilder();
-            sb.AppendLine("UploadDate,CustomerCode,MobilePhone,CheckDate,BankName,RoutingNumber,AccountNumber,AccountHolderName,CheckNumber,Amount,AchDebitSucceeded");
+            sb.AppendLine("UploadDate,CustomerCode,餐馆编号,CheckDate,BankName,RoutingNumber,AccountNumber,AccountHolderName,CheckNumber,Amount,AchDebitSucceeded");
             foreach (var c in rows)
             {
                 sb.AppendLine(string.Join(',',

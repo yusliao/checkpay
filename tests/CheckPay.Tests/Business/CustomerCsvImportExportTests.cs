@@ -20,6 +20,19 @@ public class CustomerCsvImportExportTests
     }
 
     [Fact]
+    public void Parse_accepts_legacy_restaurant_id_column_header_alias()
+    {
+        var legacyHeader =
+            "客户账号,客户名称,餐馆编号,关联银行,票面公司名称,期望地址,关联公司,活跃,已授权";
+        var csv = legacyHeader + Environment.NewLine
+                  + "acc1,名称1,13800000001,银行,公司,地址,司A|司B,1,0";
+        var (rows, errors) = CustomerCsvImportExport.Parse(csv);
+        Assert.Empty(errors);
+        Assert.Single(rows);
+        Assert.Equal("13800000001", rows[0].MobilePhone);
+    }
+
+    [Fact]
     public void Parse_accepts_chinese_header_and_one_row()
     {
         var csv = CustomerCsvImportExport.Header + Environment.NewLine

@@ -3,13 +3,14 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using CheckPay.Application.Common.Interfaces;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Logging;
 
 namespace CheckPay.Infrastructure.Services;
 
 /// <summary>
 /// 使用 DataProtection 包装短期登录载荷，不依赖进程内内存。
 /// 解决：负载均衡/多副本下 Blazor 与 /Auth/SignIn 落到不同实例时，内存 token 丢失导致无法写 Cookie（表现为登录失败）。
-/// 多机部署时需将 DataProtection 密钥持久化到**各实例共享**的目录（配置 <c>DataProtection:KeysDirectory</c> / 环境变量 <c>Data_PROTECTION_KEYS_DIRECTORY</c>）。
+/// 多机部署时需将 DataProtection 密钥持久化到**各实例共享**的目录（配置 <c>DataProtection:KeysDirectory</c> / 环境变量 <c>DATA_PROTECTION_KEYS_DIRECTORY</c>）。
 /// </summary>
 public sealed class LoginTokenStore : ILoginTokenStore
 {
@@ -17,9 +18,9 @@ public sealed class LoginTokenStore : ILoginTokenStore
     private static readonly TimeSpan MaxAge = TimeSpan.FromSeconds(90);
 
     private readonly IDataProtector _protector;
-    private readonly ILogger<LoginTokenStore>? _logger;
+    private readonly ILogger<LoginTokenStore> _logger;
 
-    public LoginTokenStore(IDataProtectionProvider protectionProvider, ILogger<LoginTokenStore>? logger = null)
+    public LoginTokenStore(IDataProtectionProvider protectionProvider, ILogger<LoginTokenStore> logger)
     {
         _protector = protectionProvider.CreateProtector(ProtectorPurpose);
         _logger = logger;
@@ -69,7 +70,7 @@ public sealed class LoginTokenStore : ILoginTokenStore
         }
         catch (Exception ex)
         {
-            _logger?.LogDebug(ex, "登录桥接 token 无效或解密失败");
+            _logger.LogDebug(ex, "登录桥接 token 无效或解密失败");
             return null;
         }
     }

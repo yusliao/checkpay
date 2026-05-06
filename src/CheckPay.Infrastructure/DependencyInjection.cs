@@ -1,6 +1,8 @@
+using System.IO;
 using CheckPay.Application.Common.Interfaces;
 using CheckPay.Infrastructure.Data;
 using CheckPay.Infrastructure.Services;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +16,16 @@ public static class DependencyInjection
     {
         var connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("数据库连接字符串未配置");
+
+        var dpKeysDir = configuration["DataProtection:KeysDirectory"]
+            ?? Environment.GetEnvironmentVariable("DATA_PROTECTION_KEYS_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(dpKeysDir))
+            dpKeysDir = Path.Combine(AppContext.BaseDirectory, "data-protection-keys");
+        Directory.CreateDirectory(dpKeysDir);
+
+        services.AddDataProtection()
+            .SetApplicationName("CheckPay")
+            .PersistKeysToFileSystem(new DirectoryInfo(dpKeysDir));
 
         services.AddDbContext<ApplicationDbContext>(options =>
             options.UseNpgsql(connectionString, npgsqlOptions =>
@@ -69,7 +81,7 @@ public static class DependencyInjection
         }
         services.AddScoped<IAuditLogService, AuditLogService>();
 
-        // 登录桥接服务：解决 Blazor Server 不能直接写 Cookie 的问题
+        // 登录桥接：DataProtection 封装短期载荷（非内存），多副本/负载均衡下仍可用
         services.AddSingleton<ILoginTokenStore, LoginTokenStore>();
 
         return services;

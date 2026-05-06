@@ -71,6 +71,7 @@ appsettings.Production.json
 ## 密钥文件
 secrets.json
 **/secrets.json
+data-protection-keys/
 *.pfx
 *.p12
 *.key

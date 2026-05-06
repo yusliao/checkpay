@@ -1,8 +1,10 @@
 using CheckPay.Application.Common.Interfaces;
+using CheckPay.Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 namespace CheckPay.Web.Pages.Auth;
@@ -14,27 +16,36 @@ namespace CheckPay.Web.Pages.Auth;
 public class SignInModel : PageModel
 {
     private readonly ILoginTokenStore _tokenStore;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public SignInModel(ILoginTokenStore tokenStore)
+    public SignInModel(ILoginTokenStore tokenStore, IServiceScopeFactory scopeFactory)
     {
         _tokenStore = tokenStore;
+        _scopeFactory = scopeFactory;
     }
 
     public async Task<IActionResult> OnGetAsync(string token)
     {
         if (string.IsNullOrWhiteSpace(token))
-            return RedirectToPage("/login");
+            return LocalRedirect("/login");
 
         var loginInfo = _tokenStore.ConsumeToken(token);
         if (loginInfo is null)
-            return RedirectToPage("/login"); // token 无效或已过期
+            return LocalRedirect("/login");
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var user = await db.Users.AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == loginInfo.UserId && u.IsActive);
+        if (user is null)
+            return LocalRedirect("/login");
 
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, loginInfo.UserId.ToString()),
-            new(ClaimTypes.Name, loginInfo.DisplayName),
-            new(ClaimTypes.Email, loginInfo.Email),
-            new(ClaimTypes.Role, loginInfo.Role)
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Name, user.DisplayName),
+            new(ClaimTypes.Email, user.Email),
+            new(ClaimTypes.Role, user.Role.ToString())
         };
 
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
@@ -42,7 +53,6 @@ public class SignInModel : PageModel
 
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
 
-        // 跳转目标：优先返回原始请求页，否则去首页
         var returnUrl = loginInfo.ReturnUrl;
         if (string.IsNullOrEmpty(returnUrl) || !Url.IsLocalUrl(returnUrl))
             returnUrl = "/";

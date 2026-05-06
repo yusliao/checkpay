@@ -23,11 +23,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(ApplicationDbContext).Assembly);
 
-        // 全局软删除过滤器
+        // 全局软删除过滤器（AuditLog 与 User 为必填关系：需与 User 过滤器对齐，避免 EF 10622）
         modelBuilder.Entity<CheckRecord>().HasQueryFilter(e => e.DeletedAt == null);
         modelBuilder.Entity<DebitRecord>().HasQueryFilter(e => e.DeletedAt == null);
         modelBuilder.Entity<Customer>().HasQueryFilter(e => e.DeletedAt == null);
         modelBuilder.Entity<User>().HasQueryFilter(e => e.DeletedAt == null);
         modelBuilder.Entity<CustomerCompanyName>().HasQueryFilter(e => e.DeletedAt == null);
+        modelBuilder.Entity<AuditLog>().HasQueryFilter(a => a.User.DeletedAt == null);
     }
 }

@@ -2,6 +2,9 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-05-06** - **Docker 运行镜像**：安装 **`libgssapi-krb5-2`**，消除 Npgsql 探测 Kerberos 时 `Cannot load library libgssapi_krb5.so.2`；**EF**：`AuditLog` 增加与 `User` 软删除对齐的全局过滤器，消除 10622
+- **2026-05-06** - **Docker 构建**：NuGet 弱网拉取 api.nuget.org 失败（NU1301/NU1900）；`Dockerfile` 在复制完整源码后**增加第二次 `dotnet restore`**（与仅 csproj 时依赖图一致）、各 `dotnet` 命令加 **`-p:NuGetAudit=false`**（跳过漏洞元数据拉取），`publish` 加重试
+- **2026-05-06** - 部署：**登录失败**（负载均衡/多副本常见）：登录桥接 token 原存 `IMemoryCache`，Blazor 与 `/Auth/SignIn` 落到不同实例即失效；改为 **DataProtection** 无状态 token + **PersistKeysToFileSystem**（`DataProtection:KeysDirectory` / `DATA_PROTECTION_KEYS_DIRECTORY`，Compose 卷 `dataprotection_keys`）；**ForwardedHeaders**（`X-Forwarded-*`）避免 HTTPS 反代后 Cookie/Scheme 错误；`SignIn` 写 Cookie 前再校验用户仍活跃
 - **2026-05-06** - 部署：`WebApplication.CreateBuilder` 使用 `ContentRootPath = AppContext.BaseDirectory`，避免在工作目录非 publish 目录时 `wwwroot/_framework/blazor.server.js` 等静态资源 404（Blazor Server 无法连接）
 - **2026-05-05** - Navy Federal 类 MICR：<c>⑆ABA⑆</c> + **短支票序** + **⑉（U+2449）或 ⑈** + **长账号⑈**（如 `0511⑉7208453105⑈001`），`TransitShortCheckDelimiterLongAccountRegex` / `TryRecoverMicrCheckTransitShortCheckThenLongAccount`，印刷冲突时与磁墨括号提取同级偏好磁墨；`LooksLikeMicrInkLine` / `CollapseSpacesBetweenDigitsOnMicrInkLines` 识别 **⑉**；Vision **`$ 2046,39`**（逗号为小数）走 `AmountDollarCommaDecimalRegex`；手写英文金额 **`thousandh`**、`& d.d /00`（如 `& 3.9 /00`→39¢）；单测 `ParseCheckNumber_NavyFedTransit0511DelimiterLongAccount_AlignsPrinted511`、`ParseAmount_DollarCommaDecimal2046_AlignsEuropeanStyleOcr`、`TryParseAmountFromWords_ShouldParseExpectedAmount(Two thousandh…)`
 - **2026-05-05** - 支票 **MICR 支票序**：`⑆ABA⑆` 同行 **`≥8` 位账号 + ⑈** 後 **换行或同行空格** 再接磁墨支票序（下行 `02728`、同行 `01023`）；`TryRecoverMicrCheckTransitClosedAccountFollowedByDigits`；勿将账号误作 `MicrCheckTrailingOnUsRegex`；单测 `ParseCheckNumber_TransitClosedAccountThenDigitLine02728_AlignsPrinted2728`、`ParseCheckNumber_WellsMicrSameLine01023_AlignsPrinted1023`

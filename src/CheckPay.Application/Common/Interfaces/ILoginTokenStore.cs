@@ -7,7 +7,7 @@ namespace CheckPay.Application.Common.Interfaces;
 /// </summary>
 public interface ILoginTokenStore
 {
-    /// <summary>存储登录用户信息，返回一次性 token（30秒有效）</summary>
+    /// <summary>存储登录用户信息，返回受保护的一次性 token（短期有效，见服务器实现）</summary>
     string StoreLoginInfo(LoginInfo info);
 
     /// <summary>消费 token，获取登录信息（用完即删）</summary>

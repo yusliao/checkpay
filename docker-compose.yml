@@ -95,6 +95,9 @@ services:
       Azure__DocumentIntelligence__DocumentAnalysisEndpoint: ${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:-}
       Azure__DocumentIntelligence__DocumentAnalysisApiKey: ${AZURE_DOCUMENT_INTELLIGENCE_API_KEY:-}
 
+      # DataProtection 密钥目录（多副本/负载均衡需挂载同一卷，否则登录桥接/Cookie 会不一致）
+      DataProtection__KeysDirectory: ${DATA_PROTECTION_KEYS_DIRECTORY:-/app/data-protection-keys}
+
     ports:
       - "${WEB_PORT:-8080}:8080"
     depends_on:
@@ -103,12 +106,15 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    volumes:
+      - dataprotection_keys:/app/data-protection-keys
     networks:
       - app-network
 
 volumes:
   postgres_data:
   minio_data:
+  dataprotection_keys:
 
 networks:
   app-network:

@@ -3,6 +3,7 @@ using CheckPay.Infrastructure;
 using CheckPay.Infrastructure.Data;
 using CheckPay.Worker.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 
@@ -36,7 +37,17 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddSingleton<OcrWorker>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<OcrWorker>());
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // 反向代理后信任转发头；.NET 10+ 使用 KnownIPNetworks（已取代 KnownNetworks）
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 var app = builder.Build();
+
+app.UseForwardedHeaders();
 
 // 自动执行数据库迁移和种子数据（带重试机制）
 using (var scope = app.Services.CreateScope())

@@ -158,6 +158,37 @@ public class CheckOcrVisionReadParserTests
         Assert.Equal(4, date.Value.Day);
     }
 
+    [Fact]
+    public void ParseDate_ChaseStyle_SkipsForMemoPaymentPeriodRange_PrefersDateKeywordLine()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("WONDERFUL HAND-PULLED NOODLE INC", 0.2, 0.08, 0.06, 0.10, 0.05, 0.12),
+            new ReadOcrLine("ORLANDO, FL 32819", 0.3, 0.12, 0.10, 0.14, 0.05, 0.20),
+            new ReadOcrLine("DATE 12/22/2025", 0.35, 0.14, 0.12, 0.16, 0.42, 0.28),
+            new ReadOcrLine("FOR", 0.5, 0.50, 0.48, 0.52, 0.30, 0.55),
+            new ReadOcrLine("11/1-11/30/2025", 0.5, 0.52, 0.50, 0.54, 0.30, 0.58),
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var (date, _) = CheckOcrVisionReadParser.ParseDate(layout, CheckOcrParsingProfile.Default);
+        Assert.NotNull(date);
+        Assert.Equal(new DateTime(2025, 12, 22), date.Value.Date);
+    }
+
+    [Fact]
+    public void ParseDate_SkipsInlineForPaymentPeriod_WhenSameLineHasRangeOnly()
+    {
+        var lines = new[]
+        {
+            new ReadOcrLine("DATE 12/22/2025", 0.35, 0.14, 0.12, 0.16, 0.42, 0.28),
+            new ReadOcrLine("FOR 11/1-11/30/2025", 0.5, 0.52, 0.50, 0.54, 0.30, 0.58),
+        };
+        var layout = new ReadOcrLayout(string.Join('\n', lines.Select(l => l.Text)), lines, 1200, 900);
+        var (date, _) = CheckOcrVisionReadParser.ParseDate(layout, CheckOcrParsingProfile.Default);
+        Assert.NotNull(date);
+        Assert.Equal(new DateTime(2025, 12, 22), date.Value.Date);
+    }
+
     /// <summary>真票日与「DATE」标签之间夹备忘/参考一行时仍应加权（Chase 等版式常 <c>4/9/2026 → 63-8413/2670 → DATE</c>）。</summary>
     [Fact]
     public void ParseDate_ChaseStyle_DateLabelUpToTwoLinesAway_PreferredOverMemoFraction()

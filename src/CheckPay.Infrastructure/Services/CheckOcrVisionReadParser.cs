@@ -124,6 +124,11 @@ internal static class CheckOcrVisionReadParser
         @"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>备忘/FOR 行常见的支付或开票「起止期间」<c>11/1-11/30/2025</c>；<see cref="DateRegex"/> 会误匹配为 <c>11/1-11</c>（年=11→2011）。</summary>
+    private static readonly Regex MemoPaymentPeriodSlashRangeRegex = new(
+        @"\b\d{1,2}/\d{1,2}\s*-\s*\d{1,2}/\d{1,2}/\d{4}\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex BankReferenceLabelRegex = new(
         @"(?i)(?:ref(?:erence)?|trace(?:\s*(?:no\.?|number|#))?|confirmation|confirm(?:ation)?\s*#|trans(?:action)?(?:\s*id|#)?)\s*[:\#]?\s*([A-Z0-9][A-Z0-9\-]{3,48})",
         RegexOptions.Multiline | RegexOptions.Compiled);
@@ -1480,37 +1485,45 @@ internal static class CheckOcrVisionReadParser
         for (var i = 0; i < lines.Count; i++)
         {
             var line = lines[i];
-            var m = DateRegex.Match(line.Text);
-            if (!m.Success)
+            if (MemoPaymentPeriodSlashRangeRegex.IsMatch(line.Text)
+                && !Regex.IsMatch(line.Text, @"(?i)\bdate\s+\d{1,2}[/\-]"))
                 continue;
 
-            if (!DateTime.TryParse(m.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-                continue;
-
-            var score = 0.62;
-            if (profile.DatePriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
-                score += 0.18;
-            if (line.NormCenterY < 0.45 && line.NormCenterX < 0.6)
-                score += 0.06;
-            if (Regex.IsMatch(line.Text, @"(?i)\bdate\b"))
-                score += 0.2;
-            if (Regex.IsMatch(line.Text, @"(?i)(?!date\b)[a-z]{4,30}\s+\d{1,2}/\d{1,2}/\d{2,4}\b"))
-                score -= 0.42;
-
-            if (NearStandaloneDateLabelLine(lines, i))
-                score += 0.36;
-
-            if (LooksLikeHyphenPrintedDateSandwichedBetweenAddress(lines, i, m.Value))
-                score -= 0.52;
-
-            if (m.Value.Contains('/') && line.NormCenterY is >= 0.22 and <= 0.58
-                                       && line.NormCenterX is >= 0.18 and <= 0.92)
-                score += 0.06;
-
-            if (score > bestScore)
+            for (var m = DateRegex.Match(line.Text); m.Success; m = m.NextMatch())
             {
-                bestScore = score;
-                bestDate = dt;
+                if (DateMatchOverlapsPaymentPeriodSlashRange(line.Text, m.Index, m.Length))
+                    continue;
+
+                if (!DateTime.TryParse(m.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                    continue;
+
+                var score = 0.62;
+                if (profile.DatePriorRegion?.Contains(line.NormCenterX, line.NormCenterY) == true)
+                    score += 0.18;
+                if (line.NormCenterY < 0.45 && line.NormCenterX < 0.6)
+                    score += 0.06;
+                if (Regex.IsMatch(line.Text, @"(?i)\bdate\b"))
+                    score += 0.2;
+                if (Regex.IsMatch(line.Text, $@"(?i)\bdate\s+{Regex.Escape(m.Value)}\b"))
+                    score += 0.42;
+                if (Regex.IsMatch(line.Text, @"(?i)(?!date\b)[a-z]{4,30}\s+\d{1,2}/\d{1,2}/\d{2,4}\b"))
+                    score -= 0.42;
+
+                if (NearStandaloneDateLabelLine(lines, i))
+                    score += 0.36;
+
+                if (LooksLikeHyphenPrintedDateSandwichedBetweenAddress(lines, i, m.Value))
+                    score -= 0.52;
+
+                if (m.Value.Contains('/') && line.NormCenterY is >= 0.22 and <= 0.58
+                                           && line.NormCenterX is >= 0.18 and <= 0.92)
+                    score += 0.06;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestDate = dt;
+                }
             }
         }
 
@@ -1518,6 +1531,21 @@ internal static class CheckOcrVisionReadParser
             return (bestDate, Math.Clamp(bestScore, 0.2, 0.92));
 
         return ParseDateFullText(layout.FullText);
+    }
+
+    private static bool DateMatchOverlapsPaymentPeriodSlashRange(string line, int matchIndex, int matchLen)
+    {
+        foreach (Match pm in MemoPaymentPeriodSlashRangeRegex.Matches(line))
+        {
+            var s = pm.Index;
+            var e = pm.Index + pm.Length;
+            var t0 = matchIndex;
+            var t1 = matchIndex + matchLen;
+            if (t0 < e && t1 > s)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>独立「DATE」标签与手写/印刷日的行常被 Vision 拆开，中间可能夹备忘/参考一行（如 <c>63-8413/2670</c>）；在 ±2 行内命中即加权。</summary>
@@ -1556,12 +1584,38 @@ internal static class CheckOcrVisionReadParser
 
     private static (DateTime? date, double confidence) ParseDateFullText(string text)
     {
-        var match = DateRegex.Match(text);
-        if (!match.Success)
+        if (string.IsNullOrWhiteSpace(text))
             return (null, 0.1);
 
-        if (DateTime.TryParse(match.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-            return (dt, 0.82);
+        var sanitized = MemoPaymentPeriodSlashRangeRegex.Replace(text, " ");
+        var bestDate = (DateTime?)null;
+        var bestScore = 0.0;
+        for (var m = DateRegex.Match(sanitized); m.Success; m = m.NextMatch())
+        {
+            if (DateMatchOverlapsPaymentPeriodSlashRange(sanitized, m.Index, m.Length))
+                continue;
+
+            if (!DateTime.TryParse(m.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                continue;
+
+            var score = 0.72;
+            var idx = text.IndexOf(m.Value, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                var head = text[..idx];
+                if (Regex.IsMatch(head, @"(?i)\bdate\s*$"))
+                    score += 0.28;
+            }
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestDate = dt;
+            }
+        }
+
+        if (bestDate is not null)
+            return (bestDate, Math.Clamp(bestScore, 0.2, 0.82));
 
         return (null, 0.1);
     }

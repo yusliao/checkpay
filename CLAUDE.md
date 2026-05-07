@@ -2,6 +2,7 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-05-07** - **OCR 同图去重要求已入库**：[`OcrImageContentDedup.FindReusableCompletedAsync`](src/CheckPay.Application/Common/OcrImageContentDedup.cs) 仅在存在 **未软删 `check_records`** 且其 **`OcrResultId`** 指向的 **`ocr_results`** 与当前图 **同 `ImageContentSha256`** 时才复用（含 **草稿**，宽语义下复制来源取 **同哈希最新 Completed** 行）；无关联支票记录则 **仍走 Vision**；单测 `FindReusableCompletedAsync_*`；详见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md) §0
 - **2026-05-07** - **`ParseDate`**：忽略备忘/FOR 行 **支付或开票起止期间** `M/D-M/D/YYYY`（原 `DateRegex` 易将 `11/1-11/30/2025` 误切为 `11/1-11`→**2011-11-01**）；同行显式 **`DATE MM/DD/YYYY`** 额外加权；全文兜底前 **剔除** 上述期间串；单测 `ParseDate_ChaseStyle_SkipsForMemoPaymentPeriodRange_PrefersDateKeywordLine`、`ParseDate_SkipsInlineForPaymentPeriod_WhenSameLineHasRangeOnly`
 - **2026-05-07** - **上传批处理（多图队列）**：[`CheckUpload`](src/CheckPay.Web/Pages/CheckUpload.razor) 保存/提交成功时若存在 **客户主数据不一致**，将说明 **并入同一条** Snackbar（不再先弹 Warning 再弹 Success）；**队列缩略图** 可选中 **已录入** 项，按 **`OcrResultId`** 载入最新 **`CheckRecord`** **只读** 回看（含全部完成后从「汇总态」点回任一缩略图）；已录入项禁用 **跳过/草稿/提交/再次识别/手写校验**
 - **2026-05-07** - **支票日期 + 独立 DATE 标签**：[`ParseDate`](src/CheckPay.Infrastructure/Services/CheckOcrVisionReadParser.cs) 将「与票面日同一簇」的 **DATE** 标签从 **紧邻一行** 扩为 **±2 行内**（中间可夹备忘/参考行，如 `63-8413/2670`）；**DATE** / **DATE:** 整行均属标签；单测 `ParseDate_ChaseStyle_DateLabelUpToTwoLinesAway_PreferredOverMemoFraction`、`ParseDate_DateLabelWithTrailingColon_BoostsAdjacentSlashDate`

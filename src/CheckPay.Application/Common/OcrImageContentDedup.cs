@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using CheckPay.Application.Common.Interfaces;
 using CheckPay.Domain.Entities;
 using CheckPay.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -41,15 +42,29 @@ public static class OcrImageContentDedup
         target.AzureErrorMessage = null;
     }
 
+    /// <summary>
+    /// 查找可复用的已完成 OCR：同图 <paramref name="sha256Hex"/> 且库中至少有一条未软删的
+    /// <see cref="CheckRecord"/>，其 <c>OcrResultId</c> 指向的 <see cref="OcrResult"/> 与该哈希一致（含仅保存草稿，<c>SubmittedAt</c> 可为空）。
+    /// 返回其中最新创建的已完成行作为复制来源（宽语义：不要求该来源行本身挂有支票记录）。
+    /// </summary>
     public static async Task<OcrResult?> FindReusableCompletedAsync(
-        IQueryable<OcrResult> ocrResultsNoTracking,
+        IApplicationDbContext db,
         string sha256Hex,
         int? maxSourceAgeDays,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(sha256Hex)) return null;
 
-        var q = ocrResultsNoTracking
+        var hasCheckForImage = await (
+            from c in db.CheckRecords.AsNoTracking()
+            join o in db.OcrResults.AsNoTracking() on c.OcrResultId equals o.Id
+            where o.ImageContentSha256 == sha256Hex
+            select c).AnyAsync(cancellationToken);
+
+        if (!hasCheckForImage)
+            return null;
+
+        var q = db.OcrResults.AsNoTracking()
             .Where(o =>
                 o.ImageContentSha256 == sha256Hex
                 && o.Status == OcrStatus.Completed

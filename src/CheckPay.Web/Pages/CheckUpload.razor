@@ -606,7 +606,7 @@ else
                     if (dedupEnabled && !_forceFreshOcr)
                     {
                         reusable = await OcrImageContentDedup.FindReusableCompletedAsync(
-                            DbContext.OcrResults.AsNoTracking(),
+                            DbContext,
                             hash,
                             maxAgeDays);
                     }

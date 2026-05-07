@@ -16,7 +16,7 @@
 
 <MudText Typo="Typo.h4" GutterBottom="true">ACH 支票导出（美国财务）</MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-    按上传日期筛选；可下载 CSV 供银行界面粘贴。支持行复选与表头三态全选（仅未标 Y 的可选），批量标记 ACH 扣款成功；亦可逐行「标为成功」。待核查状态下可撤销成功标记（银行拒付/冲正）或撤销支票与扣款的关联。
+    按上传日期筛选；可下载 CSV（银行导入）或 Excel（预设较宽列宽便于阅览）。支持行复选与表头三态全选（仅未标 Y 的可选），批量标记 ACH 扣款成功；亦可逐行「标为成功」。待核查状态下可撤销成功标记（银行拒付/冲正）或撤销支票与扣款的关联。
 </MudText>
 
 <MudPaper Class="pa-4 mb-4">
@@ -39,8 +39,35 @@
         </MudItem>
         <MudItem xs="12" md="3" Class="d-flex align-end flex-wrap" Style="gap:8px">
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadAsync" Disabled="@_loading">查询</MudButton>
-            <MudButton Variant="Variant.Outlined" OnClick="ExportCsvAsync" Disabled="@(!_rows.Any() || _exporting)">导出 CSV（全部）</MudButton>
-            <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="ExportFailedDebitAsync" Disabled="@(!_failedRows.Any() || _exporting)">导出扣款未成功</MudButton>
+            <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                <ActivatorContent>
+                    <MudButton Variant="Variant.Outlined"
+                               Disabled="@(!_rows.Any() || _exporting)"
+                               EndIcon="@Icons.Material.Filled.ArrowDropDown"
+                               OnClick="@context.ToggleAsync">
+                        导出全部
+                    </MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="ExportCsvAllAsync">CSV（银行导入）</MudMenuItem>
+                    <MudMenuItem OnClick="ExportXlsxAllAsync">Excel（阅览）</MudMenuItem>
+                </ChildContent>
+            </MudMenu>
+            <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                <ActivatorContent>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Warning"
+                               Disabled="@(!_failedRows.Any() || _exporting)"
+                               EndIcon="@Icons.Material.Filled.ArrowDropDown"
+                               OnClick="@context.ToggleAsync">
+                        导出扣款未成功
+                    </MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="ExportCsvFailedDebitAsync">CSV（银行导入）</MudMenuItem>
+                    <MudMenuItem OnClick="ExportXlsxFailedDebitAsync">Excel（阅览）</MudMenuItem>
+                </ChildContent>
+            </MudMenu>
         </MudItem>
     </MudGrid>
 </MudPaper>
@@ -491,24 +518,43 @@
         }
     }
 
-    private async Task ExportCsvAsync() => await ExportRowsAsync(_rows, "ach_us_all");
+    private Task ExportCsvAllAsync() => ExportRowsAsync(_rows, "ach_us_all", excel: false);
 
-    private async Task ExportFailedDebitAsync() => await ExportRowsAsync(_failedRows, "ach_us_failed_debit");
+    private Task ExportXlsxAllAsync() => ExportRowsAsync(_rows, "ach_us_all", excel: true);
 
-    private async Task ExportRowsAsync(List<CheckRecord> rows, string prefix)
+    private Task ExportCsvFailedDebitAsync() => ExportRowsAsync(_failedRows, "ach_us_failed_debit", excel: false);
+
+    private Task ExportXlsxFailedDebitAsync() => ExportRowsAsync(_failedRows, "ach_us_failed_debit", excel: true);
+
+    private async Task ExportRowsAsync(List<CheckRecord> rows, string prefix, bool excel)
     {
         _exporting = true;
         try
         {
-            var sb = new StringBuilder();
-            sb.AppendLine(AchBankImportExportCsv.HeaderLine);
-            foreach (var c in rows)
-                sb.AppendLine(AchBankImportExportCsv.FormatDataRow(c));
+            byte[] bytes;
+            string ext;
+            string mime;
+            if (excel)
+            {
+                bytes = AchBankImportExportXlsx.Build(rows);
+                ext = "xlsx";
+                mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            }
+            else
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine(AchBankImportExportCsv.HeaderLine);
+                foreach (var c in rows)
+                    sb.AppendLine(AchBankImportExportCsv.FormatDataRow(c));
 
-            var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+                bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+                ext = "csv";
+                mime = "text/csv;charset=utf-8";
+            }
+
             var base64 = Convert.ToBase64String(bytes);
-            var name = $"{prefix}_{DateTime.UtcNow:yyyyMMddHHmm}.csv";
-            await JS.InvokeVoidAsync("downloadFile", name, "text/csv;charset=utf-8", base64);
+            var name = $"{prefix}_{DateTime.UtcNow:yyyyMMddHHmm}.{ext}";
+            await JS.InvokeVoidAsync("downloadFile", name, mime, base64);
             Snackbar.Add($"已生成 {rows.Count} 行", Severity.Success);
         }
         finally

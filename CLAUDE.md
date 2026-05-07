@@ -2,6 +2,8 @@
 
 ## 变更记录 (Changelog)
 
+- **2026-05-07** - **`/reports/ach-us` MudMenu 导出**：自定义 `ActivatorContent` 内按钮须 `OnClick="@context.ToggleAsync"`（MudBlazor 9 `MenuContext`），否则点击「导出全部 / 导出扣款未成功」不开菜单；[`AchUsExport.razor`](src/CheckPay.Web/Pages/AchUsExport.razor)
+- **2026-05-07** - **`/reports/ach-us` 导出 Excel（阅览）**：在保留银行导入 CSV 前提下增加 **`.xlsx`**（[`AchBankImportExportXlsx`](src/CheckPay.Application/Common/AchBankImportExportXlsx.cs)，ClosedXML），预设较宽列宽、冻结首行、有数据时自动筛选；页面「导出全部 / 导出扣款未成功」下拉链选 CSV 或 Excel；单测 `AchBankImportExportXlsxTests`
 - **2026-05-07** - **ACH 支票导出（`/reports/ach-us`）银行可导入 CSV**：导出列对齐客户模板（6 列：`ABA`、`Account number`、`Account Type`、`Name`、`Detail ID`、`Amount`）；`Detail ID`=`customers.mobile_phone`（餐馆号）；`Account Type` 用 `check_records.account_type`，空则 `Checking`；`ABA` / `Account number` / `Detail ID` 使用 Excel 公式文本形式防科学计数法；实现 [`AchBankImportExportCsv`](src/CheckPay.Application/Common/AchBankImportExportCsv.cs)，单测 `AchBankImportExportCsvTests`
 - **2026-05-07** - **`/reports/ach-us` 结果表**：`ColGroup` 列最小宽度、`Striped`/`Bordered`、列内边距、长银行名换行、RTN/Account 等宽数字体；`Breakpoint.None` 避免窄屏叠成卡片；固定表头 + 约 `70vh` 纵向滚动，外层横向滚动（[`AchUsExport.razor`](src/CheckPay.Web/Pages/AchUsExport.razor)、`AchUsExport.razor.css`）
 - **2026-05-07** - **Vision 金额：`$` 整数 + 同行 OCR 烂尾 + 邻行两位分**：[`ParseAmount`](src/CheckPay.Infrastructure/Services/CheckOcrVisionReadParser.cs) 识别 **`$ 1554 5x`** 类（非规范 **`dd`** 分尾）并与几何邻近的 **`20 ke`** / 纯 **`48`** 等「行首两位分、整行仅两数字」合成金额（**`spillover_cents_noise_tail`**）；邻行可在金额框**上方或下方**；原 **`$`+整数** 与 **`20 ke`** 下行拆字仍走 **`spillover_cents`**；单测 `ParseAmount_NoiseTailOnDollarLine_PlusTwentyKeLine_AboveOrBelow_Yields1554_20`；说明见 [docs/支票OCR失败排查.md](docs/支票OCR失败排查.md) §3b

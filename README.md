@@ -110,7 +110,7 @@ dotnet run --project src/CheckPay.Web
 2. 左右分屏手动录入
 3. 按支票号自动匹配支票记录
 4. 成功 → 待核查；失败 → 异常列表
-5. `ACH 支票导出`（`/reports/ach-us`）支持按收款方筛选：`CHEUNG KONG HOLDING INC` / `MAXWELL TRADING`；行复选 + 表头全选后**批量标记 ACH 扣款成功（Y）**；导出 CSV **对齐美国银行可导入模板**（6 列：`ABA`、`Account number`、`Account Type`、`Name`、`Detail ID`、`Amount`；`Detail ID` 为餐馆号，对应 `customers.mobile_phone`；`Account Type` 空时默认 `Checking`；长数字字段对 Excel 以公式文本导出）。大陆财务 **ACH 已扣款导出**（`/reports/ach-cn`）CSV 仍为内部列定义（含 **餐馆编号** 列，字段对应 `MobilePhone`）。
+5. `ACH 支票导出`（`/reports/ach-us`）支持按收款方筛选：`CHEUNG KONG HOLDING INC` / `MAXWELL TRADING`；行复选 + 表头全选后**批量标记 ACH 扣款成功（Y）**；导出可选 **CSV（银行导入）** 或 **Excel `.xlsx`（阅览，预设较宽列宽）**；CSV **对齐美国银行可导入模板**（6 列：`ABA`、`Account number`、`Account Type`、`Name`、`Detail ID`、`Amount`；`Detail ID` 为餐馆号，对应 `customers.mobile_phone`；`Account Type` 空时默认 `Checking`；长数字字段对 Excel 以公式文本导出）。大陆财务 **ACH 已扣款导出**（`/reports/ach-cn`）CSV 仍为内部列定义（含 **餐馆编号** 列，字段对应 `MobilePhone`）。
 
 ### 流程三：核查确认（大陆财务）
 1. 待核查列表逐条核对

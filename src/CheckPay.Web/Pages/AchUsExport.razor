@@ -85,8 +85,8 @@
                          ValueChanged="@(v => ToggleRowSelectionAsync(context.Id, v))" />
         </MudTd>
         <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
-        <MudTd>@context.Customer.CustomerCode</MudTd>
-        <MudTd>@CustomerDisplay.MobileOrDash(context.Customer.MobilePhone)</MudTd>
+        <MudTd>@(context.Customer?.CustomerCode ?? "—")</MudTd>
+        <MudTd>@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
         <MudTd>@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
         <MudTd>@(context.BankName ?? "—")</MudTd>
         <MudTd>@(context.RoutingNumber ?? "—")</MudTd>
@@ -480,8 +480,8 @@
             {
                 sb.AppendLine(string.Join(',',
                     Csv(c.CreatedAt.ToUniversalTime().ToString("yyyy-MM-dd")),
-                    Csv(c.Customer.CustomerCode),
-                    Csv(c.Customer.MobilePhone),
+                    Csv(c.Customer?.CustomerCode),
+                    Csv(c.Customer?.MobilePhone),
                     Csv(c.CheckDate.ToString("yyyy-MM-dd")),
                     Csv(c.BankName),
                     Csv(c.RoutingNumber),

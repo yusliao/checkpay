@@ -30,6 +30,11 @@ public class AzureOcrService : IOcrService
     private readonly bool _micrBottomBandSecondPassEnabled;
     private readonly double _micrBottomBandMinNormCenterY;
     private readonly CheckImagePreprocessOptions _imagePreprocess;
+    private readonly bool _amountRoiSecondPassEnabled;
+    private readonly AmountRoiSecondPassMode _amountRoiMode;
+    private readonly double _amountRoiVisionConfTrigger;
+    private readonly double _amountRoiMaxNormArea;
+    private readonly bool _amountRoiPrebuiltOnCrop;
 
     public AzureOcrService(
         IConfiguration configuration,
@@ -71,6 +76,18 @@ public class AzureOcrService : IOcrService
             StringComparison.OrdinalIgnoreCase);
         _micrBottomBandMinNormCenterY = ParseMicrBottomBandThreshold(configuration["Ocr:Micr:BottomBandMinNormCenterY"]);
         _imagePreprocess = CheckImagePreprocessOptions.FromConfiguration(configuration.GetSection("Ocr:ImagePreprocess"));
+        _amountRoiSecondPassEnabled = !string.Equals(
+            configuration["Ocr:AmountRoiSecondPass:Enabled"],
+            "false",
+            StringComparison.OrdinalIgnoreCase);
+        _amountRoiMode = CheckOcrAmountArbitration.ParseAmountRoiSecondPassMode(
+            configuration["Ocr:AmountRoiSecondPass:Mode"]);
+        _amountRoiVisionConfTrigger = ParseAmountRoiVisionConfTrigger(configuration["Ocr:AmountRoiSecondPass:VisionConfTrigger"]);
+        _amountRoiMaxNormArea = ParseAmountRoiMaxNormArea(configuration["Ocr:AmountRoiSecondPass:MaxRoiNormArea"]);
+        _amountRoiPrebuiltOnCrop = !string.Equals(
+            configuration["Ocr:AmountRoiSecondPass:PrebuiltCheckOnCrop"],
+            "false",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<OcrResultDto> ProcessCheckImageAsync(string imageUrl, CancellationToken cancellationToken = default)
@@ -99,6 +116,28 @@ public class AzureOcrService : IOcrService
 
         var (checkNumber, checkConf) = CheckOcrVisionReadParser.ParseCheckNumber(layout, profile);
         var (amount, amountConf, amountParseMode) = CheckOcrVisionReadParser.ParseAmount(layout, profile);
+        PrebuiltCheckStructuredFields? amountRoiCropDi = null;
+        var amountRoiCropPrebuiltDiag = !_amountRoiSecondPassEnabled ? "disabled" : (!_amountRoiPrebuiltOnCrop ? "off" : "skipped");
+        var amountRoiSecondPassOutcome = !_amountRoiSecondPassEnabled ? "disabled" : "skipped";
+        if (_amountRoiSecondPassEnabled)
+        {
+            var roi = await TryAmountRoiSecondPassAsync(
+                memoryStream,
+                layout,
+                profile,
+                rawText,
+                amount,
+                amountConf,
+                amountParseMode,
+                cancellationToken);
+            amountRoiSecondPassOutcome = roi.Outcome;
+            amount = roi.Amount;
+            amountConf = roi.Conf;
+            amountParseMode = roi.ParseMode;
+            amountRoiCropDi = roi.CropDi;
+            amountRoiCropPrebuiltDiag = roi.CropPrebuiltDiag;
+        }
+
         var (date, dateConf) = CheckOcrVisionReadParser.ParseDate(layout, profile);
         var (parsedBankName, parsedBankConf) = CheckOcrVisionReadParser.ParseBankName(layout, profile);
         var (parsedHolderName, parsedHolderConf) = CheckOcrVisionReadParser.ParseAccountHolderName(layout, profile);
@@ -287,6 +326,9 @@ public class AzureOcrService : IOcrService
             ["micr_bottom_band_min_norm_center_y"] = _micrBottomBandMinNormCenterY.ToString("F2"),
             ["prebuilt_check_primary"] = prebuiltStatus,
             ["prebuilt_check_amount_fallback"] = amountFallbackDiag,
+            ["amount_roi_second_pass"] = amountRoiSecondPassOutcome,
+            ["amount_roi_second_pass_mode"] = _amountRoiMode.ToString(),
+            ["amount_roi_crop_prebuilt"] = amountRoiCropPrebuiltDiag,
             ["amount_written_augmentation"] = amountWrittenAugApplied ? "applied" : "skipped",
             ["eu_iban_present"] = (iban != null).ToString(),
             ["eu_bic_present"] = (bic != null).ToString(),
@@ -301,6 +343,21 @@ public class AzureOcrService : IOcrService
             diagnostics["template_id"] = resolution.TemplateId.Value.ToString("D");
         if (!string.IsNullOrWhiteSpace(resolution.TemplateName))
             diagnostics["template_name"] = resolution.TemplateName!;
+
+        CheckOcrAmountArbitration.TryApplyEmbeddedCentsRepairWithConfirmation(
+            ref mergedAmount,
+            ref mergedAmountConf,
+            diStructuredSnapshot,
+            rawText,
+            diagnostics,
+            amountRoiCropDi);
+        CheckOcrAmountArbitration.TryApplyMultiSourceConsensus(
+            ref mergedAmount,
+            ref mergedAmountConf,
+            diStructuredSnapshot,
+            rawText,
+            diagnostics,
+            amountRoiCropDi);
 
         if (micrAppliedLines == 0 && rawText.Length > 40)
             diagnostics["suspect_micr_region_miss"] = "true";
@@ -329,6 +386,26 @@ public class AzureOcrService : IOcrService
             diStructuredSnapshot.WordAmountConfidence.ToString("F4", CultureInfo.InvariantCulture);
         diagnostics["di_word_amount_parsed"] =
             diStructuredSnapshot.WordAmountParsed?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty;
+        if (amountRoiCropDi is not null)
+        {
+            diagnostics["di_roi_crop_word_amount_raw"] = amountRoiCropDi.WordAmountRaw ?? string.Empty;
+            diagnostics["di_roi_crop_word_amount_confidence"] =
+                amountRoiCropDi.WordAmountConfidence.ToString("F4", CultureInfo.InvariantCulture);
+            diagnostics["di_roi_crop_word_amount_parsed"] =
+                amountRoiCropDi.WordAmountParsed?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty;
+            diagnostics["di_roi_crop_number_amount"] =
+                amountRoiCropDi.NumberAmount?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty;
+            diagnostics["di_roi_crop_number_amount_confidence"] =
+                amountRoiCropDi.NumberAmountConfidence.ToString("F4", CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            diagnostics["di_roi_crop_word_amount_raw"] = string.Empty;
+            diagnostics["di_roi_crop_word_amount_confidence"] = "0.0000";
+            diagnostics["di_roi_crop_word_amount_parsed"] = string.Empty;
+            diagnostics["di_roi_crop_number_amount"] = string.Empty;
+            diagnostics["di_roi_crop_number_amount_confidence"] = "0.0000";
+        }
 
         _logger.LogInformation("CheckOcrDiagnostics {@Diagnostics}", diagnostics);
 
@@ -436,6 +513,112 @@ public class AzureOcrService : IOcrService
         }
     }
 
+    private readonly record struct AmountRoiSecondPassResult(
+        string Outcome,
+        decimal Amount,
+        double Conf,
+        string? ParseMode,
+        PrebuiltCheckStructuredFields? CropDi,
+        string CropPrebuiltDiag);
+
+    private async Task<AmountRoiSecondPassResult> TryAmountRoiSecondPassAsync(
+        MemoryStream memoryStream,
+        ReadOcrLayout layout,
+        CheckOcrParsingProfile profile,
+        string rawText,
+        decimal amount,
+        double amountConf,
+        string? amountParseMode,
+        CancellationToken cancellationToken)
+    {
+        if (!CheckOcrAmountArbitration.ShouldTriggerRoiSecondPass(
+                _amountRoiMode,
+                _amountRoiVisionConfTrigger,
+                amount,
+                amountConf,
+                layout,
+                profile,
+                rawText))
+            return new AmountRoiSecondPassResult("not_triggered", amount, amountConf, amountParseMode, null, "skipped");
+
+        var roiBounds = CheckOcrAmountRoiRefinement.TryGetAmountRefinementNormRegion(
+            layout,
+            profile,
+            _amountRoiMaxNormArea);
+        if (roiBounds is null)
+            return new AmountRoiSecondPassResult("no_bounds", amount, amountConf, amountParseMode, null, "skipped");
+
+        memoryStream.Position = 0;
+        using var cropped = CheckOcrAmountRoiRefinement.TryCropImageToNormRegion(
+            memoryStream,
+            roiBounds);
+        if (cropped is null)
+            return new AmountRoiSecondPassResult("crop_failed", amount, amountConf, amountParseMode, null, "skipped");
+
+        PrebuiltCheckStructuredFields? cropDi = null;
+        var cropPrebuiltDiag = !_amountRoiPrebuiltOnCrop ? "off" : "skipped";
+
+        try
+        {
+            var beforeAmt = amount;
+            cropped.Position = 0;
+            var analysisResult = await _client.AnalyzeAsync(
+                BinaryData.FromStream(cropped),
+                VisualFeatures.Read,
+                cancellationToken: cancellationToken);
+            var roiLayout = AzureReadLayoutExtractor.From(analysisResult.Value);
+            var (roiAmt, roiConf, roiMode) = CheckOcrVisionReadParser.ParseAmount(
+                roiLayout,
+                CheckOcrAmountRoiRefinement.CroppedAmountParseProfile);
+
+            if (_amountRoiPrebuiltOnCrop)
+            {
+                try
+                {
+                    cropped.Position = 0;
+                    var op = await _documentIntelligenceClient.AnalyzeDocumentAsync(
+                        WaitUntil.Completed,
+                        BankCheckModelId,
+                        BinaryData.FromStream(cropped),
+                        cancellationToken);
+                    cropDi = PrebuiltCheckStructuredExtractor.TryExtract(op.Value);
+                    if (ReferenceEquals(cropDi, PrebuiltCheckStructuredFields.Empty))
+                        cropDi = null;
+                    var has = cropDi != null
+                              && (cropDi.NumberAmount is { } na && na > 0m
+                                  || cropDi.WordAmountParsed is { } wp && wp > 0m);
+                    cropPrebuiltDiag = has ? "applied" : "empty";
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "金额 ROI 裁剪图 prebuilt-check.us 调用失败");
+                    cropPrebuiltDiag = "failed";
+                }
+            }
+
+            if (roiAmt <= 0m)
+                return new AmountRoiSecondPassResult("roi_no_amount", amount, amountConf, amountParseMode, cropDi, cropPrebuiltDiag);
+
+            if (!CheckOcrAmountArbitration.ShouldPreferRoiAmount(beforeAmt, amountConf, roiAmt, roiConf, rawText))
+                return new AmountRoiSecondPassResult("roi_kept_primary", amount, amountConf, amountParseMode, cropDi, cropPrebuiltDiag);
+
+            var nextAmount = roiAmt;
+            var nextConf = Math.Clamp(Math.Max(roiConf, amountConf * 0.85), 0.22, 0.91);
+            var nextMode = (roiMode ?? "parse") + "|amount_roi_read";
+            _logger.LogInformation(
+                "支票金额 ROI 二次 Vision Read 采纳: {Before} -> {After} (roi_conf {Conf:F2})",
+                beforeAmt,
+                roiAmt,
+                roiConf);
+            return new AmountRoiSecondPassResult("applied", nextAmount, nextConf, nextMode, cropDi, cropPrebuiltDiag);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "支票金额 ROI 二次 Vision Read 失败，保留首轮解析");
+            return new AmountRoiSecondPassResult("read_failed", amount, amountConf, amountParseMode, cropDi, cropPrebuiltDiag);
+        }
+    }
+
     private static int CountLinesInRegion(ReadOcrLayout layout, NormRegion? region)
     {
         if (region is null || layout.Lines.Count == 0)
@@ -448,6 +631,20 @@ public class AzureOcrService : IOcrService
         if (!double.TryParse(raw, out var v))
             return 0.78;
         return Math.Clamp(v, 0.6, 0.95);
+    }
+
+    private static double ParseAmountRoiVisionConfTrigger(string? raw)
+    {
+        if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+            return 0.68;
+        return Math.Clamp(v, 0.35, 0.95);
+    }
+
+    private static double ParseAmountRoiMaxNormArea(string? raw)
+    {
+        if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+            return 0.55;
+        return Math.Clamp(v, 0.20, 0.92);
     }
 
     /// <summary>Vision 金额是否弱到需要尝试 DI <c>NumberAmount</c> 兜底（与主路径融合中的覆盖阈值对齐）。</summary>

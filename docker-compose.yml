@@ -69,13 +69,18 @@ services:
       Ocr__Dedup__Enabled: ${OCR_DEDUP_ENABLED:-true}
       Ocr__Dedup__MaxSourceAgeDays: ${OCR_DEDUP_MAX_SOURCE_AGE_DAYS:-0}
       Ocr__AmountValidation__Enabled: ${OCR_AMOUNT_VALIDATION_ENABLED:-true}
-      Ocr__AmountValidation__TriggerConfidenceThreshold: ${OCR_AMOUNT_VALIDATION_TRIGGER_CONFIDENCE_THRESHOLD:-0.85}
+      Ocr__AmountValidation__TriggerConfidenceThreshold: ${OCR_AMOUNT_VALIDATION_TRIGGER_CONFIDENCE_THRESHOLD:-0.80}
       Ocr__AmountValidation__FailOpen: ${OCR_AMOUNT_VALIDATION_FAIL_OPEN:-true}
-      Ocr__PrebuiltCheck__EnrichPrimaryResult: ${OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT:-false}
+      Ocr__PrebuiltCheck__EnrichPrimaryResult: ${OCR_PREBUILT_CHECK_ENRICH_PRIMARY_RESULT:-true}
       Ocr__PrebuiltCheck__AmountFallbackWhenVisionFails: ${OCR_PREBUILT_CHECK_AMOUNT_FALLBACK_WHEN_VISION_FAILS:-true}
       Ocr__Micr__BottomBandSecondPassEnabled: ${OCR_MICR_BOTTOM_BAND_SECOND_PASS_ENABLED:-true}
       Ocr__Micr__BottomBandMinNormCenterY: ${OCR_MICR_BOTTOM_BAND_MIN_NORM_CENTER_Y:-0.78}
-      Ocr__ImagePreprocess__Enabled: ${OCR_IMAGE_PREPROCESS_ENABLED:-false}
+      Ocr__ImagePreprocess__Enabled: ${OCR_IMAGE_PREPROCESS_ENABLED:-true}
+      Ocr__AmountRoiSecondPass__Enabled: ${OCR_AMOUNT_ROI_SECOND_PASS_ENABLED:-true}
+      Ocr__AmountRoiSecondPass__Mode: ${OCR_AMOUNT_ROI_MODE:-OnDemand}
+      Ocr__AmountRoiSecondPass__VisionConfTrigger: ${OCR_AMOUNT_ROI_VISION_CONF_TRIGGER:-0.68}
+      Ocr__AmountRoiSecondPass__MaxRoiNormArea: ${OCR_AMOUNT_ROI_MAX_NORM_AREA:-0.55}
+      Ocr__AmountRoiSecondPass__PrebuiltCheckOnCrop: ${OCR_AMOUNT_ROI_PREBUILT_ON_CROP:-true}
       Ocr__Training__AutoSampleOnCheckSubmit: ${OCR_TRAINING_AUTO_SAMPLE_ON_CHECK_SUBMIT:-true}
       Ocr__Training__AutoSampleRequireDiff: ${OCR_TRAINING_AUTO_SAMPLE_REQUIRE_DIFF:-true}
       Ocr__Training__AutoSampleDedupByOcrResultId: ${OCR_TRAINING_AUTO_SAMPLE_DEDUP_BY_OCR_RESULT_ID:-true}

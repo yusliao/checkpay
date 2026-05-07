@@ -1,0 +1,10 @@
+.ach-us-table-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* 表头在固定表头模式下与斑马纹对齐更清晰 */
+::deep .mud-table-root .mud-table-head th {
+    font-weight: 600;
+}

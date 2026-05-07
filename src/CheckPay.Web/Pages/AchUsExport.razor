@@ -59,69 +59,95 @@
     }
 </MudStack>
 
-<MudTable Items="_rows" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading">
-    <HeaderContent>
-        <MudTh Style="width:52px">
-            <MudCheckBox T="bool?" TriState="true" Dense="true"
-                         Value="@_headerTriState"
-                         ValueChanged="OnHeaderTriChangedAsync"
-                         Disabled="@(!_rows.Any(r => !r.AchDebitSucceeded))" />
-        </MudTh>
-        <MudTh>上传日期</MudTh>
-        <MudTh>客户编号</MudTh>
-        <MudTh>餐馆编号</MudTh>
-        <MudTh>支票日期</MudTh>
-        <MudTh>Bank</MudTh>
-        <MudTh>RTN</MudTh>
-        <MudTh>Account</MudTh>
-        <MudTh>金额</MudTh>
-        <MudTh>扣款成功</MudTh>
-        <MudTh>操作</MudTh>
-    </HeaderContent>
-    <RowTemplate>
-        <MudTd @onclick:stopPropagation="true">
-            <MudCheckBox T="bool" Dense="true" Color="Color.Primary" Disabled="context.AchDebitSucceeded"
-                         Value="@_selectedIds.Contains(context.Id)"
-                         ValueChanged="@(v => ToggleRowSelectionAsync(context.Id, v))" />
-        </MudTd>
-        <MudTd>@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
-        <MudTd>@(context.Customer?.CustomerCode ?? "—")</MudTd>
-        <MudTd>@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
-        <MudTd>@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
-        <MudTd>@(context.BankName ?? "—")</MudTd>
-        <MudTd>@(context.RoutingNumber ?? "—")</MudTd>
-        <MudTd>@(context.AccountNumber ?? "—")</MudTd>
-        <MudTd>@context.CheckAmount.ToString("N2")</MudTd>
-        <MudTd>@(context.AchDebitSucceeded ? "Y" : "N")</MudTd>
-        <MudTd>
-            <MudStack Row="true" Spacing="1" Class="flex-wrap">
-                @if (!context.AchDebitSucceeded)
-                {
-                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Success"
-                               OnClick="@(() => MarkDebitSuccess(context))">标为成功</MudButton>
-                }
-                @if (AchDebitSuccessMarkRevocation.CanRevokeSuccessMark(context))
-                {
-                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
-                               StartIcon="@Icons.Material.Filled.MoneyOff"
-                               Disabled="@(_revokingAchSuccessId == context.Id || _revokingAssociationId == context.Id)"
-                               OnClick="@(() => RevokeAchSuccessMarkAsync(context))">
-                        撤销成功
-                    </MudButton>
-                }
-                @if (PendingReviewDebitRevocation.CanRevoke(context))
-                {
-                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Warning"
-                               StartIcon="@Icons.Material.Filled.LinkOff"
-                               Disabled="@(_revokingAssociationId == context.Id || _revokingAchSuccessId == context.Id)"
-                               OnClick="@(() => RevokeDebitAssociationAsync(context))">
-                        撤销关联
-                    </MudButton>
-                }
-            </MudStack>
-        </MudTd>
-    </RowTemplate>
-</MudTable>
+<MudPaper Class="pa-0 mb-4" Elevation="1" Style="border-radius:10px;">
+    <div class="ach-us-table-scroll">
+        <MudTable Items="_rows"
+                  Dense="false"
+                  Hover="true"
+                  Bordered="true"
+                  Striped="true"
+                  FixedHeader="true"
+                  Height="70vh"
+                  Breakpoint="Breakpoint.None"
+                  Loading="@_loading"
+                  ContainerStyle="min-width:max-content;">
+            <ColGroup>
+                <col style="width: 56px; min-width: 56px;" />
+                <col style="min-width: 7.5rem;" />
+                <col style="min-width: 9rem;" />
+                <col style="min-width: 8.5rem;" />
+                <col style="min-width: 7.5rem;" />
+                <col style="min-width: 13rem;" />
+                <col style="min-width: 7rem;" />
+                <col style="min-width: 9.5rem;" />
+                <col style="min-width: 6rem;" />
+                <col style="min-width: 5.5rem;" />
+                <col style="min-width: 16rem;" />
+            </ColGroup>
+            <HeaderContent>
+                <MudTh Class="px-3">
+                    <MudCheckBox T="bool?" TriState="true" Dense="true"
+                                 Value="@_headerTriState"
+                                 ValueChanged="OnHeaderTriChangedAsync"
+                                 Disabled="@(!_rows.Any(r => !r.AchDebitSucceeded))" />
+                </MudTh>
+                <MudTh Class="px-3">上传日期</MudTh>
+                <MudTh Class="px-3">客户编号</MudTh>
+                <MudTh Class="px-3">餐馆编号</MudTh>
+                <MudTh Class="px-3">支票日期</MudTh>
+                <MudTh Class="px-3">Bank</MudTh>
+                <MudTh Class="px-3">RTN</MudTh>
+                <MudTh Class="px-3">Account</MudTh>
+                <MudTh Class="px-3 text-end">金额</MudTh>
+                <MudTh Class="px-3 text-center">扣款成功</MudTh>
+                <MudTh Class="px-3">操作</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd Class="px-3" @onclick:stopPropagation="true">
+                    <MudCheckBox T="bool" Dense="true" Color="Color.Primary" Disabled="context.AchDebitSucceeded"
+                                 Value="@_selectedIds.Contains(context.Id)"
+                                 ValueChanged="@(v => ToggleRowSelectionAsync(context.Id, v))" />
+                </MudTd>
+                <MudTd Class="px-3" Style="white-space: nowrap;">@context.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</MudTd>
+                <MudTd Class="px-3" Style="word-break: break-word;">@(context.Customer?.CustomerCode ?? "—")</MudTd>
+                <MudTd Class="px-3" Style="white-space: nowrap;">@CustomerDisplay.MobileOrDash(context.Customer?.MobilePhone)</MudTd>
+                <MudTd Class="px-3" Style="white-space: nowrap;">@context.CheckDate.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd Class="px-3" Style="max-width: 16rem; word-break: break-word; white-space: normal;">@(context.BankName ?? "—")</MudTd>
+                <MudTd Class="px-3" Style="white-space: nowrap; font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;">@(context.RoutingNumber ?? "—")</MudTd>
+                <MudTd Class="px-3" Style="white-space: nowrap; font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;">@(context.AccountNumber ?? "—")</MudTd>
+                <MudTd Class="px-3 text-end" Style="white-space: nowrap;">@context.CheckAmount.ToString("N2")</MudTd>
+                <MudTd Class="px-3 text-center" Style="white-space: nowrap;">@(context.AchDebitSucceeded ? "Y" : "N")</MudTd>
+                <MudTd Class="px-3">
+                    <MudStack Row="true" Spacing="1" Class="flex-wrap">
+                        @if (!context.AchDebitSucceeded)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Success"
+                                       OnClick="@(() => MarkDebitSuccess(context))">标为成功</MudButton>
+                        }
+                        @if (AchDebitSuccessMarkRevocation.CanRevokeSuccessMark(context))
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                                       StartIcon="@Icons.Material.Filled.MoneyOff"
+                                       Disabled="@(_revokingAchSuccessId == context.Id || _revokingAssociationId == context.Id)"
+                                       OnClick="@(() => RevokeAchSuccessMarkAsync(context))">
+                                撤销成功
+                            </MudButton>
+                        }
+                        @if (PendingReviewDebitRevocation.CanRevoke(context))
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Warning"
+                                       StartIcon="@Icons.Material.Filled.LinkOff"
+                                       Disabled="@(_revokingAssociationId == context.Id || _revokingAchSuccessId == context.Id)"
+                                       OnClick="@(() => RevokeDebitAssociationAsync(context))">
+                                撤销关联
+                            </MudButton>
+                        }
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </div>
+</MudPaper>
 
 @code {
     private DateTime? _from = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1);

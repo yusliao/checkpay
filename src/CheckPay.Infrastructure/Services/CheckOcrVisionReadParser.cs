@@ -110,8 +110,20 @@ internal static class CheckOcrVisionReadParser
         @"^\$\s*([\d,]{1,9})\s*$",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// 票面 <c>$ 1554 5x</c>：整数金额后紧跟 OCR 烂尾（非规范的两位分）。可与邻行 <c>20 ke</c> 拼回 cents。
+    /// </summary>
+    private static readonly Regex AmountDollarLeadingIntegerNoiseSuffixRegex = new(
+        @"^\$\s*([\d,]{1,9})\b\s+(?!(\d{2})\b)\S",
+        RegexOptions.Compiled);
+
     private static readonly Regex TwoDigitCentsOnlyTextRegex = new(
         @"^\d{2}$",
+        RegexOptions.Compiled);
+
+    /// <summary><c>20 ke</c>、<c>48</c>：行首两位分，后可跟少量字母噪声；勿匹配 <c>2211798</c>（两位后仍为数字）。</summary>
+    private static readonly Regex LeadingTwoDigitCentsLooseLineRegex = new(
+        @"^\d{2}(?!\d)(?:\s+[a-zA-Z]{1,12})?\s*$",
         RegexOptions.Compiled);
 
     /// <summary>独立行 <c>48/100</c>、<c>48／100</c> 或后接 <c>%</c>/<c>percent</c>（票面分列）。</summary>
@@ -1250,6 +1262,9 @@ internal static class CheckOcrVisionReadParser
                 var centsLine = ordered[i + 1].l;
                 TryAddSpilloverDollarCentsLinePair(scored, dollarLine, centsLine, centsLine.Text.Trim(), profile);
             }
+
+            for (var i = 0; i < ordered.Count; i++)
+                TryAddNoiseTailDollarCentsSpillover(scored, ordered, i, profile);
         }
 
         if (scored.Count == 0)
@@ -1310,6 +1325,31 @@ internal static class CheckOcrVisionReadParser
             return;
         }
 
+        if (LeadingTwoDigitCentsLooseLineRegex.IsMatch(centsTrimmed)
+            && IsPlausibleIsolatedTwoDigitCentsLine(centsTrimmed)
+            && int.TryParse(centsTrimmed.AsSpan(0, 2), NumberStyles.Integer, CultureInfo.InvariantCulture, out var looseCents)
+            && looseCents is >= 0 and <= 99)
+        {
+            var syntheticLoose = $"{dMatch.Value} {looseCents:D2}";
+            foreach (Match sm in AmountDollarSpaceCentsRegex.Matches(syntheticLoose))
+            {
+                var dollars = sm.Groups[1].Value.Replace(",", "");
+                var centsPart = sm.Groups[2].Value;
+                if (!decimal.TryParse(dollars, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dInt))
+                    continue;
+                if (!int.TryParse(centsPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cents2)
+                    || cents2 is < 0 or > 99)
+                    continue;
+                var v = dInt + cents2 / 100m;
+                if (v <= 0m)
+                    continue;
+                var score = ScoreAmountCandidate(dollarLine, hasDollar: true, profile, extraBoost: 0.22);
+                scored.Add((v, score, "spillover_cents"));
+            }
+
+            return;
+        }
+
         var fracLine = NormalizeCourtesyFractionSlashes(centsTrimmed);
         var fracOnly = FractionHundredthsOnlyLineRegex.Match(fracLine);
         if (!fracOnly.Success)
@@ -1317,6 +1357,88 @@ internal static class CheckOcrVisionReadParser
 
         var syntheticFrac = $"{dMatch.Value} {fracOnly.Groups[1].Value}/100";
         AddScoresFromFractionOver100Matches(scored, dollarLine, syntheticFrac, profile, "spillover_fraction_100");
+    }
+
+    /// <summary>
+    /// <c>$ 1554 5x</c> 之类：整数 + OCR 烂尾，分行拾取 <c>20 ke</c> 两位分（可在金额框上方或下方）。
+    /// </summary>
+    private static void TryAddNoiseTailDollarCentsSpillover(
+        List<(decimal amount, double score, string mode)> scored,
+        List<(ReadOcrLine l, int idx)> ordered,
+        int dollarIdx,
+        CheckOcrParsingProfile profile)
+    {
+        var dollarLine = ordered[dollarIdx].l;
+        var dt = dollarLine.Text.Trim();
+        if (!AmountDollarLeadingIntegerNoiseSuffixRegex.IsMatch(dt))
+            return;
+
+        var dm = Regex.Match(dt, @"^\$\s*([\d,]{1,9})\b", RegexOptions.CultureInvariant);
+        if (!dm.Success)
+            return;
+
+        var dollars = dm.Groups[1].Value.Replace(",", "");
+        if (!decimal.TryParse(dollars, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dInt) || dInt <= 0m)
+            return;
+
+        for (var step = -1; step <= 1; step += 2)
+        {
+            var j = dollarIdx + step;
+            if (j < 0 || j >= ordered.Count)
+                continue;
+
+            var centsLine = ordered[j].l;
+            if (!AmountSpilloverVerticalProximityBidirectional(dollarLine, centsLine))
+                continue;
+
+            var centsTrim = centsLine.Text.Trim();
+            if (LooksLikeMicrInkLine(centsTrim))
+                continue;
+            if (!LeadingTwoDigitCentsLooseLineRegex.IsMatch(centsTrim))
+                continue;
+            if (!IsPlausibleIsolatedTwoDigitCentsLine(centsTrim))
+                continue;
+            if (!int.TryParse(centsTrim.AsSpan(0, 2), NumberStyles.Integer, CultureInfo.InvariantCulture, out var cents2)
+                || cents2 is < 0 or > 99)
+                continue;
+
+            var v = dInt + cents2 / 100m;
+            if (v <= 0m)
+                continue;
+
+            var score = ScoreAmountCandidate(dollarLine, hasDollar: true, profile, extraBoost: 0.18);
+            scored.Add((v, score, "spillover_cents_noise_tail"));
+        }
+    }
+
+    /// <summary>两位分噪声行须恰好两个数字，避免备忘长整数被当作分。</summary>
+    private static bool IsPlausibleIsolatedTwoDigitCentsLine(string trimmed)
+    {
+        if (trimmed.AsSpan().ContainsAny(stackalloc[] { '/', '\\', '-', '⑆', '⑈', '⑉' }))
+            return false;
+
+        var digits = 0;
+        foreach (var ch in trimmed)
+        {
+            if (char.IsAsciiDigit(ch))
+                digits++;
+        }
+
+        return digits == 2;
+    }
+
+    private static bool AmountSpilloverVerticalProximityBidirectional(ReadOcrLine dollarLine, ReadOcrLine centsLine)
+    {
+        const double maxGap = 0.14;
+        var gapBelow = centsLine.NormTop - dollarLine.NormBottom;
+        if (gapBelow >= -0.03 && gapBelow <= maxGap)
+            return HorizontalIntervalOverlapOrNear(dollarLine, centsLine);
+
+        var gapAbove = dollarLine.NormTop - centsLine.NormBottom;
+        if (gapAbove >= -0.03 && gapAbove <= maxGap)
+            return HorizontalIntervalOverlapOrNear(dollarLine, centsLine);
+
+        return false;
     }
 
     private static string NormalizeCourtesyFractionSlashes(string text) =>

@@ -95,6 +95,33 @@ public class CheckOcrVisionReadParserTests
         Assert.Equal("spillover_cents", mode);
     }
 
+    /// <summary>Wells 类票面：<c>$ 1554 5x</c> 烂尾 + 邻行 <c>20 ke</c> 分出在美分区。</summary>
+    [Fact]
+    public void ParseAmount_NoiseTailOnDollarLine_PlusTwentyKeLine_AboveOrBelow_Yields1554_20()
+    {
+        var linesAbove = new[]
+        {
+            new ReadOcrLine("FIFTEEN HUNDRED FIFTY Five dollars", 0.38, 0.38, 0.36, 0.40, 0.08, 0.72),
+            new ReadOcrLine("20 ke", 0.41, 0.41, 0.40, 0.42, 0.42, 0.56),
+            new ReadOcrLine("$ 1554 5x", 0.46, 0.46, 0.44, 0.48, 0.38, 0.62),
+            new ReadOcrLine("DOLLARS", 0.12, 0.52, 0.50, 0.54, 0.08, 0.22),
+        };
+        var layoutAbove = new ReadOcrLayout(string.Join('\n', linesAbove.Select(l => l.Text)), linesAbove, 1200, 900);
+        var (amtAbove, _, modeAbove) = CheckOcrVisionReadParser.ParseAmount(layoutAbove, CheckOcrParsingProfile.Default);
+        Assert.Equal(1554.20m, amtAbove);
+        Assert.Equal("spillover_cents_noise_tail", modeAbove);
+
+        var linesBelow = new[]
+        {
+            new ReadOcrLine("$ 1554 5x", 0.46, 0.44, 0.42, 0.46, 0.38, 0.62),
+            new ReadOcrLine("20 ke", 0.41, 0.49, 0.47, 0.51, 0.42, 0.56),
+        };
+        var layoutBelow = new ReadOcrLayout(string.Join('\n', linesBelow.Select(l => l.Text)), linesBelow, 1200, 900);
+        var (amtBelow, _, modeBelow) = CheckOcrVisionReadParser.ParseAmount(layoutBelow, CheckOcrParsingProfile.Default);
+        Assert.Equal(1554.20m, amtBelow);
+        Assert.Equal("spillover_cents_noise_tail", modeBelow);
+    }
+
     [Fact]
     public void ParseAmount_FractionOver100_OnSameLine_AlignsCourtesyBoxPercentForm()
     {

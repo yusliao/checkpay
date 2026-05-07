@@ -147,4 +147,85 @@ public class CheckOcrParsedSampleCorrectorTests
         var result = await corrector.ApplyIfMatchedAsync(parsed);
         Assert.Same(parsed, result);
     }
+
+    /// <summary>
+    /// 同一路由下多张票可能共享相同的误解析支票号（实为账号）；MICR 数字指纹不同则不得强匹配纠偏。
+    /// </summary>
+    [Fact]
+    public async Task ApplyIfMatched_ShouldNotStrongMatch_WhenSameCheckNumberRouting_ButMicrDigitFingerprintDiffers()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        await using var db = new ApplicationDbContext(options);
+
+        var ocrAchSample = CheckAchExtensionData.Serialize(new CheckAchExtensionData(
+            "267084131",
+            "710978795",
+            null,
+            null,
+            "addr ocr",
+            null,
+            null,
+            null,
+            "⑈001128⑈ ⑆267084131⑆\n710978795⑈",
+            null,
+            null,
+            null));
+        var okAchSample = CheckAchExtensionData.Serialize(new CheckAchExtensionData(
+            "267084131",
+            "710978795",
+            null,
+            null,
+            "addr ok",
+            null,
+            null,
+            null,
+            "⑈001128⑈ ⑆267084131⑆\n710978795⑈",
+            null,
+            null,
+            null));
+
+        db.OcrTrainingSamples.Add(new OcrTrainingSample
+        {
+            ImageUrl = "http://x/20.jpg",
+            DocumentType = "check",
+            OcrRawResponse = "{}",
+            OcrCheckNumber = "710978795",
+            CorrectCheckNumber = "710978795",
+            OcrAmount = 5158.87m,
+            CorrectAmount = 5158.87m,
+            OcrDate = new DateTime(2026, 4, 9, 0, 0, 0, DateTimeKind.Utc),
+            CorrectDate = new DateTime(2026, 4, 9, 0, 0, 0, DateTimeKind.Utc),
+            OcrAchExtensionJson = ocrAchSample,
+            CorrectAchExtensionJson = okAchSample
+        });
+        await db.SaveChangesAsync();
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Ocr:CheckAzureTrainingCorrectionEnabled"] = "true",
+            ["Ocr:CheckAzureTrainingCorrectionMaxScan"] = "40",
+            ["Ocr:CheckAzureTrainingCorrectionClusterMinSamples"] = "1",
+            ["Ocr:CheckAzureTrainingCorrectionSampleMinAgeMinutes"] = "0"
+        }).Build();
+
+        var corrector = new CheckOcrParsedSampleCorrector(db, config, NullLogger<CheckOcrParsedSampleCorrector>.Instance);
+
+        var parsed = new OcrResultDto(
+            CheckNumber: "710978795",
+            Amount: 7403.32m,
+            Date: new DateTime(2026, 1, 9, 0, 0, 0, DateTimeKind.Utc),
+            ConfidenceScores: new Dictionary<string, double> { ["Amount"] = 0.42 },
+            RoutingNumber: "267084131",
+            AccountNumber: "710978795",
+            AccountAddress: "addr from 21",
+            MicrLineRaw: "⑈001078⑈ ⑆267084131⑆\n710978795⑈");
+
+        var result = await corrector.ApplyIfMatchedAsync(parsed);
+
+        Assert.Same(parsed, result);
+        Assert.Equal(7403.32m, result.Amount);
+        Assert.Equal("addr from 21", result.AccountAddress);
+    }
 }

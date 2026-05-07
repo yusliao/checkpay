@@ -145,7 +145,7 @@ else
                                 <MudTooltip Text="对识别结果不满意？点击再次识别">
                                     <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
                                                    Color="Color.Info" OnClick="RetryOcrAsync"
-                                                   Disabled="@_retryingOcr" />
+                                                   Disabled="@(_retryingOcr || IsCurrentQueueItemReadOnly())" />
                                 </MudTooltip>
                             }
                             else if (_current.OcrStatus == CheckOcrStatus.Failed)
@@ -157,7 +157,7 @@ else
                                 <MudTooltip Text="重新尝试 OCR 识别">
                                     <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
                                                    Color="Color.Warning" OnClick="RetryOcrAsync"
-                                                   Disabled="@_retryingOcr" />
+                                                   Disabled="@(_retryingOcr || IsCurrentQueueItemReadOnly())" />
                                 </MudTooltip>
                             }
                         </MudStack>
@@ -208,12 +208,20 @@ else
                     }
                     else
                     {
+                        @if (IsCurrentQueueItemReadOnly())
+                        {
+                            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                                该附件已保存入库，表单为只读；可切换队列中其他缩略图继续录入。
+                            </MudAlert>
+                        }
+
                         @* 支票号 *@
                         <div class="mb-2">
                             <MudTextField @bind-Value="_checkNumber"
                                           Label="支票号"
                                           Required="true"
                                           Variant="Variant.Outlined"
+                                          ReadOnly="@IsCurrentQueueItemReadOnly()"
                                           Style="@GetFieldStyle("checkNumber")"
                                           HelperText="@GetFieldHint("checkNumber")"
                                           HelperTextOnFocus="false"
@@ -229,6 +237,7 @@ else
                                              Required="true"
                                              Format="N2"
                                              Variant="Variant.Outlined"
+                                             ReadOnly="@IsCurrentQueueItemReadOnly()"
                                              Style="@GetFieldStyle("amount")"
                                              HelperText="@GetFieldHint("amount")"
                                              HelperTextOnFocus="false"
@@ -256,7 +265,7 @@ else
                                 @OcrAmountValidationNotes.ManualReviewCompletedMessage
                             </MudAlert>
                         }
-                        @if (CanShowManualAmountValidationButton())
+                        @if (CanShowManualAmountValidationButton() && !IsCurrentQueueItemReadOnly())
                         {
                             <MudStack Row="true" Spacing="1" Class="mb-2">
                                 <MudButton Variant="Variant.Outlined"
@@ -284,6 +293,7 @@ else
                                            Label="日期"
                                            Required="true"
                                            Variant="Variant.Outlined"
+                                           ReadOnly="@IsCurrentQueueItemReadOnly()"
                                            Style="@GetFieldStyle("date")"
                                            HelperText="@GetFieldHint("date")" />
                         </div>
@@ -292,17 +302,23 @@ else
                         <MudText Typo="Typo.subtitle2" Class="mb-2">ACH / 票面信息</MudText>
                         <MudTextField @bind-Value="_routingNumber" Label="Routing Number (ABA)" Variant="Variant.Outlined" Class="mb-2"
                                       Style="@GetFieldStyle("routingNumber")" HelperText="@GetFieldHint("routingNumber")"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()"
                                       OnBlur="@OnAchRoutingBlurAsync" />
                         <MudTextField @bind-Value="_accountNumber" Label="Account Number" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("accountNumber")" HelperText="@GetFieldHint("accountNumber")" />
+                                      Style="@GetFieldStyle("accountNumber")" HelperText="@GetFieldHint("accountNumber")"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
                         <MudTextField @bind-Value="_bankName" Label="Bank Name" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("bankName")" HelperText="@GetFieldHint("bankName")" />
+                                      Style="@GetFieldStyle("bankName")" HelperText="@GetFieldHint("bankName")"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
                         <MudTextField @bind-Value="_accountHolderName" Label="Account Holder Name" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("accountHolderName")" HelperText="@GetFieldHint("accountHolderName")" />
+                                      Style="@GetFieldStyle("accountHolderName")" HelperText="@GetFieldHint("accountHolderName")"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
                         <MudTextField @bind-Value="_accountAddress" Label="Account Address" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2" />
+                                      Style="@GetFieldStyle("accountAddress")" HelperText="@GetFieldHint("accountAddress")" Lines="2"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
                         <MudSelect T="string" @bind-Value="_accountType" Label="Account Type" Variant="Variant.Outlined"
                                    Class="mb-2"
+                                   Disabled="@IsCurrentQueueItemReadOnly()"
                                    Style="@GetFieldStyle("accountType")" HelperText="@GetFieldHint("accountType")">
                             <MudSelectItem T="string" Value="@CheckAccountTypeCatalog.BusinessChecking">
                                 @CheckAccountTypeCatalog.BusinessChecking
@@ -313,6 +329,7 @@ else
                         </MudSelect>
                         <MudSelect T="string" @bind-Value="_payToOrderOf" Label="Pay to the order of" Variant="Variant.Outlined"
                                    Class="mb-2"
+                                   Disabled="@IsCurrentQueueItemReadOnly()"
                                    Style="@GetFieldStyle("payToOrderOf")" HelperText="@GetFieldHint("payToOrderOf")">
                             <MudSelectItem T="string" Value="@PayToOrderOfCatalog.CheungKongAllianceFood">
                                 @PayToOrderOfCatalog.CheungKongAllianceFood
@@ -322,9 +339,11 @@ else
                             </MudSelectItem>
                         </MudSelect>
                         <MudTextField @bind-Value="_forMemo" Label="For / Memo" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("forMemo")" HelperText="@GetFieldHint("forMemo")" />
+                                      Style="@GetFieldStyle("forMemo")" HelperText="@GetFieldHint("forMemo")"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
                         <MudTextField @bind-Value="_companyName" Label="公司名称（付款/开票主体）" Variant="Variant.Outlined" Class="mb-2"
-                                      Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")" />
+                                      Style="@GetFieldStyle("companyName")" HelperText="@GetFieldHint("companyName")"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
 
                         @* 客户账号 (customer_code = 支票账号)；与 Routing Number（9 位 ABA）一起在主数据中唯一；手机号/期望银行、公司、地址、账户类型、Pay to 等按二者匹配自动带出 *@
                         <MudTextField @bind-Value="_customerCode"
@@ -333,6 +352,7 @@ else
                                       Variant="Variant.Outlined"
                                       Class="mb-2"
                                       Placeholder="与支票账号一致，支持新建"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()"
                                       OnBlur="@OnCustomerAccountBlurAsync" />
                         <MudTextField @bind-Value="_customerPhone"
                                       Label="餐馆编号"
@@ -340,7 +360,8 @@ else
                                       Variant="Variant.Outlined"
                                       Class="mb-2"
                                       Placeholder="必填，可与主数据不一致时更新主数据"
-                                      MaxLength="30" />
+                                      MaxLength="30"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
 
                         @if (ShowCustomerAuthorizationHint())
                         {
@@ -374,10 +395,13 @@ else
                         }
 
                         <MudTextField @bind-Value="_notes" Label="备注" Lines="2"
-                                      Variant="Variant.Outlined" Class="mb-3" />
+                                      Variant="Variant.Outlined" Class="mb-3"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
 
-                        <MudTextField @bind-Value="_invoiceNumbers" Label="发票号码（多个用英文逗号分隔）" Variant="Variant.Outlined" Class="mb-2" />
-                        <MudTextField @bind-Value="_paymentPeriodText" Label="支付对应期间（如 2026-06）" Variant="Variant.Outlined" Class="mb-3" />
+                        <MudTextField @bind-Value="_invoiceNumbers" Label="发票号码（多个用英文逗号分隔）" Variant="Variant.Outlined" Class="mb-2"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
+                        <MudTextField @bind-Value="_paymentPeriodText" Label="支付对应期间（如 2026-06）" Variant="Variant.Outlined" Class="mb-3"
+                                      ReadOnly="@IsCurrentQueueItemReadOnly()" />
 
                         @* 置信度图例 *@
                         @if (_confidenceScores.Count > 0)
@@ -393,7 +417,7 @@ else
                         }
 
                         <MudButton Variant="Variant.Outlined" Class="mr-2" OnClick="SkipCurrent"
-                                   Disabled="@(_current.Uploading)">跳过</MudButton>
+                                   Disabled="@(_current.Uploading || IsCurrentQueueItemReadOnly())">跳过</MudButton>
                         @if (HasAmountValidationMismatch())
                         {
                             <MudButton Variant="Variant.Outlined"
@@ -401,16 +425,16 @@ else
                                        Class="mr-2"
                                        StartIcon="@Icons.Material.Filled.ReportProblem"
                                        OnClick="SaveDraftWithMismatchReasonAsync"
-                                       Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing)">
+                                       Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing || IsCurrentQueueItemReadOnly())">
                                 @OcrAmountValidationNotes.DraftOnMismatchButtonText
                             </MudButton>
                         }
                         <MudButton Variant="Variant.Outlined" Color="Color.Info" Class="mr-2" OnClick="() => SaveCurrent(false)"
-                                   Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing)">
+                                   Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing || IsCurrentQueueItemReadOnly())">
                             @(_saving ? "保存中..." : "保存草稿")
                         </MudButton>
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SaveCurrent(true)"
-                                   Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing)">
+                                   Disabled="@(_saving || _current.Uploading || _current.OcrStatus == CheckOcrStatus.Recognizing || IsCurrentQueueItemReadOnly())">
                             @(_saving ? "保存中..." : "提交入库")
                         </MudButton>
                     }
@@ -845,11 +869,10 @@ else
 
     private async Task SelectItemAsync(QueueItem item)
     {
-        if (item.Done) return;
         _current = item;
         ClearForm();
+        _ocrResult = null;
 
-        // 异步加载 OCR 结果
         if (item.OcrResultId.HasValue)
         {
             await DbSerializedAsync(async () =>
@@ -859,14 +882,71 @@ else
                     .FirstOrDefaultAsync(o => o.Id == item.OcrResultId!.Value);
                 if (result != null)
                     _ocrResult = result;
+
+                if (item.Done)
+                {
+                    var record = await DbContext.CheckRecords
+                        .AsNoTracking()
+                        .Include(c => c.Customer)
+                        .Where(c => c.OcrResultId == item.OcrResultId)
+                        .OrderByDescending(c => c.CreatedAt)
+                        .FirstOrDefaultAsync();
+                    if (record != null)
+                        ApplyCheckRecordToForm(item, record);
+                }
             });
         }
 
-        // 切换时如果 OCR 已完成，立即预填
-        if (item.OcrStatus == CheckOcrStatus.Completed)
+        if (!item.Done && item.OcrStatus == CheckOcrStatus.Completed)
             await PrefillFormAsync(item);
+
         RefreshOcrCopyPanelText();
         StateHasChanged();
+    }
+
+    private bool IsCurrentQueueItemReadOnly()
+        => _current?.Done == true;
+
+    private void ApplyCheckRecordToForm(QueueItem queueItem, CheckRecord record)
+    {
+        _checkNumber = record.CheckNumber;
+        _amount = record.CheckAmount;
+        _checkDate = record.CheckDate;
+        _notes = record.Notes ?? "";
+        _routingNumber = record.RoutingNumber ?? "";
+        _accountNumber = record.AccountNumber ?? "";
+        _bankName = record.BankName ?? "";
+        _accountHolderName = record.AccountHolderName ?? "";
+        _accountAddress = record.AccountAddress ?? "";
+        _accountType = string.IsNullOrWhiteSpace(record.AccountType)
+            ? CheckAccountTypeCatalog.BusinessChecking
+            : record.AccountType;
+        _payToOrderOf = string.IsNullOrWhiteSpace(record.PayToOrderOf)
+            ? PayToOrderOfCatalog.CheungKongAllianceFood
+            : record.PayToOrderOf!;
+        _forMemo = record.ForMemo ?? "";
+        _micrLineRaw = record.MicrLineRaw ?? "";
+        _checkNumberMicr = record.CheckNumberMicr ?? "";
+        _invoiceNumbers = record.InvoiceNumbers ?? "";
+        _paymentPeriodText = record.PaymentPeriodText ?? "";
+        _companyName = record.CompanyName ?? "";
+
+        if (record.Customer != null)
+        {
+            _customerCode = record.Customer.CustomerCode;
+            _customerPhone = record.Customer.MobilePhone ?? "";
+            _lastCustomerCodeForAutoPhone = _customerCode.Trim().ToLowerInvariant();
+            _lastRoutingKeyForAutoPhone = CustomerAchRoutingLookup.NormalizeRoutingKey(_routingNumber);
+        }
+        else
+        {
+            _customerCode = "";
+            _customerPhone = "";
+            _lastCustomerCodeForAutoPhone = null;
+            _lastRoutingKeyForAutoPhone = null;
+        }
+
+        _confidenceScores = new Dictionary<string, double>(queueItem.ConfidenceScores, StringComparer.OrdinalIgnoreCase);
     }
 
     private void RefreshOcrCopyPanelText()
@@ -898,7 +978,7 @@ else
     /// <summary>再次识别：重置 OcrResult 状态，重新入队</summary>
     private async Task RetryOcrAsync()
     {
-        if (_current?.OcrResultId == null || _retryingOcr) return;
+        if (_current?.Done == true || _current?.OcrResultId == null || _retryingOcr) return;
 
         _retryingOcr = true;
         try
@@ -968,7 +1048,7 @@ else
 
     private async Task RunAmountValidationAsync()
     {
-        if (_current?.OcrResultId == null) return;
+        if (_current?.Done == true || _current?.OcrResultId == null) return;
         if (_amount <= 0m)
         {
             Snackbar.Add("请先确认金额后再执行手写金额校验", Severity.Warning);
@@ -1095,33 +1175,28 @@ else
 
     private async Task SaveCurrent(bool submitAsFinal)
     {
-        if (_saving || _current == null) return;
+        if (_saving || _current == null || _current.Done) return;
         _saving = true;
 
         try
         {
-            var validationFailed = false;
+            string? validationError = null;
+            var masterMismatch = false;
 
             await DbSerializedAsync(async () =>
             {
-                var error = await ValidateFormAsync(submitAsFinal);
-                if (!string.IsNullOrEmpty(error))
-                {
-                    Snackbar.Add(error, Severity.Warning);
-                    validationFailed = true;
+                validationError = await ValidateFormAsync(submitAsFinal);
+                if (!string.IsNullOrEmpty(validationError))
                     return;
-                }
 
                 var customer = await ResolveCustomerAsync();
-                var mismatch = CheckMasterDataComparer.HasMismatch(
+                masterMismatch = CheckMasterDataComparer.HasMismatch(
                     customer,
                     NullIfEmpty(_bankName),
                     NullIfEmpty(_accountHolderName),
                     NullIfEmpty(_companyName),
                     NullIfEmpty(_accountNumber),
                     NullIfEmpty(_accountAddress));
-                if (mismatch)
-                    Snackbar.Add("与客户主数据中的期望银行/账号/持有人/公司/地址不一致，已标记警告。", Severity.Warning);
 
                 var registeredCompanies = customer.CompanyNames.Select(x => x.CompanyName).ToList();
                 var companyWarn = !CustomerCompanyNameRules.IsRegisteredCompany(registeredCompanies, _companyName);
@@ -1156,7 +1231,7 @@ else
                     PaymentPeriodText = NullIfEmpty(_paymentPeriodText),
                     CompanyName = NullIfEmpty(_companyName),
                     SubmittedAt = submitAsFinal ? DateTime.UtcNow : null,
-                    CustomerMasterMismatchWarning = mismatch,
+                    CustomerMasterMismatchWarning = masterMismatch,
                     CustomerCompanyNewRelationshipWarning = companyWarn
                 };
 
@@ -1180,14 +1255,24 @@ else
                 }
             });
 
-            if (validationFailed)
+            if (!string.IsNullOrEmpty(validationError))
+            {
+                Snackbar.Add(validationError, Severity.Warning);
                 return;
+            }
 
             _current!.Done = true;
-            Snackbar.Add(submitAsFinal
-                ? "支票已提交入库！"
-                : "支票草稿已保存。可稍后在「收款记录」中打开该笔，使用「编辑草稿」继续修改，或在收款记录中补全 Routing / Account 后「提交入库」。",
-                Severity.Success);
+            const string masterSuffix = "（与客户主数据期望不一致，已标记警告。）";
+            if (submitAsFinal)
+            {
+                Snackbar.Add(masterMismatch ? $"支票已提交入库！{masterSuffix}" : "支票已提交入库！", Severity.Success);
+            }
+            else
+            {
+                var draftBody =
+                    "支票草稿已保存。可稍后在「收款记录」中打开该笔，使用「编辑草稿」继续修改，或在收款记录中补全 Routing / Account 后「提交入库」。";
+                Snackbar.Add(masterMismatch ? $"{draftBody}{masterSuffix}" : draftBody, Severity.Success);
+            }
 
             _current = _uploadQueue.FirstOrDefault(q => !q.Done);
             ClearForm();
@@ -1200,7 +1285,25 @@ else
         }
         catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
         {
-            Snackbar.Add($"同银行下支票号 {CheckNumberGuard.Normalize(_checkNumber)} 已存在", Severity.Error);
+            if (ex.GetBaseException() is Npgsql.PostgresException pg)
+                Logger.LogWarning(
+                    "支票保存唯一索引冲突 ix_check_records_check_number：{SqlState} {Message}. Detail: {Detail}",
+                    pg.SqlState,
+                    pg.MessageText,
+                    pg.Detail);
+
+            if (DbContext is DbContext ef)
+            {
+                foreach (var entry in ef.ChangeTracker.Entries<CheckRecord>().Where(e => e.State == EntityState.Added)
+                             .ToList())
+                    entry.State = EntityState.Detached;
+            }
+
+            Snackbar.Add(
+                CheckNumberGuard.FormatDuplicateUserMessage(
+                    CheckNumberGuard.Normalize(_checkNumber),
+                    CheckNumberGuard.NormalizeRouting(_routingNumber)),
+                Severity.Error);
         }
         catch (Exception ex)
         {
@@ -1330,7 +1433,7 @@ else
         _routingNumber = CheckNumberGuard.NormalizeRouting(_routingNumber);
         var exists = await CheckNumberGuard.ExistsAsync(DbContext, _checkNumber, _routingNumber);
         if (exists)
-            return $"同银行下支票号 {_checkNumber} 已存在";
+            return CheckNumberGuard.FormatDuplicateUserMessage(_checkNumber, _routingNumber);
 
         return null;
     }

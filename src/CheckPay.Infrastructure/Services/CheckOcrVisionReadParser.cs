@@ -252,6 +252,17 @@ internal static class CheckOcrVisionReadParser
     }
 
     /// <summary>
+    /// Chase 常见：路由前 ⑈ 内为 0 垫片支票序（000183；或 001128 类 6～7 位），同行/换行后裸 9 位常为账号。
+    /// ⑈001408⑈+换行 9 位时末段常为支票号（见 SkipZip），以左段第 4 位数字与 001408 区分。
+    /// </summary>
+    private static bool LooksLikeChaseBracketedCheckWithNineDigitAccountTail(string leftDigits, int rightDigitLen) =>
+        leftDigits.Length is >= 4 and <= 7
+        && rightDigitLen == 9
+        && (leftDigits.StartsWith("000", StringComparison.Ordinal)
+            || (leftDigits.Length >= 7 && leftDigits[0] == '0')
+            || (leftDigits.Length == 6 && leftDigits[0] == '0' && leftDigits[3] < '4'));
+
+    /// <summary>
     /// 紧跟 <c>⑆9位路由⑆</c> 之后出现「可选账号左侧 ⑈ + 账号数字 + ⑈ + 支票号」时解析账号（Vision 常把磁墨切成两行且漏读账号左侧 ⑈）。
     /// </summary>
     private static bool TryParseAuxiliaryOnUsAfterTransit(string normalizedText, int transitMatchEndIndex, out string? accountDigits)
@@ -303,10 +314,10 @@ internal static class CheckOcrVisionReadParser
         if (TryAssignMicrCheckVsAccountByLength(left, right, out checkDigits, out accountDigits))
             return true;
 
-        // Chase 等：同行 ⑈支票序⑈ ⑆路由⑆ 后换行再接「账号 + 尾 ⑈」且 Vision 漏读账号左 ⑈；000xxx 垫片常为磁墨支票序，右侧 9 位常为账号
-        if (left.Length is >= 4 and <= 7
-            && left.StartsWith("000", StringComparison.Ordinal)
-            && right.Length == 9)
+        // Chase 等：同行 ⑈支票序⑈ ⑆路由⑆ 后换行再接「账号 + 尾 ⑈」且 Vision 漏读账号左 ⑈。
+        // 000xxx（如 000183）、≥7 位 0 垫片左段，或 6 位且第 4 位 &lt;4 的 0011xx/0010xx 等（如 001128）；右段 9 位常为账号。
+        // ⑈001408⑈（左段第 4 位为 4）+ 换行 9 位时末段常为支票号（见 SkipZip）。
+        if (LooksLikeChaseBracketedCheckWithNineDigitAccountTail(left, right.Length))
         {
             checkDigits = left;
             accountDigits = right;
@@ -344,9 +355,7 @@ internal static class CheckOcrVisionReadParser
         {
             if (L <= 7 && R >= 8)
             {
-                var preferLeftChaseSplitAccount = left.Length is >= 4 and <= 7
-                    && left.StartsWith("000", StringComparison.Ordinal)
-                    && R == 9;
+                var preferLeftChaseSplitAccount = LooksLikeChaseBracketedCheckWithNineDigitAccountTail(left, R);
                 // 右段 8 位且换行时多为 Peoples 换行长账号，仍取左（见单测 Peoples vs SkipsZip）。
                 if (right.Length >= 9
                     && NewlineBetweenTransitCloseAndRightDigits(normalizedText, routing9, right)
@@ -509,6 +518,30 @@ internal static class CheckOcrVisionReadParser
         }
 
         return null;
+    }
+
+    /// <summary>命中「⑈左段⑈ ⑆校验通过的路由⑆」时抽出左段数字（不要求已解出右侧账号/支票号），用于与印刷票号对齐消歧。</summary>
+    private static bool TryGetLeadingBracketDigitsBeforeValidatedTransit(string? norm, out string? leftDigits)
+    {
+        leftDigits = null;
+        if (string.IsNullOrWhiteSpace(norm))
+            return false;
+        foreach (Match tm in E13bTransitRoutingRegex.Matches(norm))
+        {
+            var rt = tm.Groups[1].Value;
+            if (!AbaRoutingNumberValidator.IsValid(rt))
+                continue;
+            var m = Regex.Match(
+                norm,
+                $@"⑈(\d{{4,17}})⑈\s*⑆\s*{Regex.Escape(rt)}\s*⑆",
+                RegexOptions.Singleline);
+            if (!m.Success)
+                continue;
+            leftDigits = m.Groups[1].Value;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>支票号数字在忽略前导 0 下是否同一串（如 002594 与 2594）。</summary>
@@ -771,6 +804,13 @@ internal static class CheckOcrVisionReadParser
 
         var micrBracketedCheck = TryExtractMicrCheckBracketedAroundTransit(micrNorm)
             ?? TryExtractMicrCheckBracketedAroundTransit(fullNormMicr);
+        string? micrLeadingBracketBeforeTransit = null;
+        if (micrBracketedCheck is null)
+        {
+            if (!TryGetLeadingBracketDigitsBeforeValidatedTransit(micrNorm, out micrLeadingBracketBeforeTransit))
+                TryGetLeadingBracketDigitsBeforeValidatedTransit(fullNormMicr, out micrLeadingBracketBeforeTransit);
+        }
+
         string? micrNumber = micrBracketedCheck;
         if (micrNumber is null && !string.IsNullOrEmpty(fragMicrCheckDigits))
             micrNumber = fragMicrCheckDigits;
@@ -849,6 +889,21 @@ internal static class CheckOcrVisionReadParser
         var printedCandidate = PickBestPrintedCheckCandidate(layout, profile, printedText, printedMicrHint);
         var printedNumber = printedCandidate.number;
         var printedScore = printedCandidate.score;
+
+        // ⑈001128⑈ 类 6 位 0 垫片：若 E13B 未产出 micrBracketedCheck，但已抽到路由前左 bracket，且 micrNumber 被末段 ⑈/启发式误取为 9 位账号尾，则按 Chase 规则纠偏。
+        // 有印刷同键时优先（较短展示形）；无印刷时仍退回 bracket canonical 短形（如 1128），避免完全依赖 PrintedCheckPriorRegion 几何。
+        if (micrBracketedCheck is null
+            && micrLeadingBracketBeforeTransit is { Length: >= 4 and <= 7 }
+            && micrNumber is { Length: 9 }
+            && LooksLikeChaseBracketedCheckWithNineDigitAccountTail(micrLeadingBracketBeforeTransit, micrNumber.Length)
+            && !CanonicalCheckDigitsEqual(micrLeadingBracketBeforeTransit, micrNumber))
+        {
+            if (printedNumber is not null && CanonicalCheckDigitsEqual(micrLeadingBracketBeforeTransit, printedNumber))
+                return (PreferShorterCanonicallyEqualCheckDigits(micrLeadingBracketBeforeTransit, printedNumber), 0.87);
+
+            var canon = CanonicalCheckDigitsKey(micrLeadingBracketBeforeTransit);
+            return (PreferShorterCanonicallyEqualCheckDigits(micrLeadingBracketBeforeTransit, canon), 0.85);
+        }
 
         if (micrNumber != null && printedNumber != null)
         {
@@ -946,6 +1001,19 @@ internal static class CheckOcrVisionReadParser
         if (printedNumber is not null && printedNumber.Length == 4
             && Regex.IsMatch(text, $@"(?i)\b[A-Z]{{2}}\s+\d{{5}}-{Regex.Escape(printedNumber)}\b"))
             printedNumber = null;
+
+        TryGetLeadingBracketDigitsBeforeValidatedTransit(norm, out var leadingBracketFt);
+        if (micrBracketedFt is null
+            && leadingBracketFt is { Length: >= 4 and <= 7 }
+            && micrNumber is { Length: 9 }
+            && LooksLikeChaseBracketedCheckWithNineDigitAccountTail(leadingBracketFt, micrNumber.Length)
+            && !CanonicalCheckDigitsEqual(leadingBracketFt, micrNumber))
+        {
+            if (printedNumber is not null && CanonicalCheckDigitsEqual(leadingBracketFt, printedNumber))
+                return (PreferShorterCanonicallyEqualCheckDigits(leadingBracketFt, printedNumber), 0.87);
+            var canonFt = CanonicalCheckDigitsKey(leadingBracketFt);
+            return (PreferShorterCanonicallyEqualCheckDigits(leadingBracketFt, canonFt), 0.85);
+        }
 
         if (micrNumber != null && printedNumber != null)
         {
@@ -1429,7 +1497,7 @@ internal static class CheckOcrVisionReadParser
             if (Regex.IsMatch(line.Text, @"(?i)(?!date\b)[a-z]{4,30}\s+\d{1,2}/\d{1,2}/\d{2,4}\b"))
                 score -= 0.42;
 
-            if (AdjacentStandaloneDateLabelLine(lines, i))
+            if (NearStandaloneDateLabelLine(lines, i))
                 score += 0.36;
 
             if (LooksLikeHyphenPrintedDateSandwichedBetweenAddress(lines, i, m.Value))
@@ -1452,12 +1520,23 @@ internal static class CheckOcrVisionReadParser
         return ParseDateFullText(layout.FullText);
     }
 
-    /// <summary>上一行或下一行为独立「DATE」标签（OCR 常把手写日与标签拆开）。</summary>
-    private static bool AdjacentStandaloneDateLabelLine(IReadOnlyList<ReadOcrLine> lines, int dateLineIndex)
+    /// <summary>独立「DATE」标签与手写/印刷日的行常被 Vision 拆开，中间可能夹备忘/参考一行（如 <c>63-8413/2670</c>）；在 ±2 行内命中即加权。</summary>
+    private static bool NearStandaloneDateLabelLine(IReadOnlyList<ReadOcrLine> lines, int dateLineIndex)
     {
-        static bool IsLabel(string text) => Regex.IsMatch(text.Trim(), @"^(?i)date\s*$");
-        return (dateLineIndex > 0 && IsLabel(lines[dateLineIndex - 1].Text))
-               || (dateLineIndex + 1 < lines.Count && IsLabel(lines[dateLineIndex + 1].Text));
+        static bool IsLabel(string text) =>
+            Regex.IsMatch(text.Trim(), @"^(?i)date\s*:?\s*$");
+
+        for (var delta = 1; delta <= 2; delta++)
+        {
+            var up = dateLineIndex - delta;
+            if (up >= 0 && IsLabel(lines[up].Text))
+                return true;
+            var down = dateLineIndex + delta;
+            if (down < lines.Count && IsLabel(lines[down].Text))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>门牌街道行 + <c>MM-DD-YY</c> 印刷日 + 城市州邮编行（非支票落款日）。</summary>

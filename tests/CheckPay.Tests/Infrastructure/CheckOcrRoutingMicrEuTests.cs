@@ -546,6 +546,63 @@ public class CheckOcrRoutingMicrEuTests
         Assert.Equal("529738869", micr.AccountNumber);
     }
 
+    /// <summary>
+    /// Chase 商业票常见 <c>⑈001128⑈</c> / <c>⑈001078⑈</c>（6 位 0 垫片；与 <c>001408</c> 靠左段第 4 位数字区分）+ 换行裸 9 位账号；支票号应取自 bracket（或与版头印刷去前导零等价较短形），勿取 710978795。
+    /// </summary>
+    [Theory]
+    [InlineData("001128", "1128")]
+    [InlineData("001078", "1078")]
+    public void ParseCheckNumber_ChaseStyle_SixOrSevenDigitZeroPadBracket_NotNineDigitAccount(
+        string bracketDigits,
+        string printedHintLine)
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{onUs}{bracketDigits}{onUs} {transit}267084131{transit}";
+        var micrLine2 = $"710978795{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine(printedHintLine, 0.15, 0.12, 0.10, 0.14, 0.10, 0.22),
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.05, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.93, 0.92, 0.94, 0.05, 0.92),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.True(
+            string.Equals(cn, printedHintLine, StringComparison.Ordinal)
+            || string.Equals(cn, bracketDigits, StringComparison.Ordinal),
+            $"unexpected check number: {cn}");
+        Assert.NotEqual("710978795", cn);
+        var micr = CheckOcrVisionReadParser.ParseMicrHeuristic(layout, CheckOcrParsingProfile.Default);
+        Assert.Equal("267084131", micr.RoutingNumber);
+        Assert.Equal("710978795", micr.AccountNumber);
+    }
+
+    /// <summary>无版头「1128」印刷候选（仅 MICR）时，仍不应把换行后 9 位账号当支票号。</summary>
+    [Fact]
+    public void ParseCheckNumber_ChaseStyle_WithoutPrintedHintLine_StillPrefersBracketOverAccountTail()
+    {
+        const char transit = '\u2446';
+        const char onUs = '\u2448';
+        var micrLine1 = $"{onUs}001128{onUs} {transit}267084131{transit}";
+        var micrLine2 = $"710978795{onUs}";
+        var lines = new[]
+        {
+            new ReadOcrLine("JPMorgan Chase Bank, N.A.", 0.2, 0.52, 0.50, 0.54, 0.08, 0.42),
+            new ReadOcrLine(micrLine1, 0.48, 0.88, 0.86, 0.90, 0.05, 0.92),
+            new ReadOcrLine(micrLine2, 0.48, 0.93, 0.92, 0.94, 0.05, 0.92),
+        };
+        var full = string.Join("\n", lines.Select(l => l.Text));
+        var layout = new ReadOcrLayout(full, lines, 1200, 900);
+        var (cn, _) = CheckOcrVisionReadParser.ParseCheckNumber(layout, CheckOcrParsingProfile.Default);
+        Assert.True(
+            string.Equals(cn, "1128", StringComparison.Ordinal)
+            || string.Equals(cn, "001128", StringComparison.Ordinal),
+            $"unexpected check number: {cn}");
+        Assert.NotEqual("710978795", cn);
+    }
+
     [Fact]
     public void ParseBankName_RejectsCityStateZipLine()
     {

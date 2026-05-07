@@ -300,7 +300,14 @@
             }
             catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
             {
-                Snackbar.Add($"同银行下支票号 {normalizedCheck} 已存在", Severity.Error);
+                if (DbContext is DbContext ef)
+                {
+                    foreach (var entry in ef.ChangeTracker.Entries<CheckRecord>().Where(e => e.State == EntityState.Added)
+                                 .ToList())
+                        entry.State = EntityState.Detached;
+                }
+
+                Snackbar.Add(CheckNumberGuard.FormatDuplicateUserMessage(normalizedCheck, normalizedRouting), Severity.Error);
                 return;
             }
 
@@ -354,7 +361,7 @@
         _routingNumber = routing;
 
         if (await CheckNumberGuard.ExistsAsync(DbContext, num, routing, CheckRecordId))
-            return $"同银行下支票号 {num} 已存在";
+            return CheckNumberGuard.FormatDuplicateUserMessage(num, routing);
 
         return null;
     }

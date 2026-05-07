@@ -16,6 +16,17 @@ public class CheckNumberGuardTests
     }
 
     [Fact]
+    public void FormatDuplicateUserMessage_IncludesAbaKey_EmptyOrDigits()
+    {
+        var emptyRoute = CheckNumberGuard.FormatDuplicateUserMessage("AB-1", "");
+        Assert.Contains("AB-1", emptyRoute);
+        Assert.Contains("判重键 ABA：空", emptyRoute);
+
+        var withRoute = CheckNumberGuard.FormatDuplicateUserMessage("AB-1", "123456789");
+        Assert.Contains("123456789", withRoute);
+    }
+
+    [Fact]
     public async Task ExistsAsync_MatchesDifferentCaseAndWhitespace_ReturnsTrue()
     {
         await using var db = CreateDbContext(nameof(ExistsAsync_MatchesDifferentCaseAndWhitespace_ReturnsTrue));
@@ -30,9 +41,9 @@ public class CheckNumberGuardTests
     }
 
     [Fact]
-    public async Task ExistsAsync_IncludesSoftDeletedRecords_ReturnsTrue()
+    public async Task ExistsAsync_ExcludesSoftDeletedRecords_ReturnsFalse()
     {
-        await using var db = CreateDbContext(nameof(ExistsAsync_IncludesSoftDeletedRecords_ReturnsTrue));
+        await using var db = CreateDbContext(nameof(ExistsAsync_ExcludesSoftDeletedRecords_ReturnsFalse));
         var customer = CreateCustomer();
         db.Customers.Add(customer);
         db.CheckRecords.Add(CreateCheckRecord(customer.Id, "CHK-001", routingNumber: "111111111", deleted: true));
@@ -40,7 +51,7 @@ public class CheckNumberGuardTests
 
         var exists = await CheckNumberGuard.ExistsAsync(db, " chk-001 ", "111111111");
 
-        Assert.True(exists);
+        Assert.False(exists);
     }
 
     [Fact]
@@ -56,6 +67,19 @@ public class CheckNumberGuardTests
         var exists = await CheckNumberGuard.ExistsAsync(db, "chk-self", "222222222", check.Id);
 
         Assert.False(exists);
+    }
+
+    [Fact]
+    public async Task ExistsAsync_SameKeyWhenStoredRoutingNullAndQueryUsesEmpty_ReturnsTrue()
+    {
+        await using var db = CreateDbContext(nameof(ExistsAsync_SameKeyWhenStoredRoutingNullAndQueryUsesEmpty_ReturnsTrue));
+        var customer = CreateCustomer();
+        db.Customers.Add(customer);
+        db.CheckRecords.Add(CreateCheckRecord(customer.Id, "NULL-RT", routingNumber: null));
+        await db.SaveChangesAsync();
+
+        Assert.True(await CheckNumberGuard.ExistsAsync(db, "null-rt", ""));
+        Assert.True(await CheckNumberGuard.ExistsAsync(db, "null-rt", null));
     }
 
     [Fact]

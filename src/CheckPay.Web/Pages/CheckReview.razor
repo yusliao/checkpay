@@ -1111,7 +1111,18 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         }
         catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
         {
-            Snackbar.Add($"同银行下支票号 {CheckNumberGuard.Normalize(_checkNumber)} 已存在", Severity.Error);
+            if (DbContext is DbContext ef)
+            {
+                foreach (var entry in ef.ChangeTracker.Entries<CheckRecord>().Where(e => e.State == EntityState.Added)
+                             .ToList())
+                    entry.State = EntityState.Detached;
+            }
+
+            Snackbar.Add(
+                CheckNumberGuard.FormatDuplicateUserMessage(
+                    CheckNumberGuard.Normalize(_checkNumber),
+                    CheckNumberGuard.NormalizeRouting(_routingNumber)),
+                Severity.Error);
         }
     }
 
@@ -1260,7 +1271,18 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         }
         catch (DbUpdateException ex) when (CheckNumberGuard.IsUniqueViolation(ex))
         {
-            Snackbar.Add($"同银行下支票号 {CheckNumberGuard.Normalize(_checkNumber)} 已存在", Severity.Error);
+            if (DbContext is DbContext ef)
+            {
+                foreach (var entry in ef.ChangeTracker.Entries<CheckRecord>().Where(e => e.State == EntityState.Added)
+                             .ToList())
+                    entry.State = EntityState.Detached;
+            }
+
+            Snackbar.Add(
+                CheckNumberGuard.FormatDuplicateUserMessage(
+                    CheckNumberGuard.Normalize(_checkNumber),
+                    CheckNumberGuard.NormalizeRouting(_routingNumber)),
+                Severity.Error);
         }
     }
 
@@ -1308,7 +1330,7 @@ else if (PrimaryCheckOcrPayload(_ocrResult) == null)
         var selfId = _editingCheckRecordId ?? Guid.Empty;
         var exists = await CheckNumberGuard.ExistsAsync(DbContext, num, routing, selfId);
         if (exists)
-            return $"同银行下支票号 {num} 已存在";
+            return CheckNumberGuard.FormatDuplicateUserMessage(num, routing);
 
         return null;
     }

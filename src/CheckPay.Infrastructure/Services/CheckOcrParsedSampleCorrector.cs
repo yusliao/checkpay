@@ -289,17 +289,66 @@ public sealed class CheckOcrParsedSampleCorrector(
             return false;
 
         if (oRtn != null && cRtn != null)
-            return string.Equals(oRtn, cRtn, StringComparison.Ordinal);
-
-        if (oRtn != null || cRtn != null)
+        {
+            if (!string.Equals(oRtn, cRtn, StringComparison.Ordinal))
+                return false;
+        }
+        else if (oRtn != null || cRtn != null)
+        {
             return false;
+        }
+        else
+        {
+            if (!s.OcrAmount.HasValue || s.OcrAmount.Value != current.Amount)
+                return false;
+            if (!s.OcrDate.HasValue || s.OcrDate.Value.Date != current.Date.Date)
+                return false;
+        }
 
-        if (!s.OcrAmount.HasValue || s.OcrAmount.Value != current.Amount)
-            return false;
-        if (!s.OcrDate.HasValue || s.OcrDate.Value.Date != current.Date.Date)
+        // 磁墨/账号锚定：仅“支票号字符串 + 路由”会在多张实物票上重复（例如都把账号误读成支票号）；
+        // 要求 OCR 快照中的 MICR 数字指纹一致，避免把簇内另一张票的纠偏套到当前图。
+        if (!StrongMatchMicrAndAccountAnchors(oAch, current))
             return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// 从样本 OCR 快照与当前解析结果读取 MICR 行，提取连续数字指纹（忽略 E13B 符号与空白差异）。
+    /// 两边指纹均达到最小长度时才参与比较，否则不阻断（兼容旧样本未存 MicrLineRaw）。
+    /// </summary>
+    private static bool StrongMatchMicrAndAccountAnchors(CheckAchExtensionData? sampleOcrAch, OcrResultDto current)
+    {
+        const int minMicrDigitsToCompare = 10;
+
+        var sampleMicrFp = MicrDigitFingerprint(sampleOcrAch?.MicrLineRaw);
+        var curMicrFp = MicrDigitFingerprint(current.MicrLineRaw);
+
+        if (sampleMicrFp != null
+            && curMicrFp != null
+            && sampleMicrFp.Length >= minMicrDigitsToCompare
+            && curMicrFp.Length >= minMicrDigitsToCompare
+            && !string.Equals(sampleMicrFp, curMicrFp, StringComparison.Ordinal))
+            return false;
+
+        var sampleCnMicr = CheckOcrTrainingSampleDiff.NormDigits(sampleOcrAch?.CheckNumberMicr);
+        var curCnMicr = CheckOcrTrainingSampleDiff.NormDigits(current.CheckNumberMicr);
+        if (sampleCnMicr != null
+            && curCnMicr != null
+            && sampleCnMicr.Length >= 2
+            && curCnMicr.Length >= 2
+            && !string.Equals(sampleCnMicr, curCnMicr, StringComparison.Ordinal))
+            return false;
+
+        return true;
+    }
+
+    private static string? MicrDigitFingerprint(string? micrLineRaw)
+    {
+        if (string.IsNullOrWhiteSpace(micrLineRaw))
+            return null;
+        var digits = string.Concat(micrLineRaw.Where(char.IsDigit));
+        return digits.Length == 0 ? null : digits;
     }
 
     private static OcrResultDto MergeFromSample(OcrResultDto current, OcrTrainingSample s)

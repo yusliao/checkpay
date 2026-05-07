@@ -475,22 +475,9 @@
         try
         {
             var sb = new StringBuilder();
-            sb.AppendLine("UploadDate,CustomerCode,餐馆编号,CheckDate,BankName,RoutingNumber,AccountNumber,AccountHolderName,CheckNumber,Amount,AchDebitSucceeded");
+            sb.AppendLine(AchBankImportExportCsv.HeaderLine);
             foreach (var c in rows)
-            {
-                sb.AppendLine(string.Join(',',
-                    Csv(c.CreatedAt.ToUniversalTime().ToString("yyyy-MM-dd")),
-                    Csv(c.Customer?.CustomerCode),
-                    Csv(c.Customer?.MobilePhone),
-                    Csv(c.CheckDate.ToString("yyyy-MM-dd")),
-                    Csv(c.BankName),
-                    Csv(c.RoutingNumber),
-                    Csv(c.AccountNumber),
-                    Csv(c.AccountHolderName),
-                    Csv(c.CheckNumber),
-                    c.CheckAmount.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
-                    c.AchDebitSucceeded ? "Y" : "N"));
-            }
+                sb.AppendLine(AchBankImportExportCsv.FormatDataRow(c));
 
             var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
             var base64 = Convert.ToBase64String(bytes);
@@ -504,10 +491,4 @@
         }
     }
 
-    private static string Csv(string? v)
-    {
-        if (string.IsNullOrEmpty(v)) return "\"\"";
-        var esc = v.Replace("\"", "\"\"");
-        return $"\"{esc}\"";
-    }
 }
